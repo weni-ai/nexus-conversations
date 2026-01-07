@@ -1,0 +1,104 @@
+# syntax = docker/dockerfile:1
+
+ARG PYTHON_VERSION="3.10"
+ARG DEBIAN_VERSION="bookworm"
+ARG POETRY_VERSION="1.7.0"
+
+ARG BUILD_DEPS="\
+  gcc bzip2 git curl libpq-dev \
+  python3-dev build-essential"
+
+ARG RUNTIME_DEPS="\
+  tzdata \
+  postgresql-client \
+  netcat-traditional \
+  curl \
+  gosu"
+
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_VERSION} as base
+
+ARG POETRY_VERSION
+
+ENV PYTHONUNBUFFERED=1 \
+  PYTHONDONTWRITEBYTECODE=1 \
+  DEBIAN_FRONTEND=noninteractive \
+  APP_NAME=nexus-conversations \
+  APP_PATH=/app \
+  APP_USER=app_user \
+  APP_GROUP=app_group \
+  PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  PATH="${PATH}:/install/bin"
+
+LABEL app="nexus-conversations" \
+  os="debian" \
+  os.version="12" \
+  name="Nexus-Conversations" \
+  description="Conversation Microservice for Nexus AI" \
+  maintainer="https://github.com/weni-ai" \
+  org.opencontainers.image.url="https://github.com/weni-ai/nexus-conversations" \
+  org.opencontainers.image.documentation="https://github.com/weni-ai/nexus-conversations" \
+  org.opencontainers.image.source="https://github.com/weni-ai/nexus-conversations" \
+  org.opencontainers.image.title="Nexus-Conversations"
+
+RUN addgroup --gid 1999 "${APP_GROUP}" \
+  && useradd --system -m -d /app -u 1999 -g 1999 "${APP_USER}"
+
+WORKDIR "${APP_PATH}"
+
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+FROM base as build-poetry
+
+ARG POETRY_VERSION
+
+COPY pyproject.toml ./
+COPY poetry.lock* ./
+
+RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}" \
+  && poetry self add poetry-plugin-export \
+  && poetry export --without-hashes --output requirements.txt || echo "poetry.lock not found, will install from pyproject.toml"
+
+FROM base as build
+
+ARG BUILD_DEPS
+ARG POETRY_VERSION
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  apt-get update \
+  && apt-get install --no-install-recommends --no-install-suggests -y ${BUILD_DEPS}
+
+# Install poetry for fallback if requirements.txt doesn't exist
+RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}"
+
+COPY pyproject.toml ./
+COPY poetry.lock* ./
+RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip \
+    poetry export --without-hashes -f requirements.txt -o /tmp/requirements.txt && \
+    pip install --cache-dir /pip_cache --prefix=/install -r /tmp/requirements.txt && \
+    poetry install --no-interaction --no-ansi --no-root && \
+    cp -r /usr/local/lib/python3.10/site-packages/* /install/lib/python3.10/site-packages/ 2>/dev/null || true
+
+FROM base
+
+ARG BUILD_DEPS
+ARG RUNTIME_DEPS
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  apt-get update \
+  && SUDO_FORCE_REMOVE=yes apt-get remove --purge -y ${BUILD_DEPS} \
+  && apt-get autoremove -y \
+  && apt-get install -y --no-install-recommends ${RUNTIME_DEPS} \
+  && rm -rf /usr/share/man /usr/share/doc
+
+COPY --from=build /install /usr/local
+COPY --chown=${APP_USER}:${APP_GROUP} . ${APP_PATH}
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER "${APP_USER}:${APP_GROUP}"
+EXPOSE 8000
+ENTRYPOINT ["bash", "/entrypoint.sh"]
+CMD ["start"]
+

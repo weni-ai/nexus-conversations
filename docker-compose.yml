@@ -1,0 +1,107 @@
+services:
+  database:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-nexus_conversations}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nexus_conversations}
+      - POSTGRES_DB=${POSTGRES_DB:-nexus_conversations}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  conversation_ms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${ENGINE_PORT:-8000}:8000"
+    depends_on:
+      - database
+      - redis
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-SK}
+      - DEBUG=${DEBUG:-true}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-postgres://nexus_conversations:nexus_conversations@database:5432/nexus_conversations}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - REDIS_CHANNEL_URL=${REDIS_CHANNEL_URL:-redis://redis:6379/1}
+      - SQS_CONVERSATION_QUEUE_URL=${SQS_CONVERSATION_QUEUE_URL:-}
+      - SQS_CONVERSATION_DLQ_URL=${SQS_CONVERSATION_DLQ_URL:-}
+      - SQS_CONVERSATION_REGION=${SQS_CONVERSATION_REGION:-us-east-1}
+      - DYNAMODB_MESSAGE_TABLE=${DYNAMODB_MESSAGE_TABLE:-}
+      - DYNAMODB_REGION=${DYNAMODB_REGION:-us-east-1}
+      - USE_SENTRY=${USE_SENTRY:-false}
+      - SENTRY_URL=${SENTRY_URL:-}
+      - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
+      - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
+    command: start
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - conversation_ms
+      - redis
+      - database
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-SK}
+      - DEBUG=${DEBUG:-true}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-postgres://nexus_conversations:nexus_conversations@database:5432/nexus_conversations}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - REDIS_CHANNEL_URL=${REDIS_CHANNEL_URL:-redis://redis:6379/1}
+      - SQS_CONVERSATION_QUEUE_URL=${SQS_CONVERSATION_QUEUE_URL:-}
+      - SQS_CONVERSATION_DLQ_URL=${SQS_CONVERSATION_DLQ_URL:-}
+      - SQS_CONVERSATION_REGION=${SQS_CONVERSATION_REGION:-us-east-1}
+      - DYNAMODB_MESSAGE_TABLE=${DYNAMODB_MESSAGE_TABLE:-}
+      - DYNAMODB_REGION=${DYNAMODB_REGION:-us-east-1}
+      - USE_SENTRY=${USE_SENTRY:-false}
+      - SENTRY_URL=${SENTRY_URL:-}
+      - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
+      - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
+    command: celery-worker
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - conversation_ms
+      - redis
+      - database
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-SK}
+      - DEBUG=${DEBUG:-true}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-postgres://nexus_conversations:nexus_conversations@database:5432/nexus_conversations}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - REDIS_CHANNEL_URL=${REDIS_CHANNEL_URL:-redis://redis:6379/1}
+      - SQS_CONVERSATION_QUEUE_URL=${SQS_CONVERSATION_QUEUE_URL:-}
+      - SQS_CONVERSATION_DLQ_URL=${SQS_CONVERSATION_DLQ_URL:-}
+      - SQS_CONVERSATION_REGION=${SQS_CONVERSATION_REGION:-us-east-1}
+      - DYNAMODB_MESSAGE_TABLE=${DYNAMODB_MESSAGE_TABLE:-}
+      - DYNAMODB_REGION=${DYNAMODB_REGION:-us-east-1}
+      - USE_SENTRY=${USE_SENTRY:-false}
+      - SENTRY_URL=${SENTRY_URL:-}
+      - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
+      - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
+    command: celery-beat
+
+volumes:
+  postgres_data:
+  redis_data:

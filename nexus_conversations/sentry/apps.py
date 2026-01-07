@@ -1,0 +1,24 @@
+from functools import partial
+
+import sentry_sdk
+from django.apps import AppConfig
+from django.conf import settings
+from sentry_sdk.integrations.django import DjangoIntegration
+
+from nexus_conversations.sentry.filters import filter_events
+
+
+class SentryConfig(AppConfig):
+    name = "nexus_conversations.sentry"
+
+    def ready(self) -> None:
+        if not settings.USE_SENTRY:
+            return
+
+        sentry_sdk.init(
+            dsn=settings.SENTRY_URL,
+            integrations=[DjangoIntegration()],
+            environment=settings.ENVIRONMENT,
+            before_send=partial(filter_events, events_to_filter=settings.FILTER_SENTRY_EVENTS),
+        )
+

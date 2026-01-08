@@ -1,31 +1,28 @@
 """
-Router service adapter.
-Adapted from router.services.conversation_service.
+Conversation service for creating and managing conversations locally.
+This service is the source of truth for conversations in the microservice.
 
-This adapter provides an interface to the main system's conversation service.
-In production, this can be implemented to:
-- Make HTTP API calls to the main system
-- Use a shared library
-- Access shared database directly
+The microservice creates and manages conversations independently from nexus-ai,
+following the architectural decision that nexus-conversations is the source of truth.
 """
 
 import logging
 from typing import Optional
 
+import pendulum
 import sentry_sdk
+
+from conversation_ms.models import Conversation, Project
 
 logger = logging.getLogger(__name__)
 
 
 class MainConversationService:
     """
-    Adapter for router.services.conversation_service.ConversationService.
-
-    TODO: Implement this to call the main system.
-    Options:
-    1. HTTP API calls to main system
-    2. Shared library import (if router is available)
-    3. Direct database access (if using shared database)
+    Service for managing conversations in the microservice.
+    
+    This service creates and manages conversations independently, making
+    nexus-conversations the source of truth for conversation data.
     """
 
     def ensure_conversation_exists(
@@ -34,33 +31,87 @@ class MainConversationService:
         contact_urn: str,
         contact_name: str,
         channel_uuid: Optional[str] = None,
-    ) -> Optional[object]:
+    ) -> Optional[Conversation]:
         """
         Ensure conversation exists.
-        This is a stub that needs to be implemented.
-
-        For now, it tries to import from router if available, otherwise returns None.
+        
+        This method:
+        1. Gets or creates the Project
+        2. Finds existing conversation in progress (resolution=2)
+        3. Creates new conversation if none exists
+        4. Handles multiple conversations by marking old ones as Unclassified
+        
+        Returns the conversation object or None if channel_uuid is missing.
         """
-        try:
-            # Try to import from router if available (e.g., if router is installed as a package)
-            try:
-                from router.services.conversation_service import ConversationService as RouterConversationService
+        if not channel_uuid:
+            logger.warning(
+                "[MainConversationService] channel_uuid is None, cannot create conversation",
+                extra={
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                    "contact_name": contact_name,
+                },
+            )
+            return None
 
-                router_service = RouterConversationService()
-                return router_service.ensure_conversation_exists(
-                    project_uuid=project_uuid,
+        try:
+            # Get or create Project
+            project, _ = Project.objects.get_or_create(
+                uuid=project_uuid,
+                defaults={"name": None}  # Project name can be updated later if needed
+            )
+
+            # Find existing conversation in progress
+            conversation_queryset = Conversation.objects.filter(
+                project=project,
+                channel_uuid=channel_uuid,
+                contact_urn=contact_urn,
+                resolution=2,  # IN_PROGRESS
+            )
+
+            if not conversation_queryset.exists():
+                # Create new conversation
+                conversation = self._create_conversation(
+                    project=project,
                     contact_urn=contact_urn,
                     contact_name=contact_name,
                     channel_uuid=channel_uuid,
                 )
-            except ImportError:
-                # Router not available - this is expected in a standalone microservice
-                logger.warning(
-                    "[MainConversationService] Router not available. "
-                    "Conversation creation needs to be implemented via API or shared library."
+                logger.info(
+                    "[MainConversationService] Created new conversation",
+                    extra={
+                        "conversation_uuid": str(conversation.uuid),
+                        "project_uuid": project_uuid,
+                        "contact_urn": contact_urn,
+                    },
                 )
-                # TODO: Implement HTTP API call or other integration method
-                return None
+                return conversation
+
+            # Handle multiple conversations in progress
+            if conversation_queryset.count() > 1:
+                conversation_queryset = conversation_queryset.order_by("-created_at")
+                conversation_queryset.exclude(uuid=conversation_queryset.first().uuid).update(resolution=3)
+                logger.warning(
+                    "[MainConversationService] Multiple conversations found, marked old ones as Unclassified",
+                    extra={
+                        "project_uuid": project_uuid,
+                        "contact_urn": contact_urn,
+                        "channel_uuid": str(channel_uuid),
+                        "count": conversation_queryset.count(),
+                    },
+                )
+
+            # Return the most recent conversation in progress
+            conversation = conversation_queryset.first()
+            logger.debug(
+                "[MainConversationService] Found existing conversation",
+                extra={
+                    "conversation_uuid": str(conversation.uuid),
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                },
+            )
+            return conversation
 
         except Exception as e:
             sentry_sdk.set_tag("project_uuid", project_uuid)
@@ -88,4 +139,33 @@ class MainConversationService:
                 exc_info=True,
             )
             raise
+
+    def _create_conversation(
+        self,
+        project: Project,
+        contact_urn: str,
+        contact_name: str,
+        channel_uuid: str,
+    ) -> Conversation:
+        """
+        Create a new conversation with base structure.
+        
+        Sets start_date to current time and end_date to start_date + 1 day,
+        following the pattern from nexus-ai.
+        """
+        msg_created_at = pendulum.now()
+        start_date = msg_created_at
+        end_date = start_date.add(days=1)
+
+        conversation = Conversation.objects.create(
+            project=project,
+            contact_urn=contact_urn,
+            contact_name=contact_name or "",
+            channel_uuid=channel_uuid,
+            start_date=start_date,
+            end_date=end_date,
+            resolution=2,  # IN_PROGRESS
+        )
+
+        return conversation
 

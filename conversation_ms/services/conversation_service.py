@@ -38,9 +38,6 @@ class ConversationService:
             return None
 
         try:
-            # TODO: Implement adapter for router.services.conversation_service
-            # For now, this will need to be implemented to call the main system
-            # Options: HTTP API, shared library, or direct database access
             from conversation_ms.adapters.router_service import MainConversationService
 
             main_service = MainConversationService()

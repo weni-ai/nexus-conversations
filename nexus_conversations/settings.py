@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     "django_celery_results",
     "django_celery_beat",
     "nexus_conversations.sentry",
-    "conversation_ms.models.apps.ConversationModelsConfig",  # Models for Conversation and ConversationMessages
+    "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
 ]
 
 MIDDLEWARE = [

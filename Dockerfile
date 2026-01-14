@@ -55,29 +55,19 @@ COPY pyproject.toml ./
 COPY poetry.lock* ./
 
 RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}" \
-  && poetry self add poetry-plugin-export \
-  && poetry export --without-hashes --output requirements.txt || echo "poetry.lock not found, will install from pyproject.toml"
+  && poetry export --without-hashes --output requirements.txt
 
 FROM base as build
 
 ARG BUILD_DEPS
-ARG POETRY_VERSION
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
   apt-get update \
   && apt-get install --no-install-recommends --no-install-suggests -y ${BUILD_DEPS}
 
-# Install poetry for fallback if requirements.txt doesn't exist
-RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}"
-
-COPY pyproject.toml ./
-COPY poetry.lock* ./
-RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip \
-    poetry export --without-hashes -f requirements.txt -o /tmp/requirements.txt && \
-    pip install --cache-dir /pip_cache --prefix=/install -r /tmp/requirements.txt && \
-    poetry install --no-interaction --no-ansi --no-root && \
-    cp -r /usr/local/lib/python3.10/site-packages/* /install/lib/python3.10/site-packages/ 2>/dev/null || true
+COPY --from=build-poetry /app/requirements.txt /tmp/dep/
+RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache --prefix=/install -r /tmp/dep/requirements.txt
 
 FROM base
 

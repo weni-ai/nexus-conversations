@@ -90,7 +90,33 @@ class MainConversationService:
             # Handle multiple conversations in progress
             if conversation_queryset.count() > 1:
                 conversation_queryset = conversation_queryset.order_by("-created_at")
-                conversation_queryset.exclude(uuid=conversation_queryset.first().uuid).update(resolution=3)
+                conversations_to_close = conversation_queryset.exclude(uuid=conversation_queryset.first().uuid)
+                
+                for conversation in conversations_to_close:
+                    original_resolution = str(conversation.resolution)
+                    conversation.resolution = 3  # UNCLASSIFIED
+                    conversation.save()
+                    
+                    if original_resolution == "2":  # IN_PROGRESS
+                        try:
+                            from conversation_ms.services.message_migration_service import MessageMigrationService
+                            
+                            migration_service = MessageMigrationService()
+                            migration_service.migrate_conversation_messages_to_postgres(conversation)
+                            logger.info(
+                                "[MainConversationService] Message migration completed for closed conversation",
+                                extra={"conversation_uuid": str(conversation.uuid)},
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "[MainConversationService] Error during message migration",
+                                extra={
+                                    "conversation_uuid": str(conversation.uuid),
+                                    "error": str(e),
+                                },
+                                exc_info=True,
+                            )
+                
                 logger.warning(
                     "[MainConversationService] Multiple conversations found, marked old ones as Unclassified",
                     extra={
@@ -98,6 +124,7 @@ class MainConversationService:
                         "contact_urn": contact_urn,
                         "channel_uuid": str(channel_uuid),
                         "count": conversation_queryset.count(),
+                        "closed_count": conversations_to_close.count(),
                     },
                 )
 

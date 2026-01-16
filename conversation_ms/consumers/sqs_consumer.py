@@ -573,15 +573,8 @@ class ConversationSQSConsumer:
                         # Atualizar último índice processado para este grupo
                         self.last_test_index[group_key] = test_index
 
-            if event_type == "message.received":
-                self._handle_message_received(event_data)
-            elif event_type == "message.sent":
-                self._handle_message_sent(event_data)
-            else:
-                logger.warning(
-                    "[ConversationSQSConsumer] Unknown event type",
-                    extra={"event_type": event_type, "message_id": message_id},
-                )
+            # Route event to appropriate handler
+            self._route_event(event_type, event_data)
 
             # Simulate processing delay (e.g., DB insertion)
             time.sleep(self.processing_delay)
@@ -679,6 +672,38 @@ class ConversationSQSConsumer:
             )
             raise
 
+    def _route_event(self, event_type: str, event_data: Dict):
+        """
+        Route event to appropriate handler based on event type.
+        
+        This method provides a generic event routing system that can be
+        easily extended with new event types.
+        
+        Args:
+            event_type: Type of event (e.g., "message.received", "conversation.window")
+            event_data: Event data dictionary
+        """
+        # Event handlers registry
+        event_handlers = {
+            "message.received": self._handle_message_received,
+            "message.sent": self._handle_message_sent,
+            "conversation.window": self._handle_conversation_window,
+        }
+
+        handler = event_handlers.get(event_type)
+        if handler:
+            handler(event_data)
+        else:
+            logger.warning(
+                "[ConversationSQSConsumer] Unknown event type",
+                extra={
+                    "event_type": event_type,
+                    "message_id": event_data.get("MessageId"),
+                    "correlation_id": event_data.get("correlation_id"),
+                    "available_handlers": list(event_handlers.keys()),
+                },
+            )
+
     def _handle_message_received(self, event_data: Dict):
         """
         Handle message.received event.
@@ -722,3 +747,29 @@ class ConversationSQSConsumer:
         # Processar mensagem usando MessageService
         message_service = MessageService()
         message_service.process_message_sent(event_data)
+
+    def _handle_conversation_window(self, event_data: Dict):
+        """
+        Handle conversation.window event from Mailroom.
+        
+        This event is sent when a conversation window is created or updated,
+        including information about chat room opening (has_chats_room).
+
+        Args:
+            event_data: Event data dictionary
+        """
+        from conversation_ms.services.conversation_window_service import ConversationWindowService
+
+        logger.info(
+            "[ConversationSQSConsumer] Handling conversation.window event",
+            extra={
+                "correlation_id": event_data.get("correlation_id"),
+                "project_uuid": event_data.get("data", {}).get("project_uuid"),
+                "contact_urn": event_data.get("data", {}).get("contact_urn"),
+                "has_chats_room": event_data.get("data", {}).get("has_chats_room"),
+            },
+        )
+
+        # Process conversation window event
+        window_service = ConversationWindowService()
+        window_service.process_conversation_window(event_data)

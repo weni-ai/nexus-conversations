@@ -79,8 +79,14 @@ omit = [
   "asgi.py",
   "wsgi.py",
   "__init__.py",
-  "migrations/",
+  "*/migrations/*",
   "manage.py",
   "urls.py",
+  "*/tests/*",
+  "*/test_*.py",
+  "*/conftest.py",
+  "*/main.py",
+  "*/consumers/*",
+  "*/exceptions.py",
 ]
 

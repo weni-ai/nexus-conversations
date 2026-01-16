@@ -56,7 +56,7 @@ class MessageMigrationService:
                 extra={
                     "conversation_uuid": str(conversation.uuid),
                     "messages_count": len(formatted_messages),
-                    "created": created,
+                    "was_created": created,
                 },
             )
 

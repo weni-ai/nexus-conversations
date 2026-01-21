@@ -15,6 +15,8 @@ import boto3
 import pendulum
 from django.conf import settings
 
+from conversation_ms.adapters.aws import get_boto3_resource
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +26,7 @@ def get_dynamodb_table(table_name: str):
     Context manager that returns a DynamoDB table instance.
     """
     try:
-        dynamodb = boto3.resource(
+        dynamodb = get_boto3_resource(
             "dynamodb",
             region_name=settings.DYNAMODB_REGION,
         )

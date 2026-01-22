@@ -96,4 +96,3 @@ class ConversationMessages(models.Model):
 
     def __str__(self):
         return f"ConversationMessages - {self.conversation.uuid}"
-

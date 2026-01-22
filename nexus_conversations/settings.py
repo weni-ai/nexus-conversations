@@ -31,6 +31,10 @@ DEBUG = env.bool("DEBUG")
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
+# Internal API Tokens
+# Team-based tokens support (JSON dict: {"TeamName": "Token"})
+INTERNAL_API_TOKENS = env.json("INTERNAL_API_TOKENS", default={})
+
 # Application definition
 
 INSTALLED_APPS = [

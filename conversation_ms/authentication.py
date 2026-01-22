@@ -4,6 +4,18 @@ from django.conf import settings
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 
 
+class ServiceUser:
+    """
+    A simple user class for service-to-service authentication.
+    """
+    def __init__(self, username):
+        self.username = username
+        self.is_authenticated = True
+
+    def __str__(self):
+        return self.username
+
+
 class InternalTokenAuthentication(authentication.BaseAuthentication):
     def authenticate(self, request):
         auth_header = request.META.get("HTTP_AUTHORIZATION")
@@ -21,16 +33,13 @@ class InternalTokenAuthentication(authentication.BaseAuthentication):
         return self._authenticate_credentials(token)
 
     def _authenticate_credentials(self, token):
-        expected_token = getattr(settings, "INTERNAL_API_TOKEN", None)
-        if not expected_token:
-            raise exceptions.AuthenticationFailed("Internal API token not configured")
+        team_tokens = getattr(settings, "INTERNAL_API_TOKENS", {})
+        if team_tokens:
+            for team_name, team_token in team_tokens.items():
+                if token == team_token:
+                    return (ServiceUser(username=team_name), token)
 
-        if token != expected_token:
-            raise exceptions.AuthenticationFailed("Invalid token")
-
-        # Return (User, Auth) tuple.
-        # Since we don't have a real user, we return None for user and the token for auth
-        return (None, token)
+        raise exceptions.AuthenticationFailed("Invalid token")
 
 
 class InternalTokenAuthenticationScheme(OpenApiAuthenticationExtension):

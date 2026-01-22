@@ -54,6 +54,9 @@ class ConversationSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "channel_uuid",
+            "has_chats_room",
+            "csat",
+            "nps",
             "classification",
             "messages",
             "created_at",
@@ -61,9 +64,13 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_messages(self, obj):
-        # Only fetch messages if explicitly requested via query param "include_messages=true"
         request = self.context.get("request")
-        if request and request.query_params.get("include_messages") == "true":
+        view = self.context.get("view")
+        
+        is_detail = getattr(view, "action", None) == "retrieve"
+        include_messages = request and request.query_params.get("include_messages") == "true"
+
+        if is_detail or include_messages:
             try:
                 return obj.messages_data.messages
             except ConversationMessages.DoesNotExist:

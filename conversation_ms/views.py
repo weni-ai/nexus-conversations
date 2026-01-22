@@ -63,8 +63,8 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
             "classification", "classification__topic", "classification__subtopic"
         )
         
-        # Optimization: Only join messages table if requested
-        if self.request.query_params.get("include_messages") == "true":
+        # Optimization: Only join messages table if requested or if it's a detail view
+        if self.request.query_params.get("include_messages") == "true" or self.action == "retrieve":
             queryset = queryset.select_related("messages_data")
             
         return queryset.order_by("-start_date")

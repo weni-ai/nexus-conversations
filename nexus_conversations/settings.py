@@ -132,6 +132,9 @@ SQS_CONVERSATION_DLQ_URL = env.str("SQS_CONVERSATION_DLQ_URL", default="")
 SQS_CONVERSATION_REGION = env.str("SQS_CONVERSATION_REGION", default="us-east-1")
 SQS_CONVERSATION_ENABLED = env.bool("SQS_CONVERSATION_ENABLED", default=False)
 
+# AWS General Configuration
+AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
+
 # DynamoDB Configuration
 
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")

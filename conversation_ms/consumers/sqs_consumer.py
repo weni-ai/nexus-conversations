@@ -3,6 +3,8 @@ import logging
 import os
 import threading
 import time
+import sys
+from conversation_ms.adapters.aws import get_boto3_client
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -86,13 +88,13 @@ class ConversationSQSConsumer:
             raise ValueError("SQS_CONVERSATION_QUEUE_URL must be set")
 
         logger.info(f"[ConversationSQSConsumer] Initializing SQS client (region: {self.region})...")
-        import sys
+
 
         sys.stdout.flush()
 
         # Initialize SQS client
         try:
-            self.sqs_client = boto3.client("sqs", region_name=self.region)
+            self.sqs_client = get_boto3_client("sqs", region_name=self.region)
             logger.info("[ConversationSQSConsumer] SQS client initialized successfully")
             sys.stdout.flush()
         except Exception as e:

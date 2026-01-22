@@ -134,9 +134,9 @@ SQS_CONVERSATION_ENABLED = env.bool("SQS_CONVERSATION_ENABLED", default=False)
 
 # AWS General Configuration
 AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
+CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
 
 # DynamoDB Configuration
-
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
 DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="NexusMessages")
 

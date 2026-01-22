@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: Nexus Conversations Microservice API
+  version: 1.0.0
+  description: Internal microservice for processing conversation messages from SQS
+    FIFO queue.
+paths:
+  /api/v1/projects/{project_uuid}/conversations/:
+    get:
+      operationId: v1_projects_conversations_list
+      description: |-
+        API endpoint that allows conversations to be viewed.
+        Scoped by Project UUID.
+      parameters:
+      - in: query
+        name: contact_urn
+        schema:
+          type: string
+      - in: query
+        name: end_date
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: include_messages
+        schema:
+          type: boolean
+        description: 'If true, includes the full list of messages for each conversation.
+          Default: false'
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: path
+        name: project_uuid
+        schema:
+          type: string
+        description: UUID of the project to filter conversations
+        required: true
+      - in: query
+        name: start_date
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: status
+        schema:
+          type: number
+      tags:
+      - v1
+      security:
+      - InternalTokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedConversationList'
+          description: ''
+  /api/v1/projects/{project_uuid}/conversations/{id}/:
+    get:
+      operationId: v1_projects_conversations_retrieve
+      description: |-
+        API endpoint that allows conversations to be viewed.
+        Scoped by Project UUID.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: query
+        name: include_messages
+        schema:
+          type: boolean
+        description: 'If true, includes the full list of messages for each conversation.
+          Default: false'
+      - in: path
+        name: project_uuid
+        schema:
+          type: string
+        description: UUID of the project to filter conversations
+        required: true
+      tags:
+      - v1
+      security:
+      - InternalTokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+          description: ''
+components:
+  schemas:
+    Conversation:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        contact_urn:
+          type: string
+          nullable: true
+          maxLength: 255
+        contact_name:
+          type: string
+          nullable: true
+          maxLength: 255
+        status:
+          type: string
+        resolution:
+          $ref: '#/components/schemas/ResolutionEnum'
+        start_date:
+          type: string
+          format: date-time
+          nullable: true
+        end_date:
+          type: string
+          format: date-time
+          nullable: true
+        channel_uuid:
+          type: string
+          format: uuid
+          nullable: true
+        classification:
+          allOf:
+          - $ref: '#/components/schemas/ConversationClassification'
+          readOnly: true
+        messages:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - classification
+      - created_at
+      - messages
+      - status
+    ConversationClassification:
+      type: object
+      properties:
+        topic:
+          type: string
+          nullable: true
+        subtopic:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          format: double
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - subtopic
+      - topic
+      - updated_at
+    PaginatedConversationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conversation'
+    ResolutionEnum:
+      enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      type: integer
+      description: |-
+        * `0` - Resolved
+        * `1` - Unresolved
+        * `2` - In Progress
+        * `3` - Unclassified
+        * `4` - Has Chat Room
+  securitySchemes:
+    InternalTokenAuth:
+      type: http
+      scheme: bearer
+      description: Internal API Token for microservice communication

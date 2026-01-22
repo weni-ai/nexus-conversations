@@ -34,10 +34,14 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 # Application definition
 
 INSTALLED_APPS = [
+    "django.contrib.auth",  # Required by DRF
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django_celery_results",
     "django_celery_beat",
+    "rest_framework",
+    "drf_spectacular",
+    "django_filters",
     "nexus_conversations.sentry",
     "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
 ]
@@ -98,6 +102,24 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = "static/"
+
+# Django REST Framework
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "DEFAULT_PERMISSION_CLASSES": [],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Nexus Conversations Microservice API",
+    "DESCRIPTION": "Internal microservice for processing conversation messages from SQS FIFO queue.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+}
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 # Default primary key field type

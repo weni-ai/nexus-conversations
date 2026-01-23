@@ -6,19 +6,9 @@ from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from conversation_ms.authentication import InternalTokenAuthentication
+from conversation_ms.filters import ConversationFilter
 from conversation_ms.models import Conversation, Project
 from conversation_ms.serializers import ConversationSerializer
-
-
-class ConversationFilter(django_filters.FilterSet):
-    start_date = django_filters.IsoDateTimeFilter(field_name="start_date", lookup_expr="gte")
-    end_date = django_filters.IsoDateTimeFilter(field_name="end_date", lookup_expr="lte")
-    status = django_filters.NumberFilter(field_name="resolution")
-    contact_urn = django_filters.CharFilter(lookup_expr="exact")
-
-    class Meta:
-        model = Conversation
-        fields = ["start_date", "end_date", "status", "contact_urn"]
 
 
 @extend_schema(

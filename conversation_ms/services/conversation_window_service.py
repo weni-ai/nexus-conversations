@@ -14,6 +14,7 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.events import ConversationWindowEvent
 from conversation_ms.models import Conversation, Project
 from conversation_ms.services.message_migration_service import MessageMigrationService
+from conversation_ms.tasks import classify_conversation_task
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +138,20 @@ class ConversationWindowService:
                             "conversation_uuid": str(conversation.uuid),
                         },
                     )
+                    
+                    # Trigger classification
+                    classify_conversation_task.delay(str(conversation.uuid))
+                    logger.info(
+                        "[ConversationWindowService] Classification task triggered",
+                        extra={
+                            "correlation_id": event.correlation_id,
+                            "conversation_uuid": str(conversation.uuid),
+                        },
+                    )
+
                 except Exception as e:
                     logger.error(
-                        "[ConversationWindowService] Error during message migration",
+                        "[ConversationWindowService] Error during message migration or classification trigger",
                         extra={
                             "correlation_id": event.correlation_id,
                             "conversation_uuid": str(conversation.uuid),

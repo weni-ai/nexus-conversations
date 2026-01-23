@@ -7,6 +7,7 @@ import logging
 
 from conversation_ms.models import Conversation
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.tasks import classify_conversation_task
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,6 @@ logger = logging.getLogger(__name__)
 def update_conversation_data(to_update: dict, project_uuid: str, contact_urn: str, channel_uuid: str):
     """
     Update conversation data fields.
-    Adapted from nexus.usecases.inline_agents.update.update_conversation_data.
     
     Automatically triggers message migration when resolution changes from IN_PROGRESS to another status.
     """
@@ -56,9 +56,17 @@ def update_conversation_data(to_update: dict, project_uuid: str, contact_urn: st
                 "[update_conversation_data] Message migration completed",
                 extra={"conversation_uuid": str(conversation.uuid)},
             )
+            
+            # Trigger classification
+            classify_conversation_task.delay(str(conversation.uuid))
+            logger.info(
+                "[update_conversation_data] Classification task triggered",
+                extra={"conversation_uuid": str(conversation.uuid)},
+            )
+            
         except Exception as e:
             logger.error(
-                "[update_conversation_data] Error during message migration",
+                "[update_conversation_data] Error during message migration or classification trigger",
                 extra={
                     "conversation_uuid": str(conversation.uuid),
                     "error": str(e),

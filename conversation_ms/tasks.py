@@ -6,12 +6,41 @@ from typing import Dict, List, Optional
 from celery import shared_task
 
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
+from conversation_ms.services.classification_service import (
+    ClassificationService,
+)
 from conversation_ms.services.resolution_counter import (
     ChannelResolutionCount,
     get_resolution_counter,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(name="conversation_ms.tasks.classify_conversation_task")
+def classify_conversation_task(conversation_uuid: str):
+    """
+    Celery task to classify a conversation.
+    Should be triggered when a conversation is resolved or closed.
+    """
+    logger.info(
+        f"[ClassificationTask] Starting classification for "
+        f"conversation {conversation_uuid}"
+    )
+
+    service = ClassificationService()
+    result = service.classify_conversation(conversation_uuid)
+
+    if result:
+        logger.info(
+            f"[ClassificationTask] Successfully classified "
+            f"conversation {conversation_uuid}"
+        )
+    else:
+        logger.warning(
+            f"[ClassificationTask] Failed to classify "
+            f"conversation {conversation_uuid}"
+        )
 
 
 @shared_task(
@@ -27,10 +56,11 @@ def send_billing_conversations(
     pre_calculated_counts: Optional[List[dict]] = None,
 ):
     """
-    Async task to aggregate conversation counts per channel and send to billing.
+    Async task to aggregate conversation counts per channel
+    and send to billing.
 
-    Conversations are filtered by created_at date since all conversations
-    close on the same day they were created.
+    Conversations are filtered by created_at date since all
+    conversations close on the same day they were created.
 
     Args:
         project_uuid: The project UUID to process

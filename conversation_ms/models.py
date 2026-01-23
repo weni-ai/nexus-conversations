@@ -30,6 +30,48 @@ class Project(models.Model):
         return f"Project - {self.uuid}"
 
 
+class Topic(models.Model):
+    """
+    Topic model for conversation classification.
+    Mirrors nexus.intelligences.models.Topics
+    """
+
+    uuid = models.UUIDField(primary_key=True, default=uuid4)
+    name = models.CharField(max_length=255)
+    description = models.TextField(null=True, blank=True)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="topics")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "intelligences_topics"
+
+    def __str__(self):
+        return f"Topic - {self.name}"
+
+
+class SubTopic(models.Model):
+    """
+    SubTopic model for conversation classification.
+    Mirrors nexus.intelligences.models.Subtopics
+    """
+
+    uuid = models.UUIDField(primary_key=True, default=uuid4)
+    name = models.CharField(max_length=255)
+    description = models.TextField(null=True, blank=True)
+    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="subtopics")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "intelligences_subtopics"
+
+    def __str__(self):
+        return f"SubTopic - {self.name}"
+
+
 class Conversation(models.Model):
     """
     Conversation model.
@@ -74,6 +116,28 @@ class Conversation(models.Model):
 
     def __str__(self):
         return f"Conversation - {self.uuid} - {self.contact_name}"
+
+
+class ConversationClassification(models.Model):
+    """
+    Model to store conversation classification results.
+    """
+
+    uuid = models.UUIDField(primary_key=True, default=uuid4)
+    conversation = models.OneToOneField(
+        Conversation, on_delete=models.CASCADE, related_name="classification"
+    )
+    topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True)
+    subtopic = models.ForeignKey(SubTopic, on_delete=models.SET_NULL, null=True, blank=True)
+    confidence = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "intelligences_conversationclassification"
+
+    def __str__(self):
+        return f"Classification - {self.conversation.uuid}"
 
 
 class ConversationMessages(models.Model):

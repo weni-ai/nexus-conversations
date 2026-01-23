@@ -132,7 +132,6 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Redis Config
-
 REDIS_URL = env.str("REDIS_URL", default=env.str("CELERY_BROKER_URL", default="redis://localhost:6379/1"))
 
 CACHES = {
@@ -144,7 +143,6 @@ CACHES = {
 }
 
 # Celery config
-
 CELERY_RESULT_BACKEND = "django-db"
 CELERY_BROKER_URL = env.str("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_ACCEPT_CONTENT = ["application/json"]
@@ -152,7 +150,6 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
 
 # SQS Configuration for Conversation MS
-
 SQS_CONVERSATION_QUEUE_URL = env.str("SQS_CONVERSATION_QUEUE_URL", default="")
 SQS_CONVERSATION_DLQ_URL = env.str("SQS_CONVERSATION_DLQ_URL", default="")
 SQS_CONVERSATION_REGION = env.str("SQS_CONVERSATION_REGION", default="us-east-1")
@@ -160,26 +157,24 @@ SQS_CONVERSATION_ENABLED = env.bool("SQS_CONVERSATION_ENABLED", default=False)
 
 # AWS General Configuration
 AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
-CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
+CONVERSATION_TOPIC_CLASSIFIER_NAME = env.str("CONVERSATION_TOPIC_CLASSIFIER_NAME", default=None)
+CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=None)
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
 DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="NexusMessages")
 
 # Sentry config
-
 USE_SENTRY = env.bool("USE_SENTRY", default=False)
 SENTRY_URL = env.str("SENTRY_URL", default="")
 ENVIRONMENT = env.str("ENVIRONMENT", default="development")
 FILTER_SENTRY_EVENTS = env.list("FILTER_SENTRY_EVENTS", default=[])
 
 # Data Lake SDK (for CSAT/NPS)
-
 AGENT_UUID_CSAT = env.str("AGENT_UUID_CSAT", default="")
 AGENT_UUID_NPS = env.str("AGENT_UUID_NPS", default="")
 
 # Logging configuration
-
 LOG_LEVEL = env.str("LOG_LEVEL", default="INFO")
 
 LOGGING = {

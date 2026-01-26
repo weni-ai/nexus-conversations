@@ -173,3 +173,31 @@ class MessageRepository:
                 exc_info=True,
             )
             raise
+
+    def delete_messages_from_dynamo(self, project_uuid: str, contact_urn: str, channel_uuid: str = None) -> int:
+        try:
+            count = self.dynamo_repository.delete_messages_by_conversation(
+                project_uuid=project_uuid,
+                contact_urn=contact_urn,
+                channel_uuid=channel_uuid,
+            )
+            logger.info(
+                "[MessageRepository] Deleted messages from DynamoDB",
+                extra={
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                    "deleted_count": count,
+                },
+            )
+            return count
+        except Exception as e:
+            logger.error(
+                "[MessageRepository] Error deleting messages from DynamoDB",
+                extra={
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            return 0

@@ -51,12 +51,20 @@ class MessageMigrationService:
                 defaults={"messages": formatted_messages},
             )
 
+            # Delete messages from DynamoDB after successful migration
+            deleted_count = self.message_repository.delete_messages_from_dynamo(
+                project_uuid=str(conversation.project.uuid),
+                contact_urn=conversation.contact_urn,
+                channel_uuid=str(conversation.channel_uuid) if conversation.channel_uuid else None,
+            )
+
             logger.info(
                 "[MessageMigrationService] Migration completed",
                 extra={
                     "conversation_uuid": str(conversation.uuid),
                     "messages_count": len(formatted_messages),
                     "was_created": created,
+                    "dynamo_deleted_count": deleted_count,
                 },
             )
 

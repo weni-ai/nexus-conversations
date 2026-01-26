@@ -9,6 +9,7 @@ from conversation_ms.models import (
     SubTopic,
     Topic,
 )
+from conversation_ms.repositories.message_repository import MessageRepository
 
 
 class TopicSerializer(serializers.ModelSerializer):
@@ -71,8 +72,33 @@ class ConversationSerializer(serializers.ModelSerializer):
         include_messages = request and request.query_params.get("include_messages") == "true"
 
         if is_detail or include_messages:
-            try:
-                return obj.messages_data.messages
-            except ConversationMessages.DoesNotExist:
-                return []
+            def get_from_postgres():
+                try:
+                    msgs = obj.messages_data.messages
+                    return msgs if msgs else None
+                except ConversationMessages.DoesNotExist:
+                    return None
+
+            def get_from_dynamo():
+                try:
+                    
+                    repo = MessageRepository()
+                    return repo.get_messages_from_dynamo(
+                        project_uuid=str(obj.project.uuid),
+                        contact_urn=obj.contact_urn,
+                        channel_uuid=str(obj.channel_uuid) if obj.channel_uuid else None,
+                    )
+                except Exception:
+                    return None
+
+            # Smart Routing based on Resolution
+            # Resolution 2 = In Progress (Active) -> Prefer DynamoDB
+            # This ensures we get the latest messages for active chats
+            if str(obj.resolution) == "2":
+                return get_from_dynamo() or get_from_postgres() or []
+            
+            # Resolution != 2 (Closed/Resolved) -> Prefer Postgres
+            # This avoids unnecessary DynamoDB calls since data is likely in Postgres (and pre-fetched via select_related)
+            return get_from_postgres() or get_from_dynamo() or []
+                
         return None

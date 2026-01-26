@@ -144,6 +144,52 @@ class DynamoMessageRepository:
                 logger.error(f"Error querying messages: {str(e)}")
                 raise e
 
+    def delete_messages_by_conversation(self, project_uuid: str, contact_urn: str, channel_uuid: str) -> int:
+        """
+        Delete all messages for a specific conversation from DynamoDB.
+        Used after migrating messages to permanent storage (Postgres).
+        Returns the number of deleted messages.
+        """
+        conversation_key = f"{project_uuid}#{contact_urn}#{channel_uuid}"
+        deleted_count = 0
+
+        with get_message_table() as table:
+            # Step 1: Query all messages (keys only)
+            last_evaluated_key = None
+            
+            while True:
+                query_params = {
+                    "KeyConditionExpression": "conversation_key = :conv_key",
+                    "ExpressionAttributeValues": {":conv_key": conversation_key},
+                    "ProjectionExpression": "conversation_key, message_timestamp",
+                }
+                
+                if last_evaluated_key:
+                    query_params["ExclusiveStartKey"] = last_evaluated_key
+
+                response = table.query(**query_params)
+                items = response.get("Items", [])
+                
+                if not items:
+                    break
+
+                # Step 2: Batch delete
+                with table.batch_writer() as batch:
+                    for item in items:
+                        batch.delete_item(
+                            Key={
+                                "conversation_key": item["conversation_key"],
+                                "message_timestamp": item["message_timestamp"],
+                            }
+                        )
+                        deleted_count += 1
+                
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key:
+                    break
+        
+        return deleted_count
+
     def _format_message(self, item: dict) -> dict:
         """Format message item for consistent output."""
         return {

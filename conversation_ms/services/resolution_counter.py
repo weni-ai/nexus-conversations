@@ -136,7 +136,7 @@ class PreCalculatedResolutionCounter(ResolutionCounterBackend):
         project_uuid: str,
         target_date: date,
     ) -> List[ChannelResolutionCount]:
-        return list[ChannelResolutionCount](self._counts.values())
+        return list(self._counts.values())
 
 
 def get_resolution_counter(

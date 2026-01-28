@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 import argparse
-import json
 import logging
 import os
 import signal
 import sys
-import time
 from pathlib import Path
 
 # Add project root to Python path
@@ -43,24 +41,11 @@ def signal_handler(sig, frame):
         consumer = signal_handler.consumer
         consumer.stop_consuming()
 
-        stats = consumer.get_stats()
-        stats_file = f"sqs_consumer_stats_{consumer.consumer_id}_{int(time.time())}.json"
-        with open(stats_file, "w") as f:
-            json.dump(stats, f, indent=2)
-        logger.info(f"[main] Stats saved to: {stats_file}")
-        logger.info(f"[main] Consolidated report: {consumer.report_file}")
-
     sys.exit(0)
 
 
 def main():
     parser = argparse.ArgumentParser(description="SQS Consumer for Conversation MS")
-    parser.add_argument(
-        "--expected-total",
-        type=int,
-        default=0,
-        help="Expected total number of messages (for progress tracking)",
-    )
     parser.add_argument(
         "--consumer-id",
         type=str,
@@ -75,7 +60,7 @@ def main():
     logger.info("[main] Starting Conversation MS SQS Consumer")
     sys.stdout.flush()
 
-    logger.info(f"[main] Arguments: expected_total={args.expected_total}, consumer_id={args.consumer_id}")
+    logger.info(f"[main] Arguments: consumer_id={args.consumer_id}")
     sys.stdout.flush()
 
     try:
@@ -83,7 +68,6 @@ def main():
         sys.stdout.flush()
 
         consumer = ConversationSQSConsumer(
-            expected_total_messages=args.expected_total,
             consumer_id=args.consumer_id,
         )
         signal_handler.consumer = consumer
@@ -107,12 +91,6 @@ def main():
         if hasattr(signal_handler, "consumer"):
             consumer = signal_handler.consumer
             consumer.stop_consuming()
-            stats = consumer.get_stats()
-            stats_file = f"sqs_consumer_stats_{consumer.consumer_id}_{int(time.time())}.json"
-            with open(stats_file, "w") as f:
-                json.dump(stats, f, indent=2)
-            logger.info(f"[main] Stats saved to: {stats_file}")
-            logger.info(f"[main] Consolidated report: {consumer.report_file}")
     except Exception as e:
         logger.error("[main] Fatal error", extra={"error": str(e)}, exc_info=True)
         sys.exit(1)

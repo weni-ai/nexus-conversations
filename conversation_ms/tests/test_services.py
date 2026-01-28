@@ -2,15 +2,16 @@
 Tests for conversation_ms services.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from conversation_ms.services.message_service import MessageService
+import pytest
+
+from conversation_ms.models import Conversation, ConversationMessages
 from conversation_ms.services.conversation_service import ConversationService
 from conversation_ms.services.csat_nps_service import CSATNPSService
 from conversation_ms.services.message_migration_service import MessageMigrationService
-from conversation_ms.models import Conversation, Project, ConversationMessages
+from conversation_ms.services.message_service import MessageService
 
 
 @pytest.mark.django_db
@@ -231,7 +232,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_csat_event(
                 event_data=event_data,
@@ -247,8 +252,9 @@ class TestCSATNPSService:
 
     def test_process_csat_event_with_dates(self, conversation, mock_sentry):
         """Test CSAT event processing with conversation start_date and end_date."""
-        import pendulum
         from datetime import timedelta
+
+        import pendulum
 
         conversation.start_date = pendulum.now()
         conversation.end_date = pendulum.now() + timedelta(days=1)
@@ -262,7 +268,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_csat_event(
                 event_data=event_data,
@@ -278,8 +288,9 @@ class TestCSATNPSService:
 
     def test_process_nps_event_with_dates(self, conversation, mock_sentry):
         """Test NPS event processing with conversation start_date and end_date."""
-        import pendulum
         from datetime import timedelta
+
+        import pendulum
 
         conversation.start_date = pendulum.now()
         conversation.end_date = pendulum.now() + timedelta(days=1)
@@ -293,7 +304,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_nps_event(
                 event_data=event_data,
@@ -331,7 +346,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_nps_event(
                 event_data=event_data,
@@ -368,7 +387,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             with pytest.raises(Exception, match="Update error"):
                 service.process_csat_event(
@@ -387,7 +410,11 @@ class TestCSATNPSService:
             mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             with pytest.raises(Exception, match="Update error"):
                 service.process_nps_event(
@@ -466,4 +493,3 @@ class TestMessageMigrationService:
             service = MessageMigrationService()
             with pytest.raises(Exception, match="DynamoDB error"):
                 service.migrate_conversation_messages_to_postgres(conversation)
-

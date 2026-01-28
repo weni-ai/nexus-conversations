@@ -71,4 +71,3 @@ elif [[ "healthcheck-celery-worker" == "$1" ]]; then
 fi
 
 exec "$@"
-

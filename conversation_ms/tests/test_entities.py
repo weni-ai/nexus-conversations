@@ -2,8 +2,6 @@
 Tests for conversation_ms entities.
 """
 
-import pytest
-
 from conversation_ms.adapters.entities import ResolutionEntities
 
 
@@ -40,4 +38,3 @@ class TestResolutionEntities:
         """Test convert_resolution_string_to_int with invalid string."""
         result = ResolutionEntities.convert_resolution_string_to_int("invalid")
         assert result == ResolutionEntities.IN_PROGRESS  # Default
-

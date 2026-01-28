@@ -2,7 +2,6 @@
 Tests for conversation_ms events (DTOs).
 """
 
-import pytest
 from datetime import datetime
 from uuid import uuid4
 
@@ -319,4 +318,3 @@ class TestConversationWindowEvent:
         event = ConversationWindowEvent.from_sqs_event(event_data)
         assert event.start_date is None
         assert event.end_date is None
-

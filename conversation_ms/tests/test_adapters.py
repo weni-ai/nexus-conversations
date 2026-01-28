@@ -2,16 +2,16 @@
 Tests for conversation_ms adapters.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from conversation_ms.adapters.router_service import MainConversationService
-from conversation_ms.adapters.dynamo import DynamoMessageRepository
-from conversation_ms.adapters.data_lake import DataLakeEventDTO
+import pytest
+
 from conversation_ms.adapters.conversation import update_conversation_data
-from conversation_ms.models import Project, Conversation, ConversationMessages
-from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.adapters.data_lake import DataLakeEventDTO
+from conversation_ms.adapters.dynamo import DynamoMessageRepository
+from conversation_ms.adapters.router_service import MainConversationService
+from conversation_ms.models import Conversation, Project
 
 
 @pytest.mark.django_db
@@ -117,7 +117,7 @@ class TestMainConversationService:
         """Test that migration errors are handled gracefully when closing multiple conversations."""
         channel_uuid = uuid4()
         # Create multiple conversations in progress
-        old_conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
@@ -133,7 +133,9 @@ class TestMainConversationService:
         )
 
         with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
-            mock_migration.return_value.migrate_conversation_messages_to_postgres.side_effect = Exception("Migration error")
+            mock_migration.return_value.migrate_conversation_messages_to_postgres.side_effect = Exception(
+                "Migration error"
+            )
 
             service = MainConversationService()
             # Should not raise exception, just log error
@@ -383,7 +385,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_triggers_migration(self, project):
         """Test that updating resolution triggers message migration."""
         channel_uuid = uuid4()
-        conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -406,7 +408,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_no_migration_when_still_in_progress(self, project):
         """Test that migration is not triggered when conversation is still in progress."""
         channel_uuid = uuid4()
-        conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -423,7 +425,6 @@ class TestUpdateConversationData:
 
             # Verify migration service was NOT called
             mock_migration.return_value.migrate_conversation_messages_to_postgres.assert_not_called()
-
 
     def test_update_conversation_data_not_found(self, project):
         """Test updating conversation that doesn't exist."""
@@ -554,7 +555,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_handles_migration_exception(self, project):
         """Test that exceptions during migration are handled gracefully."""
         channel_uuid = uuid4()
-        conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -562,7 +563,9 @@ class TestUpdateConversationData:
         )
 
         with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
-            mock_migration.return_value.migrate_conversation_messages_to_postgres.side_effect = Exception("Migration error")
+            mock_migration.return_value.migrate_conversation_messages_to_postgres.side_effect = Exception(
+                "Migration error"
+            )
 
             # Should not raise exception, just log error
             update_conversation_data(
@@ -571,4 +574,3 @@ class TestUpdateConversationData:
                 contact_urn="whatsapp:+5511999999999",
                 channel_uuid=str(channel_uuid),
             )
-

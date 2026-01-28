@@ -23,4 +23,3 @@ env = environ.Env(
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
 )
-

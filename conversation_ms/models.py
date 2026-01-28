@@ -124,9 +124,7 @@ class ConversationClassification(models.Model):
     """
 
     uuid = models.UUIDField(primary_key=True, default=uuid4)
-    conversation = models.OneToOneField(
-        Conversation, on_delete=models.CASCADE, related_name="classification"
-    )
+    conversation = models.OneToOneField(Conversation, on_delete=models.CASCADE, related_name="classification")
     topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True)
     subtopic = models.ForeignKey(SubTopic, on_delete=models.SET_NULL, null=True, blank=True)
     confidence = models.FloatField(default=0.0)

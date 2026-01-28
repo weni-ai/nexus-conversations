@@ -11,7 +11,6 @@ import uuid
 from contextlib import contextmanager
 from functools import partial
 
-import boto3
 import pendulum
 from django.conf import settings
 
@@ -68,7 +67,6 @@ class DynamoMessageRepository:
         ttl_hours: int = 48,
     ) -> None:
         """Store message with proper conversation and resolution tracking."""
-        from conversation_ms.adapters.entities import ResolutionEntities
 
         conversation_key = f"{project_uuid}#{contact_urn}#{channel_uuid}"
         message_id = str(uuid.uuid4())
@@ -197,4 +195,3 @@ class DynamoMessageRepository:
             "source": item["source_type"],
             "created_at": item["created_at"],
         }
-

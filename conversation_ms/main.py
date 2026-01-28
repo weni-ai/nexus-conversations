@@ -11,8 +11,8 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-import django
-import environ
+import django  # noqa: E402
+import environ  # noqa: E402
 
 env_file = project_root / ".env"
 if env_file.exists():
@@ -23,8 +23,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nexus_conversations.settings")
 django.setup()
 
 # Import after django.setup() to avoid AppRegistryNotReady
-from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
-
+from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

@@ -157,8 +157,28 @@ class ConversationSQSConsumer:
                         Entries=entries,
                     )
                     logger.info(f"[ConversationSQSConsumer] Deleted batch of {len(batch)} messages")
+
+                    # Update counter
+                    self.processed_count += len(batch)
+
+                    # Log progress
+                    if self.processed_count % 100 == 0:
+                        logger.info(f"[{self.consumer_id}] Processed {self.processed_count} messages")
+
             except Exception as e:
                 logger.error(f"[ConversationSQSConsumer] Error deleting message batch: {e}", exc_info=True)
+                # Fallback: delete one by one
+                for msg in successful_messages:
+                    try:
+                        self.sqs_client.delete_message(
+                            QueueUrl=self.queue_url,
+                            ReceiptHandle=msg["ReceiptHandle"],
+                        )
+                    except Exception as e2:
+                        logger.error(
+                            "[ConversationSQSConsumer] Error deleting message",
+                            extra={"error": str(e2), "message_id": msg.get("Id")},
+                        )
 
     def stop_consuming(self):
         """Stop consuming messages."""

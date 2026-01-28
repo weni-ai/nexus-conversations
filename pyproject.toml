@@ -2,7 +2,7 @@
 name = "nexus-conversations"
 version = "0.1.0"
 description = "Conversation Microservice for Nexus AI - Internal service for processing conversation messages from SQS FIFO queue"
-authors = ["Weni AI <dev@weni.ai>"]
+authors = ["Ruan Rocha <ruan.rocha@vtex.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]

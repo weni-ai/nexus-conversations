@@ -92,4 +92,3 @@ omit = [
   "*/consumers/*",
   "*/exceptions.py",
 ]
-

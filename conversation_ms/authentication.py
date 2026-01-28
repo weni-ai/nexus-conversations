@@ -1,13 +1,13 @@
-
-from rest_framework import authentication, exceptions
 from django.conf import settings
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
+from rest_framework import authentication, exceptions
 
 
 class ServiceUser:
     """
     A simple user class for service-to-service authentication.
     """
+
     def __init__(self, username):
         self.username = username
         self.is_authenticated = True

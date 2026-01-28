@@ -33,4 +33,3 @@ class ResolutionEntities:
             "has chat room": ResolutionEntities.HAS_CHAT_ROOM,
         }
         return resolution_mapping.get(resolution_string.lower(), ResolutionEntities.IN_PROGRESS)
-

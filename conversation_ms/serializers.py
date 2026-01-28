@@ -1,6 +1,5 @@
-
-from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
 
 from conversation_ms.models import (
     Conversation,
@@ -67,7 +66,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     def get_messages(self, obj):
         request = self.context.get("request")
         view = self.context.get("view")
-        
+
         is_detail = getattr(view, "action", None) == "retrieve"
         include_messages = request and request.query_params.get("include_messages") == "true"
 

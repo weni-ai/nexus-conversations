@@ -2,9 +2,8 @@ import logging
 
 import sentry_sdk
 
-from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
-from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
 
 logger = logging.getLogger(__name__)
 

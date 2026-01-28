@@ -2,7 +2,6 @@
 Tests for SQS consumer event routing.
 """
 
-import pytest
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
@@ -86,7 +85,4 @@ class TestConsumerEventRouting:
             consumer._handle_conversation_window(sample_sqs_conversation_window_event)
 
             mock_service_class.assert_called_once()
-            mock_service.process_conversation_window.assert_called_once_with(
-                sample_sqs_conversation_window_event
-            )
-
+            mock_service.process_conversation_window.assert_called_once_with(sample_sqs_conversation_window_event)

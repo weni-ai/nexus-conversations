@@ -84,4 +84,3 @@ def send_data_lake_event(event_data: dict):
         sentry_sdk.set_context("event_data", event_data)
         sentry_sdk.capture_exception(e)
         raise
-

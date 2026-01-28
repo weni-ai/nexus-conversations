@@ -2,10 +2,10 @@
 Tests for ConversationWindowService.
 """
 
-import pytest
-from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, Project
@@ -120,9 +120,7 @@ class TestConversationWindowService:
         }
 
         service = ConversationWindowService()
-        with patch.object(
-            service.migration_service, "migrate_conversation_messages_to_postgres"
-        ) as mock_migrate:
+        with patch.object(service.migration_service, "migrate_conversation_messages_to_postgres") as mock_migrate:
             service.process_conversation_window(event_data)
 
             # Verify migration was called
@@ -147,9 +145,7 @@ class TestConversationWindowService:
         }
 
         service = ConversationWindowService()
-        with patch.object(
-            service.migration_service, "migrate_conversation_messages_to_postgres"
-        ) as mock_migrate:
+        with patch.object(service.migration_service, "migrate_conversation_messages_to_postgres") as mock_migrate:
             service.process_conversation_window(event_data)
 
             # Verify migration was NOT called
@@ -209,7 +205,6 @@ class TestConversationWindowService:
 
         service = ConversationWindowService()
         with patch("sentry_sdk.capture_exception") as mock_capture:
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017
                 service.process_conversation_window(event_data)
             mock_capture.assert_called_once()
-

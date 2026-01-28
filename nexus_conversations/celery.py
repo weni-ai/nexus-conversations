@@ -3,7 +3,7 @@ import os
 import sys
 from typing import Optional
 
-from celery import Celery, schedules
+from celery import Celery
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -42,4 +42,3 @@ if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):
         return task.apply(args, kwargs, **opts)
 
     current_app.send_task = send_task
-

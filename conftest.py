@@ -2,12 +2,12 @@
 Pytest configuration and fixtures for nexus-conversations tests.
 """
 
-import pytest
-from datetime import datetime
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from conversation_ms.models import Project, Conversation
+import pytest
+
+from conversation_ms.models import Conversation, Project
 
 
 @pytest.fixture
@@ -119,8 +119,7 @@ def mock_data_lake_task():
 @pytest.fixture
 def mock_sentry():
     """Mock Sentry SDK."""
-    with patch("sentry_sdk.capture_exception"), patch("sentry_sdk.capture_message"), patch(
-        "sentry_sdk.set_tag"
-    ), patch("sentry_sdk.set_context"):
+    with patch("sentry_sdk.capture_exception"), patch("sentry_sdk.capture_message"), patch("sentry_sdk.set_tag"), patch(
+        "sentry_sdk.set_context"
+    ):
         yield
-

@@ -9,4 +9,3 @@ def filter_events(event: Dict, hint: Dict, events_to_filter: List[str]) -> Dict 
         return event
     except (IndexError, AttributeError, KeyError):
         return event
-

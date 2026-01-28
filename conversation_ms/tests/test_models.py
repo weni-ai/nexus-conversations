@@ -2,10 +2,11 @@
 Tests for conversation_ms models.
 """
 
-import pytest
 from uuid import uuid4
 
-from conversation_ms.models import Project, Conversation, ConversationMessages
+import pytest
+
+from conversation_ms.models import Conversation, ConversationMessages, Project
 
 
 @pytest.mark.django_db
@@ -115,9 +116,7 @@ class TestConversationMessages:
             {"text": "Hello", "source": "incoming", "created_at": "2024-01-01T12:00:00"},
             {"text": "Hi there", "source": "outgoing", "created_at": "2024-01-01T12:01:00"},
         ]
-        conversation_messages = ConversationMessages.objects.create(
-            conversation=conversation, messages=messages_data
-        )
+        conversation_messages = ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
         assert conversation_messages.conversation == conversation
         assert len(conversation_messages.messages) == 2
         assert conversation_messages.messages[0]["text"] == "Hello"
@@ -152,4 +151,3 @@ class TestConversationMessages:
         )
         assert created is False
         assert len(conversation_messages.messages) == 2
-

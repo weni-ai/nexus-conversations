@@ -77,10 +77,11 @@ class MessageSentEvent:
 class ConversationWindowEvent:
     """
     Event for conversation window updates from Mailroom.
-    
+
     This event is sent when a conversation window is created or updated,
     including information about chat room opening (has_chats_room).
     """
+
     correlation_id: str
     project_uuid: str
     contact_urn: str
@@ -95,7 +96,7 @@ class ConversationWindowEvent:
     def from_sqs_event(cls, event_data: dict) -> "ConversationWindowEvent":
         """
         Parse conversation window event from SQS event data.
-        
+
         Expected structure:
         {
             "correlation_id": "...",
@@ -112,11 +113,11 @@ class ConversationWindowEvent:
         }
         """
         data = event_data.get("data", {})
-        
+
         # Parse dates
         start_date = None
         end_date = None
-        
+
         start_str = data.get("start") or data.get("start_date")
         if start_str:
             try:
@@ -126,7 +127,7 @@ class ConversationWindowEvent:
                     start_date = start_date.replace(tzinfo=None)
             except (ValueError, AttributeError):
                 pass
-        
+
         end_str = data.get("end") or data.get("end_date")
         if end_str:
             try:
@@ -148,4 +149,3 @@ class ConversationWindowEvent:
             has_chats_room=bool(data.get("has_chats_room", False)),
             contact_name=data.get("name") or data.get("contact_name"),
         )
-

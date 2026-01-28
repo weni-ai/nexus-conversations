@@ -116,9 +116,6 @@ class ConversationSQSConsumer:
                 self.error_count += 1
                 logger.error(f"[{self.consumer_id}] Error in consumer loop: {e}", exc_info=True)
                 sys.stdout.flush()
-                # Breve pausa para evitar loop rápido em caso de erro persistente
-                time.sleep(1)
-
                 time.sleep(1)
 
     def _process_message_batch(self, messages):

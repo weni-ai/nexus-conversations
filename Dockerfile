@@ -5,9 +5,14 @@ ARG DEBIAN_VERSION="bookworm"
 ARG POETRY_VERSION="1.7.0"
 
 ARG BUILD_DEPS="\
-  gcc bzip2 git curl libpq-dev \
-  python3-dev build-essential"
-
+  gcc bzip2 git curl libpq-dev gettext \
+  libgdal-dev python3-cffi python3-gdal \
+  python3-dev default-libmysqlclient-dev build-essential \
+  build-essential \
+  git cmake \
+  autoconf pkg-config libtool automake \
+  libmariadb-dev"
+# default-libmysqlclient-dev
 ARG RUNTIME_DEPS="\
   tzdata \
   postgresql-client \
@@ -52,7 +57,7 @@ FROM base as build-poetry
 ARG POETRY_VERSION
 
 COPY pyproject.toml ./
-COPY poetry.lock* ./
+COPY poetry.lock ./
 
 RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}" \
   && poetry export --without-hashes --output requirements.txt
@@ -91,4 +96,3 @@ USER "${APP_USER}:${APP_GROUP}"
 EXPOSE 8000
 ENTRYPOINT ["bash", "/entrypoint.sh"]
 CMD ["start"]
-

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class MainConversationService:
     """
     Service for managing conversations in the microservice.
-    
+
     This service creates and manages conversations independently, making
     nexus-conversations the source of truth for conversation data.
     """
@@ -34,13 +34,12 @@ class MainConversationService:
     ) -> Optional[Conversation]:
         """
         Ensure conversation exists.
-        
+
         This method:
         1. Gets or creates the Project
         2. Finds existing conversation in progress (resolution=2)
         3. Creates new conversation if none exists
-        4. Handles multiple conversations by marking old ones as Unclassified
-        
+
         Returns the conversation object or None if channel_uuid is missing.
         """
         if not channel_uuid:
@@ -55,83 +54,25 @@ class MainConversationService:
             return None
 
         try:
-            # Get or create Project
-            project, _ = Project.objects.get_or_create(
-                uuid=project_uuid,
-                defaults={"name": None}  # Project name can be updated later if needed
+            project = self._get_or_create_project(project_uuid)
+
+            conversation = self._get_active_conversation(
+                project=project, channel_uuid=channel_uuid, contact_urn=contact_urn
             )
 
-            # Find existing conversation in progress
-            conversation_queryset = Conversation.objects.filter(
-                project=project,
-                channel_uuid=channel_uuid,
-                contact_urn=contact_urn,
-                resolution=2,  # IN_PROGRESS
-            )
-
-            if not conversation_queryset.exists():
-                # Create new conversation
-                conversation = self._create_conversation(
-                    project=project,
-                    contact_urn=contact_urn,
-                    contact_name=contact_name,
-                    channel_uuid=channel_uuid,
-                )
-                logger.info(
-                    "[MainConversationService] Created new conversation",
-                    extra={
-                        "conversation_uuid": str(conversation.uuid),
-                        "project_uuid": project_uuid,
-                        "contact_urn": contact_urn,
-                    },
-                )
+            if conversation:
                 return conversation
 
-            # Handle multiple conversations in progress
-            if conversation_queryset.count() > 1:
-                conversation_queryset = conversation_queryset.order_by("-created_at")
-                conversations_to_close = conversation_queryset.exclude(uuid=conversation_queryset.first().uuid)
-                
-                for conversation in conversations_to_close:
-                    original_resolution = str(conversation.resolution)
-                    conversation.resolution = 3  # UNCLASSIFIED
-                    conversation.save()
-                    
-                    if original_resolution == "2":  # IN_PROGRESS
-                        try:
-                            from conversation_ms.services.message_migration_service import MessageMigrationService
-                            
-                            migration_service = MessageMigrationService()
-                            migration_service.migrate_conversation_messages_to_postgres(conversation)
-                            logger.info(
-                                "[MainConversationService] Message migration completed for closed conversation",
-                                extra={"conversation_uuid": str(conversation.uuid)},
-                            )
-                        except Exception as e:
-                            logger.error(
-                                "[MainConversationService] Error during message migration",
-                                extra={
-                                    "conversation_uuid": str(conversation.uuid),
-                                    "error": str(e),
-                                },
-                                exc_info=True,
-                            )
-                
-                logger.warning(
-                    "[MainConversationService] Multiple conversations found, marked old ones as Unclassified",
-                    extra={
-                        "project_uuid": project_uuid,
-                        "contact_urn": contact_urn,
-                        "channel_uuid": str(channel_uuid),
-                        "count": conversation_queryset.count(),
-                        "closed_count": conversations_to_close.count(),
-                    },
-                )
+            # Create new conversation
+            conversation = self._create_conversation(
+                project=project,
+                contact_urn=contact_urn,
+                contact_name=contact_name,
+                channel_uuid=channel_uuid,
+            )
 
-            # Return the most recent conversation in progress
-            conversation = conversation_queryset.first()
-            logger.debug(
-                "[MainConversationService] Found existing conversation",
+            logger.info(
+                "[MainConversationService] Created new conversation",
                 extra={
                     "conversation_uuid": str(conversation.uuid),
                     "project_uuid": project_uuid,
@@ -167,6 +108,50 @@ class MainConversationService:
             )
             raise
 
+    def _get_or_create_project(self, project_uuid: str) -> Project:
+        """Get or create Project instance."""
+        project, _ = Project.objects.get_or_create(uuid=project_uuid, defaults={"name": None})
+        return project
+
+    def _get_active_conversation(self, project: Project, channel_uuid: str, contact_urn: str) -> Optional[Conversation]:
+        """
+        Get the most recent active conversation (resolution=2).
+
+        If multiple active conversations exist, returns the most recent one
+        and logs a warning.
+        """
+        conversations = Conversation.objects.filter(
+            project=project,
+            channel_uuid=channel_uuid,
+            contact_urn=contact_urn,
+            resolution=2,  # IN_PROGRESS
+        ).order_by("-created_at")
+
+        if not conversations.exists():
+            return None
+
+        if conversations.count() > 1:
+            logger.warning(
+                "[MainConversationService] Multiple active conversations found, using the most recent one",
+                extra={
+                    "project_uuid": str(project.uuid),
+                    "contact_urn": contact_urn,
+                    "channel_uuid": channel_uuid,
+                    "count": conversations.count(),
+                },
+            )
+
+        conversation = conversations.first()
+        logger.debug(
+            "[MainConversationService] Found existing conversation",
+            extra={
+                "conversation_uuid": str(conversation.uuid),
+                "project_uuid": str(project.uuid),
+                "contact_urn": contact_urn,
+            },
+        )
+        return conversation
+
     def _create_conversation(
         self,
         project: Project,
@@ -176,7 +161,7 @@ class MainConversationService:
     ) -> Conversation:
         """
         Create a new conversation with base structure.
-        
+
         Sets start_date to current time and end_date to start_date + 1 day,
         following the pattern from nexus-ai.
         """
@@ -195,4 +180,3 @@ class MainConversationService:
         )
 
         return conversation
-

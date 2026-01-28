@@ -117,7 +117,7 @@ class ConversationSQSConsumer:
                 logger.error(f"[{self.consumer_id}] Error in consumer loop: {e}", exc_info=True)
                 sys.stdout.flush()
                 # Breve pausa para evitar loop rápido em caso de erro persistente
-                import time
+                time.sleep(1)
 
                 time.sleep(1)
 

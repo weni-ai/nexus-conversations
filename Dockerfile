@@ -2,7 +2,7 @@
 
 ARG PYTHON_VERSION="3.10"
 ARG DEBIAN_VERSION="bookworm"
-ARG POETRY_VERSION="1.7.0"
+ARG POETRY_VERSION="2.1.4"
 
 ARG BUILD_DEPS="\
   gcc bzip2 git curl libpq-dev gettext \
@@ -59,7 +59,7 @@ ARG POETRY_VERSION
 COPY pyproject.toml ./
 COPY poetry.lock ./
 
-RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}" \
+RUN --mount=type=cache,mode=0755,target=/pip_cache,id=pip pip install --cache-dir /pip_cache -U poetry=="${POETRY_VERSION}" poetry-plugin-export \
   && poetry export --without-hashes --output requirements.txt
 
 FROM base as build

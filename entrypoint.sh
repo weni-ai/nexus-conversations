@@ -68,7 +68,33 @@ elif [[ "healthcheck-celery-worker" == "$1" ]]; then
     echo "${HEALTHCHECK_OUT}"
     grep -F -qs "${celery_queue}@${HOSTNAME}: OK" <<< "${HEALTHCHECK_OUT}" || exit 1
     exit 0
+elif [[ "healthcheck-consumer" == "$1" ]]; then
+    # Check if heartbeat file exists and was modified recently (e.g. last 120 seconds)
+    # Default path matches main.py default
+    heartbeat_file="${2:-/tmp/healthy}"
+
+    if [ ! -f "$heartbeat_file" ]; then
+        echo "Heartbeat file not found: $heartbeat_file"
+        # Fallback: check if process is running
+        if pgrep -f "conversation_ms/main.py" > /dev/null 2>&1; then
+            echo "Process is running (fallback)"
+            exit 0
+        fi
+        exit 1
+    fi
+
+    # Check modification time
+    current_time=$(date +%s)
+    file_mod_time=$(stat -c %Y "$heartbeat_file")
+    diff=$((current_time - file_mod_time))
+
+    if [ $diff -lt 120 ]; then
+        echo "Consumer healthy (heartbeat age: ${diff}s)"
+        exit 0
+    else
+        echo "Consumer unhealthy (heartbeat age: ${diff}s)"
+        exit 1
+    fi
 fi
 
 exec "$@"
-

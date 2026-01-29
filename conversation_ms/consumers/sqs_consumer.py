@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Optional
 
 from botocore.exceptions import ClientError
@@ -21,6 +22,7 @@ class ConversationSQSConsumer:
         region: str = "us-east-1",
         processing_delay: float = 0.0,
         consumer_id: Optional[str] = None,
+        heartbeat_file: str = "/tmp/healthy",
     ):
         """
         Initialize SQS Consumer.
@@ -30,11 +32,13 @@ class ConversationSQSConsumer:
             region: AWS region (defaults to us-east-1)
             processing_delay: Delay in seconds to simulate DB insertion (default: 0.0s)
             consumer_id: ID único do consumer (default: gera automaticamente com PID + timestamp)
+            heartbeat_file: File path to touch for liveness probe
         """
         self.queue_url = queue_url or os.environ.get("SQS_CONVERSATION_QUEUE_URL", "")
         self.region = region
         self.processing_delay = float(os.environ.get("SQS_PROCESSING_DELAY", processing_delay))
         self.running = False
+        self.heartbeat_file = heartbeat_file
 
         # ID único do consumer (PID + timestamp)
         if consumer_id:
@@ -89,6 +93,12 @@ class ConversationSQSConsumer:
         empty_polls = 0
 
         while self.running:
+            # Update heartbeat
+            try:
+                Path(self.heartbeat_file).touch()
+            except Exception as e:
+                logger.warning(f"[{self.consumer_id}] Failed to touch heartbeat file: {e}")
+
             try:
                 # Receive messages from FIFO queue (processar até 10 mensagens por vez para melhor throughput)
                 logger.debug(f"[{self.consumer_id}] Polling SQS for messages...")
@@ -148,13 +158,13 @@ class ConversationSQSConsumer:
                                 QueueUrl=self.queue_url,
                                 Entries=entries,
                             )
-                        
+
                         # Atualizar contador
                         self.processed_count += len(successful_messages)
-                        
+
                         # Log ocasional de progresso
                         if self.processed_count % 100 == 0:
-                             logger.info(f"[{self.consumer_id}] Processed {self.processed_count} messages")
+                            logger.info(f"[{self.consumer_id}] Processed {self.processed_count} messages")
 
                     except Exception as e:
                         logger.error(
@@ -260,10 +270,10 @@ class ConversationSQSConsumer:
     def _route_event(self, event_type: str, event_data: Dict):
         """
         Route event to appropriate handler based on event type.
-        
+
         This method provides a generic event routing system that can be
         easily extended with new event types.
-        
+
         Args:
             event_type: Type of event (e.g., "message.received", "conversation.window")
             event_data: Event data dictionary
@@ -336,7 +346,7 @@ class ConversationSQSConsumer:
     def _handle_conversation_window(self, event_data: Dict):
         """
         Handle conversation.window event from Mailroom.
-        
+
         This event is sent when a conversation window is created or updated,
         including information about chat room opening (has_chats_room).
 

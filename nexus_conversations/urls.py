@@ -5,6 +5,7 @@ This is a minimal configuration for an internal microservice.
 No external endpoints are exposed.
 """
 
+from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
@@ -15,6 +16,7 @@ conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
 
 urlpatterns = [
+    path("admin/", admin.site.urls),
     path("", lambda _: HttpResponse("Nexus Conversations Microservice")),
     path(
         "api/v1/projects/<uuid:project_uuid>/conversations/",
@@ -38,4 +40,3 @@ urlpatterns = [
         name="redoc",
     ),
 ]
-

@@ -111,10 +111,6 @@ class ClassificationService:
             if not response:
                 return None
 
-            # Parse response
-            # Expected format from nexus-ai:
-            # conversation_topics = conversation_topics.get("body")
-            # topic_uuid = conversation_topics.get("topic_uuid")
             body = response.get("body", {})
             return self._save_classification(conversation, body)
 

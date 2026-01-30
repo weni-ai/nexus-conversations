@@ -209,3 +209,6 @@ LOGGING = {
     },
 }
 
+# Client variables
+BILLING_BASE_URL = env.str("BILLING_BASE_URL", default="")
+BILLING_TOKEN = env.str("BILLING_TOKEN", default="")

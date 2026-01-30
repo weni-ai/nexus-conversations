@@ -95,4 +95,4 @@ RUN chmod +x /entrypoint.sh
 USER "${APP_USER}:${APP_GROUP}"
 EXPOSE 8000
 ENTRYPOINT ["bash", "/entrypoint.sh"]
-CMD ["start"]
+CMD ["web"]

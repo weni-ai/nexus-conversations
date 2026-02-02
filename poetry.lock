@@ -2790,6 +2790,21 @@ markupsafe = ">=2.1.1"
 watchdog = ["watchdog (>=2.3)"]
 
 [[package]]
+name = "whitenoise"
+version = "6.11.0"
+description = "Radically simplified static file serving for WSGI applications"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "whitenoise-6.11.0-py3-none-any.whl", hash = "sha256:b2aeb45950597236f53b5342b3121c5de69c8da0109362aee506ce88e022d258"},
+    {file = "whitenoise-6.11.0.tar.gz", hash = "sha256:0f5bfce6061ae6611cd9396a8231e088722e4fc67bc13a111be74c738d99375f"},
+]
+
+[package.extras]
+brotli = ["brotli"]
+
+[[package]]
 name = "xmltodict"
 version = "1.0.2"
 description = "Makes working with XML feel like you are working with JSON"
@@ -2807,4 +2822,4 @@ test = ["pytest", "pytest-cov"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.12"
-content-hash = "fafc23115c3eefbdc5d9a6c24c1912ea1502cd4c67895c312394016723a7e13b"
+content-hash = "a967c0de07bb6890bff2572d8ff1b9d7f64f2bcfeb8edc3540ca6b21bbb79eda"

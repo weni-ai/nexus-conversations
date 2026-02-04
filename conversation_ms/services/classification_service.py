@@ -228,4 +228,4 @@ class ClassificationService:
         }
         # TODO: Add datalake event
 
-        return conversation_resolution_response.get("result")
+        return resolution

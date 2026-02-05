@@ -43,7 +43,7 @@ class ProjectClient:
         if page_size is None:
             page_size = self.page_size
 
-        url = f"{self.base_url}/api/projects"
+        url = f"{self.base_url}/v2/internals/connect/projects"
         params = {"page": page, "page_size": page_size}
 
         try:

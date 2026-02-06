@@ -203,7 +203,7 @@ def _build_request_dto(
     max_retries=3,
     default_retry_delay=300,
 )
-def close_daily_conversations_task(self):
+def close_daily_conversations_task(self, force_close: bool = False):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
     
@@ -311,7 +311,7 @@ def close_daily_conversations_task(self):
                         # This means the previous day's 23:59:59 has passed
                         day_ended = now_in_tz.hour == 0 and now_in_tz.minute >= 0 and now_in_tz.second >= 1
                         
-                        if day_ended:
+                        if day_ended or force_close:
                             # Day has ended, process open conversations
                             logger.info(
                                 f"[CloseDailyConversationsTask] Day ended for project {project_uuid}, processing open conversations",

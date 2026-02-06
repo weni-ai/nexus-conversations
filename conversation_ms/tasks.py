@@ -309,7 +309,7 @@ def close_daily_conversations_task(self):
                         # Check if day has ended (23:59:59 has passed)
                         # Day has ended if we're past midnight (00:00:01 or later)
                         # This means the previous day's 23:59:59 has passed
-                        day_ended = now_in_tz.hour == 0 and now_in_tz.minute == 0 and now_in_tz.second >= 1
+                        day_ended = now_in_tz.hour == 0 and now_in_tz.minute >= 0 and now_in_tz.second >= 1
                         
                         if day_ended:
                             # Day has ended, process open conversations

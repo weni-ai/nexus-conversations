@@ -15,10 +15,10 @@ class SentryConfig(AppConfig):
         if not settings.USE_SENTRY:
             return
 
+    if settings.USE_SENTRY:
         sentry_sdk.init(
             dsn=settings.SENTRY_URL,
             integrations=[DjangoIntegration()],
             environment=settings.ENVIRONMENT,
             before_send=partial(filter_events, events_to_filter=settings.FILTER_SENTRY_EVENTS),
         )
-

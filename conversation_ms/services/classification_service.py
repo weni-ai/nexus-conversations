@@ -17,7 +17,7 @@ class ClassificationService:
     """
 
     def __init__(self):
-        self.lambda_client = get_boto3_client("lambda")
+        self.lambda_client = get_boto3_client("lambda", region_name=settings.AWS_REGION)
         self.dynamo_repo = DynamoMessageRepository()
 
     def classify_conversation(self, conversation_uuid: str) -> Optional[ConversationClassification]:

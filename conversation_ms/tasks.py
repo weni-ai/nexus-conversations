@@ -445,10 +445,11 @@ def _process_project_conversations(project_uuid: str) -> int:
     ).iterator(chunk_size=50)
     
     for conversation in conversations:
+        conversation_uuid = str(conversation.uuid)
         try:
             logger.debug(
-                f"[CloseDailyConversationsTask] Processing conversation {conversation.uuid}",
-                extra={"conversation_uuid": str(conversation.uuid), "project_uuid": project_uuid},
+                f"[CloseDailyConversationsTask] Processing conversation {conversation_uuid}",
+                extra={"conversation_uuid": str(conversation_uuid), "project_uuid": project_uuid},
             )
             
             # Get messages from DynamoDB
@@ -460,8 +461,8 @@ def _process_project_conversations(project_uuid: str) -> int:
             
             if not messages:
                 logger.warning(
-                    f"[CloseDailyConversationsTask] No messages found for conversation {conversation.uuid}, setting as unclassified",
-                    extra={"conversation_uuid": str(conversation.uuid)},
+                    f"[CloseDailyConversationsTask] No messages found for conversation {conversation_uuid}, setting as unclassified",
+                    extra={"conversation_uuid": str(conversation_uuid)},
                 )
                 # If no messages, set as unclassified
                 resolution_int = ResolutionEntities.UNCLASSIFIED
@@ -494,9 +495,9 @@ def _process_project_conversations(project_uuid: str) -> int:
                 conversation.save(update_fields=["resolution", "end_date"])
                 
                 logger.info(
-                    f"[CloseDailyConversationsTask] Updated conversation {conversation.uuid} with resolution {resolution_int}",
+                    f"[CloseDailyConversationsTask] Updated conversation {conversation_uuid} with resolution {resolution_int}",
                     extra={
-                        "conversation_uuid": str(conversation.uuid),
+                        "conversation_uuid": str(conversation_uuid),
                         "resolution": resolution_int,
                     },
                 )
@@ -505,37 +506,43 @@ def _process_project_conversations(project_uuid: str) -> int:
                 try:
                     migration_service.migrate_conversation_messages_to_postgres(conversation)
                     logger.debug(
-                        f"[CloseDailyConversationsTask] Migrated messages for conversation {conversation.uuid}",
-                        extra={"conversation_uuid": str(conversation.uuid)},
+                        f"[CloseDailyConversationsTask] Migrated messages for conversation {conversation_uuid}",
+                        extra={"conversation_uuid": str(conversation_uuid)},
                     )
                 except Exception as e:
                     # Log error but don't fail the whole task
-                    sentry_sdk.set_tag("conversation_uuid", str(conversation.uuid))
+                    sentry_sdk.set_tag("conversation_uuid", str(conversation_uuid))
                     sentry_sdk.capture_exception(e)
                     logger.error(
-                        f"[CloseDailyConversationsTask] Error migrating messages for conversation {conversation.uuid}",
-                        extra={"conversation_uuid": str(conversation.uuid), "error": str(e)},
+                        f"[CloseDailyConversationsTask] Error migrating messages for conversation {conversation_uuid}",
+                        extra={"conversation_uuid": str(conversation_uuid), "error": str(e)},
                         exc_info=True,
                     )
                 
                 conversations_closed += 1
+                
+                classify_conversation_task.delay(conversation_uuid)
+                logger.info(
+                    f"[CloseDailyConversationsTask] Triggered classification task for conversation {conversation_uuid}",
+                    extra={"conversation_uuid": str(conversation_uuid)},
+                )
             else:
                 logger.debug(
-                    f"[CloseDailyConversationsTask] Conversation {conversation.uuid} already closed, skipping",
+                    f"[CloseDailyConversationsTask] Conversation {conversation_uuid} already closed, skipping",
                     extra={
-                        "conversation_uuid": str(conversation.uuid),
+                        "conversation_uuid": str(conversation_uuid),
                         "current_resolution": conversation.resolution,
                     },
                 )
                 
         except Exception as e:
             # Log error but continue processing other conversations
-            sentry_sdk.set_tag("conversation_uuid", str(conversation.uuid))
+            sentry_sdk.set_tag("conversation_uuid", str(conversation_uuid))
             sentry_sdk.capture_exception(e)
             logger.error(
-                f"[CloseDailyConversationsTask] Error processing conversation {conversation.uuid}",
+                f"[CloseDailyConversationsTask] Error processing conversation {conversation_uuid}",
                 extra={
-                    "conversation_uuid": str(conversation.uuid),
+                    "conversation_uuid": str(conversation_uuid),
                     "project_uuid": project_uuid,
                     "error": str(e),
                 },

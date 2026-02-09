@@ -31,13 +31,7 @@ class ClassificationService:
             logger.error(f"[ClassificationService] Conversation {conversation_uuid} not found.")
             return None
 
-        # Fetch messages (prefer DynamoDB)
-        messages = self._get_conversation_messages(conversation)
-        if not messages:
-            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return None
-
-        # 1. Resolution Classification
+        messages = None
         if conversation.has_chats_room:
             # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
             resolution = "4"
@@ -45,13 +39,25 @@ class ClassificationService:
                 f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
             )
         else:
+            # Fetch messages (prefer DynamoDB)
+            messages = self._get_conversation_messages(conversation)
+            if not messages:
+                logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+                return None
+
             resolution = self._get_resolution_classification(conversation, messages)
 
         # Update conversation resolution
         conversation.resolution = resolution
         conversation.save()
 
-        # 2. Topic Classification
+        # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
+        if messages is None:
+            messages = self._get_conversation_messages(conversation)
+
+        if not messages:
+            return None
+
         return self._classify_topics(conversation, messages)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:

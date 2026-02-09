@@ -124,7 +124,10 @@ class ClassificationService:
         result = json.loads(response_payload)
 
         if isinstance(result, dict) and "body" in result:
-            return result["body"]
+            body = result["body"]
+            if isinstance(body, str):
+                body = json.loads(body)
+            return body
 
         return result
 

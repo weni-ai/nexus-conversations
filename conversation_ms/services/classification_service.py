@@ -1,11 +1,12 @@
-import logging
 import json
-from typing import Optional, List, Dict, Any
+import logging
+from typing import Any, Dict, List, Optional
 
 from django.conf import settings
-from conversation_ms.models import Conversation, ConversationClassification, Topic, SubTopic, ConversationMessages
+
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
+from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ClassificationService:
                 project_uuid=str(conversation.project.uuid),
                 contact_urn=conversation.contact_urn,
                 channel_uuid=str(conversation.channel_uuid),
-                limit=50
+                limit=50,
             )
             if result and result.get("items"):
                 return result["items"][::-1]
@@ -67,7 +68,7 @@ class ClassificationService:
                 return conversation.messages_data.messages
         except Exception as e:
             logger.warning(f"[ClassificationService] Failed to fetch from Postgres: {e}")
-        
+
         return []
 
     def _prepare_lambda_payload(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -79,19 +80,15 @@ class ClassificationService:
 
         formatted_messages = []
         for msg in messages:
-            formatted_messages.append({
-                "sender": msg.get("source", "unknown"),
-                "timestamp": str(msg.get("created_at", "")),
-                "content": msg.get("text", "")
-            })
+            formatted_messages.append(
+                {
+                    "sender": msg.get("source", "unknown"),
+                    "timestamp": str(msg.get("created_at", "")),
+                    "content": msg.get("text", ""),
+                }
+            )
 
-        return {
-            "project_uuid": str(conversation.project.uuid),
-            "conversation_uuid": str(conversation.uuid),
-            "messages": formatted_messages,
-            "topics": topics_payload,
-            "language": "pt-br",
-        }
+        return {"topics": topics_payload, "conversation": {"messages": formatted_messages}}
 
     def _get_topics_payload(self, project) -> List[Dict[str, Any]]:
         """
@@ -102,53 +99,52 @@ class ClassificationService:
         for topic in topics:
             subtopics = []
             for sub in topic.subtopics.filter(is_active=True):
-                subtopics.append({
-                    "subtopic_uuid": str(sub.uuid),
-                    "name": sub.name,
-                    "description": sub.description
-                })
-            payload.append({
-                "topic_uuid": str(topic.uuid),
-                "name": topic.name,
-                "description": topic.description,
-                "subtopics": subtopics
-            })
+                subtopics.append({"subtopic_uuid": str(sub.uuid), "name": sub.name, "description": sub.description})
+            payload.append(
+                {
+                    "topic_uuid": str(topic.uuid),
+                    "name": topic.name,
+                    "description": topic.description,
+                    "subtopics": subtopics,
+                }
+            )
         return payload
 
     def _invoke_classification_lambda(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Call the AWS Lambda function.
         """
-        lambda_name = getattr(settings, "CLASSIFICATION_LAMBDA_NAME", "nexus-classification-prod")
-        
-        response = self.lambda_client.invoke(
-            FunctionName=lambda_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(payload)
-        )
-        
+        lambda_name = getattr(settings, "CONVERSATION_TOPIC_CLASSIFIER_NAME", "")
+
+        response = self.invoke_lambda(lambda_name, payload)
+
         response_payload = response["Payload"].read()
-        return json.loads(response_payload)
+        result = json.loads(response_payload)
+
+        if isinstance(result, dict) and "body" in result:
+            return result["body"]
+
+        return result
 
     def invoke_lambda(self, lambda_name: str, payload: Dict[str, Any]):
         """
         Generic method to invoke an AWS Lambda function.
-        
+
         Args:
             lambda_name: Name of the Lambda function to invoke
             payload: Payload to send to the Lambda function
-            
+
         Returns:
             Response object from boto3 lambda client invoke
         """
         response = self.lambda_client.invoke(
-            FunctionName=lambda_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(payload)
+            FunctionName=lambda_name, InvocationType="RequestResponse", Payload=json.dumps(payload)
         )
         return response
 
-    def _save_classification(self, conversation: Conversation, result: Dict[str, Any]) -> Optional[ConversationClassification]:
+    def _save_classification(
+        self, conversation: Conversation, result: Dict[str, Any]
+    ) -> Optional[ConversationClassification]:
         """
         Parse Lambda result and save to database.
         Expected result format: {"topic_uuid": "...", "subtopic_uuid": "...", "confidence": 0.9}
@@ -158,31 +154,26 @@ class ClassificationService:
 
         topic_uuid = result.get("topic_uuid")
         subtopic_uuid = result.get("subtopic_uuid")
-        
+
         topic = None
         subtopic = None
 
         if topic_uuid:
             topic = Topic.objects.filter(uuid=topic_uuid).first()
-        
+
         if subtopic_uuid:
             subtopic = SubTopic.objects.filter(uuid=subtopic_uuid).first()
 
         classification, created = ConversationClassification.objects.update_or_create(
             conversation=conversation,
-            defaults={
-                "topic": topic,
-                "subtopic": subtopic,
-                "confidence": result.get("confidence", 0.0)
-            }
+            defaults={"topic": topic, "subtopic": subtopic, "confidence": result.get("confidence", 0.0)},
         )
-        
+
         logger.info(
             f"[ClassificationService] Saved classification for {conversation.uuid}: "
             f"Topic={topic.name if topic else 'None'}, Subtopic={subtopic.name if subtopic else 'None'}"
         )
         return classification
-
 
     def lambda_conversation_resolution(
         self,
@@ -217,7 +208,7 @@ class ClassificationService:
             # TODO: Add sentry error
             resolution = "unclassified"  # Use unclassified resolution for empty/None values
 
-        event_data = {
+        _event_data = {
             "event_name": "weni_nexus_data",
             "key": "conversation_classification",
             "value_type": "string",

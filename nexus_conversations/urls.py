@@ -41,7 +41,7 @@ urlpatterns = [
     ),
     path("api/v1/projects/<uuid:project_uuid>/topics/", TopicsViewSet.as_view({"get": "list", "post": "create"}), name="topics"),
     path(
-        "api/v1/projects/<uuid:project_uuid>/topics/<uuid:pk>/",
+        "api/v1/projects/<uuid:project_uuid>/topics/<uuid:uuid>/",
         TopicsViewSet.as_view({"get": "retrieve", "put": "update", "delete": "destroy"}),
         name="topic-detail",
     ),
@@ -51,7 +51,7 @@ urlpatterns = [
         name="subtopics",
     ),
     path(
-        "api/v1/projects/<uuid:project_uuid>/topics/<uuid:topic_uuid>/subtopics/<uuid:pk>/",
+        "api/v1/projects/<uuid:project_uuid>/topics/<uuid:topic_uuid>/subtopics/<uuid:uuid>/",
         SubTopicsViewSet.as_view({"get": "retrieve", "put": "update", "delete": "destroy"}),
         name="subtopic-detail",
     ),

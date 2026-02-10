@@ -6,13 +6,16 @@ import signal
 import sys
 from pathlib import Path
 
+import django
+import environ
+
+from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
+
 # Add project root to Python path
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-import django
-import environ
 
 env_file = project_root / ".env"
 if env_file.exists():
@@ -23,8 +26,6 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nexus_conversations.settings")
 django.setup()
 
 # Import after django.setup() to avoid AppRegistryNotReady
-from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +53,19 @@ def main():
         default=None,
         help="Unique consumer ID (default: auto-generated with PID + timestamp)",
     )
+    parser.add_argument(
+        "--queue-url",
+        type=str,
+        default=None,
+        help="SQS Queue URL to consume from",
+    )
+    parser.add_argument(
+        "--resource",
+        type=str,
+        choices=["messages", "rooms"],
+        default=None,
+        help="Resource type to consume (determines queue URL from env vars)",
+    )
     args = parser.parse_args()
 
     sys.stdout.flush()
@@ -60,15 +74,27 @@ def main():
     logger.info("[main] Starting Conversation MS SQS Consumer")
     sys.stdout.flush()
 
-    logger.info(f"[main] Arguments: consumer_id={args.consumer_id}")
+    logger.info(f"[main] Arguments: consumer_id={args.consumer_id}, resource={args.resource}")
     sys.stdout.flush()
 
     try:
+        queue_url = args.queue_url
+        if not queue_url and args.resource:
+            if args.resource == "messages":
+                queue_url = os.environ.get("SQS_MESSAGES_QUEUE_URL")
+            elif args.resource == "rooms":
+                queue_url = os.environ.get("SQS_ROOMS_QUEUE_URL")
+
+        if not queue_url:
+            logger.error("[main] No queue URL determined. Please provide --queue-url or --resource.")
+            sys.exit(1)
+
         logger.info("[main] Creating ConversationSQSConsumer instance...")
         sys.stdout.flush()
 
         consumer = ConversationSQSConsumer(
             consumer_id=args.consumer_id,
+            queue_url=queue_url,
         )
         signal_handler.consumer = consumer
 

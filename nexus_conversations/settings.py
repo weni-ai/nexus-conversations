@@ -236,3 +236,5 @@ BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
 PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
 PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
+
+AWS_REGION = env.str("AWS_REGION", default="us-east-1")

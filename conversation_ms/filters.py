@@ -7,6 +7,14 @@ from django_filters import rest_framework as filters
 from conversation_ms.models import Conversation
 
 
+class CharInFilter(filters.BaseInFilter, filters.CharFilter):
+    pass
+
+
+class NumberInFilter(filters.BaseInFilter, filters.NumberFilter):
+    pass
+
+
 class ConversationFilter(filters.FilterSet):
     """
     Filter for Conversation model.
@@ -22,9 +30,9 @@ class ConversationFilter(filters.FilterSet):
         input_formats=["%d-%m-%Y", "%Y-%m-%d", "iso-8601"],
     )
     status = filters.NumberFilter(field_name="resolution")
-    csat = filters.BaseInFilter(field_name="csat")
-    resolution = filters.BaseInFilter(field_name="resolution")
-    topics = filters.BaseInFilter(field_name="classification__topic__name")
+    csat = CharInFilter(field_name="csat")
+    resolution = CharInFilter(field_name="resolution")
+    topics = CharInFilter(field_name="classification__topic__name")
     has_chats_room = filters.BooleanFilter(field_name="has_chats_room")
     nps = filters.NumberFilter(field_name="nps")
     project_uuid = filters.UUIDFilter(field_name="project__uuid")

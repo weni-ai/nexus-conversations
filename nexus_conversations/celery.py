@@ -28,6 +28,10 @@ app.conf.beat_schedule = {
         "task": "conversation_ms.tasks.close_daily_conversations_task",
         "schedule": schedules.crontab(minute="0"),
     },
+    "reclassify_unclassified_conversations": {
+        "task": "conversation_ms.tasks.reclassify_unclassified_conversations",
+        "schedule": schedules.crontab(minute="0"),
+    },
 }
 
 if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):
@@ -40,4 +44,3 @@ if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):
         return task.apply(args, kwargs, **opts)
 
     current_app.send_task = send_task
-

@@ -1,22 +1,25 @@
 # Celery tasks for conversation processing
-import logging
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+import logging
+import random
+from typing import Dict, List, Optional, Tuple
 
-import pendulum
-import sentry_sdk
 from celery import shared_task
 from django.conf import settings
+import pendulum
+import sentry_sdk
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
-from conversation_ms.models import Project, Conversation
+from conversation_ms.models import Conversation, Project
 from conversation_ms.repositories.message_repository import MessageRepository
 from conversation_ms.services.classification_service import (
     ClassificationService,
 )
-from conversation_ms.services.message_migration_service import MessageMigrationService
+from conversation_ms.services.message_migration_service import (
+    MessageMigrationService,
+)
 from conversation_ms.services.resolution_counter import (
     ChannelResolutionCount,
     get_resolution_counter,
@@ -27,34 +30,29 @@ logger = logging.getLogger(__name__)
 
 @shared_task(name="conversation_ms.tasks.classify_conversation_task")
 def classify_conversation_task(conversation_uuid: str):
-    """
-    Celery task to classify a conversation.
-    Should be triggered when a conversation is resolved or closed.
-    """
+    """Classify a conversation. Trigger when resolved or closed."""
     logger.info(
-        f"[ClassificationTask] Starting classification for "
-        f"conversation {conversation_uuid}"
+        "[ClassificationTask] Starting classification for %s",
+        conversation_uuid,
     )
-
     service = ClassificationService()
     result = service.classify_conversation(conversation_uuid)
-
     if result:
         logger.info(
-            f"[ClassificationTask] Successfully classified "
-            f"conversation {conversation_uuid}"
+            "[ClassificationTask] Classified conversation %s",
+            conversation_uuid,
         )
     else:
         logger.warning(
-            f"[ClassificationTask] Failed to classify "
-            f"conversation {conversation_uuid}"
+            "[ClassificationTask] Failed to classify %s",
+            conversation_uuid,
         )
 
 
 @shared_task(
     name="conversation_ms.tasks.send_billing_conversations",
     bind=True,
-    max_retries=3,
+    max_retries=5,
     default_retry_delay=60,
 )
 def send_billing_conversations(
@@ -63,34 +61,20 @@ def send_billing_conversations(
     target_date: str = None,
     pre_calculated_counts: Optional[List[dict]] = None,
 ):
-    """
-    Async task to aggregate conversation counts per channel
-    and send to billing.
-
-    Conversations are filtered by created_at date since all
-    conversations close on the same day they were created.
-
-    Args:
-        project_uuid: The project UUID to process
-        target_date: Optional date string (YYYY-MM-DD). Defaults to yesterday.
-        pre_calculated_counts: Optional list of pre-calculated counts dicts.
-            Each dict should have: channel_uuid, resolved, unresolved,
-            has_chats_rooms, unclassified.
-            If provided, skips DB aggregation (useful for Redis/cache source).
+    """Aggregate conversation counts per channel and send to billing.
+    target_date defaults to yesterday; pre_calculated_counts skips DB.
     """
     try:
-        # Parse target date or default to yesterday
         if target_date:
             billing_date = date.fromisoformat(target_date)
         else:
             billing_date = date.today() - timedelta(days=1)
 
         logger.info(
-            f"Starting billing aggregation for project {project_uuid}, "
-            f"date {billing_date}"
+            "Starting billing aggregation for project %s, date %s",
+            project_uuid, billing_date,
         )
 
-        # Get resolution counter (DB or pre-calculated)
         pre_calc_dict = _parse_pre_calculated(pre_calculated_counts)
         counter = get_resolution_counter(pre_calculated=pre_calc_dict)
 
@@ -101,13 +85,10 @@ def send_billing_conversations(
         )
 
         if not channel_counts:
-            logger.info(f"No channels found for project {project_uuid}")
+            logger.info("No channels found for project %s", project_uuid)
             return {"status": "success", "message": "No channels to process"}
 
-        # Build the request DTO
         request_dto = _build_request_dto(channel_counts, billing_date)
-
-        # Send to billing service
         client = BillingClient()
         response = client.send_billing_conversations(
             project_uuid=project_uuid,
@@ -115,8 +96,8 @@ def send_billing_conversations(
         )
 
         logger.info(
-            f"Successfully sent billing data for project {project_uuid}, "
-            f"channels processed: {len(request_dto.conversations)}"
+            "Successfully sent billing data for project %s, channels: %s",
+            project_uuid, len(request_dto.conversations),
         )
 
         return {
@@ -128,24 +109,19 @@ def send_billing_conversations(
         }
 
     except Exception as exc:
-        logger.exception(
-            f"Error sending billing conversations for project {project_uuid}"
+        logger.exception("Error sending billing for project %s", project_uuid)
+        base_delay = 60
+        countdown = int(
+            random.uniform(0.5, 1.5)
+            * (base_delay * (2 ** self.request.retries))
         )
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 def _parse_pre_calculated(
     pre_calculated_counts: Optional[List[dict]],
 ) -> Optional[Dict[str, ChannelResolutionCount]]:
-    """
-    Parse pre-calculated counts list into dict format for the counter.
-
-    Args:
-        pre_calculated_counts: List of dicts with channel counts
-
-    Returns:
-        Dict mapping channel_uuid to ChannelResolutionCount, or None
-    """
+    """Parse pre-calculated counts into channel_uuid -> count dict."""
     if not pre_calculated_counts:
         return None
 
@@ -165,16 +141,7 @@ def _build_request_dto(
     channel_counts: List[ChannelResolutionCount],
     billing_date: date,
 ) -> SendConversationsRequestDTO:
-    """
-    Build the billing request DTO from channel counts.
-
-    Args:
-        channel_counts: List of ChannelResolutionCount
-        billing_date: The billing date
-
-    Returns:
-        SendConversationsRequestDTO ready to send
-    """
+    """Build billing request DTO from channel counts."""
     request_dto = SendConversationsRequestDTO()
 
     for counts in channel_counts:
@@ -186,14 +153,12 @@ def _build_request_dto(
             has_chats_rooms=counts.has_chats_rooms,
             unclassified=counts.unclassified,
         )
-
-        logger.debug(
-            f"Channel {counts.channel_uuid}: resolved={counts.resolved}, "
-            f"unresolved={counts.unresolved}, "
-            f"has_chats_rooms={counts.has_chats_rooms}, "
-            f"unclassified={counts.unclassified}"
+        logger.info(
+            "Channel %s: resolved=%s unresolved=%s has_chats_rooms=%s "
+            "unclassified=%s",
+            counts.channel_uuid, counts.resolved, counts.unresolved,
+            counts.has_chats_rooms, counts.unclassified,
         )
-
     return request_dto
 
 
@@ -205,342 +170,351 @@ def _build_request_dto(
 )
 def close_daily_conversations_task(self):
     """
-    Task to close all open conversations (resolution=2) for projects whose day has ended.
-    
-    For each project:
-    1. Checks if the day has ended (23:59) in the project's timezone (or fallback)
-    2. If yes, finds all open conversations (resolution=2)
-    3. For each conversation:
-       - Gets messages from DynamoDB
-       - Classifies the conversation to get resolution
-       - Updates conversation with resolution
-       - Migrates messages to PostgreSQL
-    
-    Processes in batches to avoid OOMKilled errors.
+    Close open conversations for projects whose day has ended (project TZ).
+    Classifies, updates resolution, migrates messages. Runs in batches.
     """
-    logger.info("[CloseDailyConversationsTask] Starting daily conversation closing task")
-    
+    logger.info(
+        "[CloseDailyConversationsTask] Starting daily conversation closing"
+    )
+
     try:
-        fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
+        fallback_timezone = getattr(
+            settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo"
+        )
         now_utc = pendulum.now("UTC")
-        
-        # Process projects in batches to manage memory
         projects_processed = 0
         conversations_closed = 0
-        
-        # Fetch projects from external API with pagination
         project_client = ProjectClient()
         page = 1
         page_size = project_client.page_size
         pages_processed = 0
         consecutive_empty_pages = 0
-        max_consecutive_empty = 3  # Safety: break if we get 3 empty pages in a row
-        
+        max_consecutive_empty = 3
+
         while True:
             try:
-                # Fetch projects page
-                response = project_client.get_projects_paginated(page=page, page_size=page_size)
+                response = project_client.get_projects_paginated(
+                    page=page, page_size=page_size
+                )
                 projects_data = response.get("results", [])
                 next_page = response.get("next")
-                
-                # Safety check: if no projects AND no next page, we're done
+
                 if not projects_data and not next_page:
                     logger.info(
-                        f"[CloseDailyConversationsTask] No more projects to process (page {page} returned empty results and no next page)",
-                        extra={"page": page, "pages_processed": pages_processed},
+                        "[CloseDailyConversationsTask] No more projects "
+                        "(page %s, pages_processed %s)", page, pages_processed,
                     )
                     break
-                
-                # Safety check: detect infinite loop - if we get empty results but there's a next page
-                # Count consecutive empty pages to avoid breaking on legitimate empty pages
+
                 if not projects_data and next_page:
                     consecutive_empty_pages += 1
                     if consecutive_empty_pages >= max_consecutive_empty:
                         logger.error(
-                            f"[CloseDailyConversationsTask] Detected possible infinite loop: {consecutive_empty_pages} consecutive empty pages with next page, breaking",
-                            extra={
-                                "page": page,
-                                "next_page": next_page,
-                                "pages_processed": pages_processed,
-                                "consecutive_empty_pages": consecutive_empty_pages,
-                            },
+                            "[CloseDailyConversationsTask] Infinite loop: "
+                            "%s consecutive empty pages, breaking",
+                            consecutive_empty_pages,
                         )
                         break
-                    else:
-                        logger.warning(
-                            f"[CloseDailyConversationsTask] Empty results but next page exists at page {page} (consecutive empty: {consecutive_empty_pages}/{max_consecutive_empty})",
-                            extra={"page": page, "next_page": next_page, "consecutive_empty_pages": consecutive_empty_pages},
-                        )
-                        # Continue to next page but increment counter
-                        page += 1
-                        continue
-                
-                # Reset consecutive empty counter if we got results
+                    logger.warning(
+                        "[CloseDailyConversationsTask] Empty page %s "
+                        "(consecutive %s/%s)", page,
+                        consecutive_empty_pages, max_consecutive_empty,
+                    )
+                    page += 1
+                    continue
+
                 if projects_data:
                     consecutive_empty_pages = 0
-                
+
                 pages_processed += 1
-                
-                # Process each project in the current page
+
                 for project_data in projects_data:
                     try:
                         project_uuid = project_data.get("uuid")
-                        project_timezone = project_data.get("timezone") or fallback_timezone
-                        
+                        project_timezone = (
+                            project_data.get("timezone") or fallback_timezone
+                        )
+
                         if not project_uuid:
                             logger.warning(
-                                "[CloseDailyConversationsTask] Project data missing UUID, skipping",
-                                extra={"project_data": project_data},
+                                "[CloseDailyConversationsTask] Project "
+                                "missing UUID, skipping",
                             )
                             continue
-                
+
                         try:
                             tz = pendulum.timezone(project_timezone)
                         except Exception as e:
                             logger.warning(
-                                f"[CloseDailyConversationsTask] Invalid timezone '{project_timezone}' for project {project_uuid}, using fallback",
-                                extra={"project_uuid": project_uuid, "error": str(e)},
+                                "[CloseDailyConversationsTask] Invalid tz "
+                                "'%s' for project %s, using fallback: %s",
+                                project_timezone, project_uuid, e,
                             )
                             tz = pendulum.timezone(fallback_timezone)
-                        
-                        # Get current time in project timezone
+
                         now_in_tz = now_utc.in_timezone(tz)
-                        
-                        # Check if day has ended (23:59:59 has passed)
-                        # Day has ended if we're past midnight (00:00:01 or later)
-                        # This means the previous day's 23:59:59 has passed
-                        day_ended = now_in_tz.hour == 0 and now_in_tz.minute == 0 and now_in_tz.second >= 1
-                        
+                        day_ended = (
+                            now_in_tz.hour == 0
+                            and now_in_tz.minute == 0
+                            and now_in_tz.second >= 1
+                        )
+
                         if day_ended:
-                            # Day has ended, process open conversations
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Day ended for project {project_uuid}, processing open conversations",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "project_timezone": project_timezone,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
-                                },
-                            )
-                            
-                            project_conversations_closed = _process_project_conversations(project_uuid)
-                            conversations_closed += project_conversations_closed
-                            projects_processed += 1
-                            
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Closed {project_conversations_closed} conversations for project {project_uuid}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "conversations_closed": project_conversations_closed,
-                                },
-                            )
-                            
-                            # Trigger billing task for the previous day (the day that just ended)
                             previous_day = now_in_tz.subtract(days=1).date()
+                            logger.info(
+                                "[CloseDailyConversationsTask] Day ended for "
+                                "project %s, processing open conversations",
+                                project_uuid,
+                            )
+
+                            closed, pre_calculated_counts = (
+                                _process_project_conversations(
+                                    project_uuid=project_uuid,
+                                    target_date=previous_day,
+                                )
+                            )
+                            conversations_closed += closed
+                            projects_processed += 1
+
+                            logger.info(
+                                "[CloseDailyConversationsTask] Closed %s "
+                                "conversations for project %s, date %s",
+                                closed, project_uuid, previous_day,
+                            )
+
                             send_billing_conversations.delay(
                                 project_uuid=project_uuid,
                                 target_date=previous_day.isoformat(),
+                                pre_calculated_counts=(
+                                    pre_calculated_counts or None
+                                ),
                             )
                             logger.info(
-                                f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "target_date": previous_day.isoformat(),
-                                },
+                                "[CloseDailyConversationsTask] Triggered "
+                                "billing for project %s, date %s",
+                                project_uuid, previous_day,
                             )
+
                         else:
-                            logger.debug(
-                                f"[CloseDailyConversationsTask] Day not ended yet for project {project_uuid}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
-                                },
+                            logger.info(
+                                "[CloseDailyConversationsTask] Day not ended "
+                                "yet for project %s",
+                                project_uuid,
                             )
-                            
+
                     except Exception as e:
                         sentry_sdk.set_tag("project_uuid", project_uuid)
                         sentry_sdk.capture_exception(e)
                         logger.error(
-                            f"[CloseDailyConversationsTask] Error processing project {project_uuid}",
-                            extra={"project_uuid": project_uuid, "error": str(e)},
+                            "[CloseDailyConversationsTask] Error processing "
+                            "project %s: %s",
+                            project_uuid, e,
                             exc_info=True,
                         )
-                        # Continue processing other projects
                         continue
-                
-                # Check if there are more pages
+
                 if not next_page:
-                    # No more pages to process
                     logger.info(
-                        f"[CloseDailyConversationsTask] Reached last page ({page}), no more pages to process",
-                        extra={"page": page, "pages_processed": pages_processed},
+                        "[CloseDailyConversationsTask] Reached last page %s",
+                        page,
                     )
                     break
-                
+
                 page += 1
-                
+
             except Exception as e:
                 sentry_sdk.capture_exception(e)
                 logger.error(
-                    f"[CloseDailyConversationsTask] Error fetching projects page {page}",
-                    extra={"page": page, "error": str(e)},
+                    "[CloseDailyConversationsTask] Error fetching projects "
+                    "page %s: %s",
+                    page, e,
                     exc_info=True,
                 )
-                # Continue to next page or break if retries exhausted
-                # For now, break to avoid infinite loop on persistent errors
                 break
-        
+
         logger.info(
-            f"[CloseDailyConversationsTask] Task completed. Pages processed: {pages_processed}, Projects processed: {projects_processed}, Conversations closed: {conversations_closed}",
-            extra={
-                "pages_processed": pages_processed,
-                "projects_processed": projects_processed,
-                "conversations_closed": conversations_closed,
-            },
+            "[CloseDailyConversationsTask] Completed. pages=%s projects=%s "
+            "conversations_closed=%s",
+            pages_processed, projects_processed, conversations_closed,
         )
-        
+
         return {
             "status": "success",
             "projects_processed": projects_processed,
             "conversations_closed": conversations_closed,
         }
-        
+
     except Exception as exc:
-        logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
+        logger.exception(
+            "[CloseDailyConversationsTask] Fatal error in daily closing"
+        )
         raise self.retry(exc=exc)
 
 
-def _process_project_conversations(project_uuid: str) -> int:
+def _process_project_conversations(
+    project_uuid: str,
+    target_date: date,
+) -> Tuple[int, List[dict]]:
     """
-    Process all open conversations for a project.
-    
-    Args:
-        project_uuid: The project UUID to process conversations for
-        
-    Returns:
-        Number of conversations closed
+    Close open conversations for project on target_date; accumulate
+    per-channel counts. Returns (closed_count, pre_calculated_counts).
     """
     classification_service = ClassificationService()
     message_repository = MessageRepository()
     migration_service = MessageMigrationService()
-    
+
     conversations_closed = 0
-    
-    # Get project from database to use in filter
+    channel_counts: Dict[str, Dict[str, int]] = {}
+
     try:
         project = Project.objects.get(uuid=project_uuid)
     except Project.DoesNotExist:
         logger.warning(
-            f"[CloseDailyConversationsTask] Project {project_uuid} not found in database, skipping conversations",
-            extra={"project_uuid": project_uuid},
+            "[CloseDailyConversationsTask] Project %s not in DB, skipping",
+            project_uuid,
         )
-        return 0
-    
-    # Process conversations in batches to manage memory
-    # Use iterator with select_related to minimize queries
+        return (0, [])
+
     conversations = Conversation.objects.filter(
         project=project,
-        resolution=str(ResolutionEntities.IN_PROGRESS)
+        resolution=str(ResolutionEntities.IN_PROGRESS),
+        created_at__date=target_date,
     ).select_related("project").only(
-        "uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution"
+        "uuid", "project", "contact_urn", "channel_uuid",
+        "has_chats_room", "resolution",
     ).iterator(chunk_size=50)
-    
+
     for conversation in conversations:
         try:
-            logger.debug(
-                f"[CloseDailyConversationsTask] Processing conversation {conversation.uuid}",
-                extra={"conversation_uuid": str(conversation.uuid), "project_uuid": project_uuid},
+            logger.info(
+                "[CloseDailyConversationsTask] Processing conversation %s",
+                conversation.uuid,
             )
-            
-            # Get messages from DynamoDB
+            ch_uuid_val = (
+                str(conversation.channel_uuid)
+                if conversation.channel_uuid else None
+            )
             messages = message_repository.get_messages_from_dynamo(
                 project_uuid=project_uuid,
                 contact_urn=conversation.contact_urn,
-                channel_uuid=str(conversation.channel_uuid) if conversation.channel_uuid else None,
+                channel_uuid=ch_uuid_val,
             )
-            
+
             if not messages:
                 logger.warning(
-                    f"[CloseDailyConversationsTask] No messages found for conversation {conversation.uuid}, setting as unclassified",
-                    extra={"conversation_uuid": str(conversation.uuid)},
+                    "[CloseDailyConversationsTask] No messages for "
+                    "conversation %s, setting unclassified",
+                    conversation.uuid,
                 )
-                # If no messages, set as unclassified
                 resolution_int = ResolutionEntities.UNCLASSIFIED
             else:
-                # Classify conversation to get resolution
-                resolution_string = classification_service.lambda_conversation_resolution(
-                    messages=messages,
-                    has_chats_room=conversation.has_chats_room,
-                    project_uuid=project_uuid,
-                    contact_urn=conversation.contact_urn,
-                    channel_uuid=str(conversation.channel_uuid) if conversation.channel_uuid else None,
-                    conversation=conversation,
+                resolution_string = (
+                    classification_service.lambda_conversation_resolution(
+                        messages=messages,
+                        has_chats_room=conversation.has_chats_room,
+                        project_uuid=project_uuid,
+                        contact_urn=conversation.contact_urn,
+                        channel_uuid=ch_uuid_val,
+                        conversation=conversation,
+                    )
                 )
-                
-                # Convert resolution string to int
-                resolution_int = ResolutionEntities.convert_resolution_string_to_int(resolution_string)
-            
-            # Refresh conversation from DB to get latest state
+                resolution_int = (
+                    ResolutionEntities.convert_resolution_string_to_int(
+                        resolution_string
+                    )
+                )
+
             conversation.refresh_from_db()
-            
-            # Only update if still in progress (avoid race conditions)
-            if str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS):
-                # Update conversation with resolution
+
+            in_progress = str(ResolutionEntities.IN_PROGRESS)
+            if str(conversation.resolution) == in_progress:
                 conversation.resolution = str(resolution_int)
-                
-                # Set end_date if not already set
+
                 if not conversation.end_date:
                     conversation.end_date = pendulum.now("UTC")
-                
+
                 conversation.save(update_fields=["resolution", "end_date"])
-                
+
+                if conversation.channel_uuid:
+                    ch_uuid = str(conversation.channel_uuid)
+                    if ch_uuid not in channel_counts:
+                        channel_counts[ch_uuid] = {
+                            "resolved": 0,
+                            "unresolved": 0,
+                            "has_chats_rooms": 0,
+                            "unclassified": 0,
+                        }
+                    if resolution_int == ResolutionEntities.RESOLVED:
+                        channel_counts[ch_uuid]["resolved"] += 1
+                    elif resolution_int == ResolutionEntities.UNRESOLVED:
+                        channel_counts[ch_uuid]["unresolved"] += 1
+                    elif (
+                        resolution_int
+                        == ResolutionEntities.UNCLASSIFIED
+                    ):
+                        channel_counts[ch_uuid]["unclassified"] += 1
+                    elif (
+                        resolution_int == ResolutionEntities.HAS_CHAT_ROOM
+                        or conversation.has_chats_room
+                    ):
+                        channel_counts[ch_uuid]["has_chats_rooms"] += 1
+
                 logger.info(
-                    f"[CloseDailyConversationsTask] Updated conversation {conversation.uuid} with resolution {resolution_int}",
-                    extra={
-                        "conversation_uuid": str(conversation.uuid),
-                        "resolution": resolution_int,
-                    },
+                    "[CloseDailyConversationsTask] Updated conversation %s "
+                    "with resolution %s",
+                    conversation.uuid, resolution_int,
                 )
-                
-                # Migrate messages to PostgreSQL
+
                 try:
-                    migration_service.migrate_conversation_messages_to_postgres(conversation)
-                    logger.debug(
-                        f"[CloseDailyConversationsTask] Migrated messages for conversation {conversation.uuid}",
-                        extra={"conversation_uuid": str(conversation.uuid)},
+                    migrate_fn = (
+                        migration_service
+                        .migrate_conversation_messages_to_postgres
+                    )
+                    migrate_fn(conversation)
+                    logger.info(
+                        "[CloseDailyConversationsTask] Migrated messages "
+                        "for conversation %s",
+                        conversation.uuid,
                     )
                 except Exception as e:
-                    # Log error but don't fail the whole task
-                    sentry_sdk.set_tag("conversation_uuid", str(conversation.uuid))
+                    sentry_sdk.set_tag(
+                        "conversation_uuid", str(conversation.uuid)
+                    )
                     sentry_sdk.capture_exception(e)
                     logger.error(
-                        f"[CloseDailyConversationsTask] Error migrating messages for conversation {conversation.uuid}",
-                        extra={"conversation_uuid": str(conversation.uuid), "error": str(e)},
+                        "[CloseDailyConversationsTask] Error migrating "
+                        "messages for conversation %s: %s",
+                        conversation.uuid, e,
                         exc_info=True,
                     )
-                
+
                 conversations_closed += 1
+
             else:
-                logger.debug(
-                    f"[CloseDailyConversationsTask] Conversation {conversation.uuid} already closed, skipping",
-                    extra={
-                        "conversation_uuid": str(conversation.uuid),
-                        "current_resolution": conversation.resolution,
-                    },
+                logger.info(
+                    "[CloseDailyConversationsTask] Conversation %s already "
+                    "closed, skipping",
+                    conversation.uuid,
                 )
-                
+
         except Exception as e:
-            # Log error but continue processing other conversations
             sentry_sdk.set_tag("conversation_uuid", str(conversation.uuid))
             sentry_sdk.capture_exception(e)
             logger.error(
-                f"[CloseDailyConversationsTask] Error processing conversation {conversation.uuid}",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "project_uuid": project_uuid,
-                    "error": str(e),
-                },
-                exc_info=True,
+                "[CloseDailyConversationsTask] Error processing "
+                "conversation %s (project %s): %s",
+                conversation.uuid, project_uuid, e, exc_info=True,
             )
             continue
-    
-    return conversations_closed
+
+    pre_calculated_counts = [
+        {
+            "channel_uuid": ch_uuid,
+            "resolved": counts["resolved"],
+            "unresolved": counts["unresolved"],
+            "has_chats_rooms": counts["has_chats_rooms"],
+            "unclassified": counts["unclassified"],
+        }
+        for ch_uuid, counts in channel_counts.items()
+    ]
+    return (conversations_closed, pre_calculated_counts)

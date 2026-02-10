@@ -6,16 +6,15 @@ import signal
 import sys
 from pathlib import Path
 
-import django
-import environ
-
-from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
-
 # Add project root to Python path
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+import django  # noqa: E402
+import environ  # noqa: E402
+
+from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer  # noqa: E402
 
 env_file = project_root / ".env"
 if env_file.exists():

@@ -65,6 +65,7 @@ def classify_conversation_task(self, conversation_uuid: str):
                     f"[ClassificationTask] Failed to mark conversation {conversation_uuid} "
                     f"as Unclassified: {update_error}"
                 )
+            return
 
         # Custom backoff: 1st retry immediate (0s), then +20s each time (20s, 40s, 60s...)
         countdown = self.request.retries * 20

@@ -111,6 +111,9 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Timezone Configuration
+FALLBACK_TIMEZONE = env.str("FALLBACK_TIMEZONE", default="America/Sao_Paulo")
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
@@ -174,6 +177,7 @@ SQS_CONVERSATION_ENABLED = env.bool("SQS_CONVERSATION_ENABLED", default=False)
 AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
 CONVERSATION_TOPIC_CLASSIFIER_NAME = env.str("CONVERSATION_TOPIC_CLASSIFIER_NAME", default=None)
 CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=None)
+CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
@@ -227,3 +231,8 @@ LOGGING = {
 # Client variables
 BILLING_BASE_URL = env.str("BILLING_BASE_URL", default="")
 BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
+
+# Projects API Configuration
+PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
+PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
+PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)

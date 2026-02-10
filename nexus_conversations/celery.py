@@ -22,14 +22,12 @@ app.conf.task_serializer = "json"
 app.conf.result_serializer = "json"
 app.conf.accept_content = ["application/json"]
 
-# Beat schedule - empty for now, will be populated when timezone-based closing is implemented
+# Beat schedule
 app.conf.beat_schedule = {
-    # Future tasks will be added here
-    # Example:
-    # "close_conversations": {
-    #     "task": "conversation_ms.tasks.close_conversations",
-    #     "schedule": schedules.crontab(hour=0, minute=0),
-    # },
+    "close_daily_conversations": {
+        "task": "conversation_ms.tasks.close_daily_conversations_task",
+        "schedule": schedules.crontab(minute="0"),
+    },
 }
 
 if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):

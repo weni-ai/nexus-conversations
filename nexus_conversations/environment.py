@@ -10,7 +10,8 @@ env = environ.Env(
     CELERY_BROKER_URL=(str, "redis://localhost:6379/0"),
     REDIS_URL=(str, "redis://localhost:6379/1"),
     REDIS_CHANNEL_URL=(str, "redis://localhost:6379/1"),
-    SQS_CONVERSATION_QUEUE_URL=(str, ""),
+    SQS_MESSAGES_QUEUE_URL=(str, ""),
+    SQS_ROOMS_QUEUE_URL=(str, ""),
     SQS_CONVERSATION_DLQ_URL=(str, ""),
     SQS_CONVERSATION_REGION=(str, "us-east-1"),
     DYNAMODB_MESSAGE_TABLE=(str, ""),
@@ -23,4 +24,3 @@ env = environ.Env(
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
 )
-

@@ -4,14 +4,6 @@ from django_filters import rest_framework as filters
 from conversation_ms.models import Conversation
 
 
-class CharInFilter(filters.BaseInFilter, filters.CharFilter):
-    pass
-
-
-class NumberInFilter(filters.BaseInFilter, filters.NumberFilter):
-    pass
-
-
 class ConversationFilter(filters.FilterSet):
     """
     Filter for Conversation model.
@@ -24,9 +16,9 @@ class ConversationFilter(filters.FilterSet):
         field_name="end_date", lookup_expr="lte", input_formats=["%d-%m-%Y", "%Y-%m-%d", "iso-8601"]
     )
     status = filters.NumberFilter(field_name="resolution")
-    csat = CharInFilter(field_name="csat")
-    resolution = CharInFilter(field_name="resolution")
-    topics = CharInFilter(field_name="classification__topic__name")
+    csat = filters.BaseInFilter(field_name="csat", method="filter_in")
+    resolution = filters.BaseInFilter(field_name="resolution", method="filter_in")
+    topics = filters.BaseInFilter(field_name="classification__topic__name", method="filter_topics")
     has_chats_room = filters.BooleanFilter(field_name="has_chats_room")
     nps = filters.NumberFilter(field_name="nps")
     project_uuid = filters.UUIDFilter(field_name="project__uuid")
@@ -45,6 +37,23 @@ class ConversationFilter(filters.FilterSet):
             "has_chats_room",
             "project_uuid",
         ]
+
+    def filter_in(self, queryset, name, value):
+        """
+        Filter by list of values.
+        value is a list because BaseInFilter splits input by comma.
+        """
+        if not value:
+            return queryset
+        return queryset.filter(**{f"{name}__in": value})
+
+    def filter_topics(self, queryset, name, value):
+        """
+        Filter by topics.
+        """
+        if not value:
+            return queryset
+        return queryset.filter(classification__topic__name__in=value).distinct()
 
     def search_filter(self, queryset, name, value):
         """Custom search filter for contact_name and contact_urn"""

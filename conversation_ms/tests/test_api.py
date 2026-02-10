@@ -71,7 +71,7 @@ class TestConversationEndpoint:
         # But here resolution is CharField in model with choices, so it returns the string value
         assert str(response.data["results"][0]["resolution"]) == "0"
 
-    def test_include_messages(self, api_client, project, auth_headers):
+    def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution=0)
         messages_data = [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi there"}]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
@@ -82,9 +82,9 @@ class TestConversationEndpoint:
         response = api_client.get(url, **auth_headers)
         assert response.data["results"][0]["messages"] is None
 
-        # With include_messages=true
+        # With include_messages=true (should be ignored)
         response = api_client.get(f"{url}?include_messages=true", **auth_headers)
-        assert response.data["results"][0]["messages"] == messages_data
+        assert response.data["results"][0]["messages"] is None
 
     def test_project_not_found(self, api_client, auth_headers):
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})

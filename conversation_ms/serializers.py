@@ -1,3 +1,4 @@
+import uuid
 import logging
 
 from drf_spectacular.utils import extend_schema_field
@@ -10,6 +11,7 @@ from conversation_ms.models import (
     SubTopic,
     Topic,
 )
+from conversation_ms.pagination import MessagePagination
 from conversation_ms.repositories.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
-    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    @extend_schema_field(serializers.DictField())
     def get_messages(self, obj):
         view = self.context.get("view")
 
@@ -77,34 +79,74 @@ class ConversationSerializer(serializers.ModelSerializer):
             def get_from_postgres():
                 try:
                     msgs = obj.messages_data.messages
-                    return msgs if msgs else None
+                    # Normalize Postgres messages
+                    normalized = []
+                    for msg in msgs or []:
+                        msg_uuid = msg.get("uuid") or str(uuid.uuid4())
+
+                        source = msg.get("source")
+                        if source == "user":
+                            source = "incoming"
+                        elif source in ["agent", "assistant"]:
+                            source = "outgoing"
+
+                        normalized.append(
+                            {
+                                "uuid": msg_uuid,
+                                "id": msg.get("id") or msg_uuid,
+                                "text": msg.get("text"),
+                                "source": source,
+                                "created_at": msg.get("created_at"),
+                            }
+                        )
+                    return normalized
                 except ConversationMessages.DoesNotExist:
                     return None
 
             def get_from_dynamo():
                 try:
                     repo = MessageRepository()
-                    return repo.get_messages_from_dynamo(
+                    items = repo.get_messages_from_dynamo(
                         project_uuid=str(obj.project.uuid),
                         contact_urn=obj.contact_urn,
                         channel_uuid=str(obj.channel_uuid) if obj.channel_uuid else None,
                     )
-                except Exception as e:
-                    logger.error(
-                        f"Error getting messages from DynamoDB: conversation_uuid={str(obj.uuid)}"
-                        f" project_uuid={str(obj.project.uuid)} error={str(e)}",
-                        exc_info=True,
-                    )
+                    # Normalize Dynamo messages
+                    normalized = []
+                    for item in items:
+                        msg_uuid = item.get("message_id")
+
+                        source = item.get("source")
+                        if source == "user":
+                            source = "incoming"
+                        elif source in ["agent", "assistant"]:
+                            source = "outgoing"
+
+                        normalized.append(
+                            {
+                                "uuid": msg_uuid,
+                                "id": msg_uuid,
+                                "text": item.get("text"),
+                                "source": source,
+                                "created_at": item.get("created_at"),
+                            }
+                        )
+                    return normalized
+                except Exception:
                     return None
 
             # Smart Routing based on Resolution
-            # Resolution 2 = In Progress (Active) -> Prefer DynamoDB
-            # This ensures we get the latest messages for active chats
             if str(obj.resolution) == "2":
-                return get_from_dynamo() or get_from_postgres() or []
+                messages = get_from_dynamo() or get_from_postgres() or []
+            else:
+                messages = get_from_postgres() or get_from_dynamo() or []
 
-            # Resolution != 2 (Closed/Resolved) -> Prefer Postgres
-            # This avoids unnecessary DynamoDB calls since data is likely in Postgres
-            return get_from_postgres() or get_from_dynamo() or []
+            # Sort by created_at descending (newest first)
+            messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+
+            # Paginate
+            paginator = MessagePagination()
+            paginated_messages = paginator.paginate_queryset(messages, request)
+            return paginator.get_paginated_response(paginated_messages)
 
         return None

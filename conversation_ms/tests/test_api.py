@@ -73,7 +73,7 @@ class TestConversationEndpoint:
 
     def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution=0)
-        messages_data = [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi there"}]
+        messages_data = [{"source": "user", "text": "Hello"}, {"source": "assistant", "text": "Hi there"}]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
 
         url = reverse("project-conversations-detail", kwargs={"project_uuid": project.uuid, "pk": conversation.uuid})
@@ -92,7 +92,17 @@ class TestConversationEndpoint:
 
         # With include_messages=true (should be ignored)
         response = api_client.get(f"{url}?include_messages=true", **auth_headers)
-        assert response.data["results"][0]["messages"] is None
+        messages_response = response.data["results"][0]["messages"]
+
+        # Check pagination structure
+        assert "results" in messages_response
+        assert "next" in messages_response
+        assert "previous" in messages_response
+
+        # Check content
+        assert len(messages_response["results"]) == 2
+        assert messages_response["results"][0]["text"] == "Hello"
+        assert messages_response["results"][0]["source"] == "incoming"
 
     def test_project_not_found(self, api_client, auth_headers):
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})

@@ -18,7 +18,7 @@ class ConversationSQSConsumer:
 
     def __init__(
         self,
-        queue_url: Optional[str] = None,
+        queue_url: str,
         region: str = "us-east-1",
         processing_delay: float = 0.0,
         consumer_id: Optional[str] = None,
@@ -28,13 +28,13 @@ class ConversationSQSConsumer:
         Initialize SQS Consumer.
 
         Args:
-            queue_url: SQS FIFO queue URL (defaults to env var)
+            queue_url: SQS FIFO queue URL
             region: AWS region (defaults to us-east-1)
             processing_delay: Delay in seconds to simulate DB insertion (default: 0.0s)
             consumer_id: ID único do consumer (default: gera automaticamente com PID + timestamp)
             heartbeat_file: File path to touch for liveness probe
         """
-        self.queue_url = queue_url or os.environ.get("SQS_CONVERSATION_QUEUE_URL", "")
+        self.queue_url = queue_url
         self.region = region
         self.processing_delay = float(os.environ.get("SQS_PROCESSING_DELAY", processing_delay))
         self.running = False
@@ -52,7 +52,7 @@ class ConversationSQSConsumer:
         self.error_count = 0
 
         if not self.queue_url:
-            raise ValueError("SQS_CONVERSATION_QUEUE_URL must be set")
+            raise ValueError("queue_url must be provided")
 
         logger.info(f"[ConversationSQSConsumer] Initializing SQS client (region: {self.region})...")
 
@@ -93,117 +93,140 @@ class ConversationSQSConsumer:
         empty_polls = 0
 
         while self.running:
-            # Update heartbeat
-            try:
-                Path(self.heartbeat_file).touch()
-            except Exception as e:
-                logger.warning(f"[{self.consumer_id}] Failed to touch heartbeat file: {e}")
+            self._update_heartbeat()
 
             try:
-                # Receive messages from FIFO queue (processar até 10 mensagens por vez para melhor throughput)
-                logger.debug(f"[{self.consumer_id}] Polling SQS for messages...")
-                response = self.sqs_client.receive_message(
-                    QueueUrl=self.queue_url,
-                    MaxNumberOfMessages=10,  # Processar até 10 mensagens por vez (máximo do SQS)
-                    WaitTimeSeconds=20,
-                    MessageAttributeNames=["All"],
-                )
-
-                messages = response.get("Messages", [])
+                messages = self._poll_messages()
 
                 if not messages:
-                    empty_polls += 1
-                    if empty_polls % 3 == 0:
-                        logger.info(f"[{self.consumer_id}] Waiting for messages... (empty polls: {empty_polls})")
+                    empty_polls = self._handle_empty_poll(empty_polls)
                     continue
 
                 empty_polls = 0
-
-                if len(messages) > 1:
-                    logger.info(f"[ConversationSQSConsumer] Received batch of {len(messages)} messages")
-
-                successful_messages = []
-
-                for message in messages:
-                    try:
-                        receipt_handle = self._process_message(message)
-                        if receipt_handle:
-                            successful_messages.append(
-                                {
-                                    "Id": message.get("MessageId", ""),
-                                    "ReceiptHandle": receipt_handle,
-                                }
-                            )
-                    except Exception as e:
-                        self.error_count += 1
-                        logger.error(
-                            "[ConversationSQSConsumer] Error processing message",
-                            extra={
-                                "message_id": message.get("MessageId"),
-                                "error": str(e),
-                            },
-                            exc_info=True,
-                        )
-
-                # Deletar mensagens processadas com sucesso em batch (mais eficiente)
-                if successful_messages:
-                    try:
-                        # SQS permite até 10 mensagens por batch delete
-                        for i in range(0, len(successful_messages), 10):
-                            batch = successful_messages[i : i + 10]
-                            entries = [
-                                {"Id": str(idx), "ReceiptHandle": msg["ReceiptHandle"]} for idx, msg in enumerate(batch)
-                            ]
-                            self.sqs_client.delete_message_batch(
-                                QueueUrl=self.queue_url,
-                                Entries=entries,
-                            )
-
-                        # Atualizar contador
-                        self.processed_count += len(successful_messages)
-
-                        # Log ocasional de progresso
-                        if self.processed_count % 100 == 0:
-                            logger.info(f"[{self.consumer_id}] Processed {self.processed_count} messages")
-
-                    except Exception as e:
-                        logger.error(
-                            "[ConversationSQSConsumer] Error deleting messages in batch",
-                            extra={"error": str(e)},
-                            exc_info=True,
-                        )
-                        # Fallback: deletar uma por uma
-                        for msg in successful_messages:
-                            try:
-                                self.sqs_client.delete_message(
-                                    QueueUrl=self.queue_url,
-                                    ReceiptHandle=msg["ReceiptHandle"],
-                                )
-                            except Exception as e2:
-                                logger.error(
-                                    "[ConversationSQSConsumer] Error deleting message",
-                                    extra={"error": str(e2), "message_id": msg.get("Id")},
-                                )
+                self._process_message_batch(messages)
 
             except ClientError as e:
-                error_code = e.response.get("Error", {}).get("Code")
-                error_message = e.response.get("Error", {}).get("Message", str(e))
-
-                logger.error(
-                    "[ConversationSQSConsumer] SQS receive error",
-                    extra={"error_code": error_code, "error_message": error_message},
-                    exc_info=True,
-                )
-
-                time.sleep(5)
+                self._handle_client_error(e)
 
             except Exception as e:
+                self._handle_unexpected_error(e)
+
+    def _update_heartbeat(self):
+        """Update heartbeat file for liveness probe."""
+        try:
+            Path(self.heartbeat_file).touch()
+        except Exception as e:
+            logger.warning(f"[{self.consumer_id}] Failed to touch heartbeat file: {e}")
+
+    def _poll_messages(self):
+        """Poll SQS for messages."""
+        logger.debug(f"[{self.consumer_id}] Polling SQS for messages...")
+        response = self.sqs_client.receive_message(
+            QueueUrl=self.queue_url,
+            MaxNumberOfMessages=10,  # Processar até 10 mensagens por vez (máximo do SQS)
+            WaitTimeSeconds=20,
+            MessageAttributeNames=["All"],
+        )
+        return response.get("Messages", [])
+
+    def _handle_empty_poll(self, empty_polls):
+        """Handle empty poll result."""
+        empty_polls += 1
+        if empty_polls % 3 == 0:
+            logger.info(f"[{self.consumer_id}] Waiting for messages... (empty polls: {empty_polls})")
+        return empty_polls
+
+    def _process_message_batch(self, messages):
+        """Process a batch of messages."""
+        if len(messages) > 1:
+            logger.info(f"[ConversationSQSConsumer] Received batch of {len(messages)} messages")
+
+        successful_messages = []
+
+        for message in messages:
+            try:
+                receipt_handle = self._process_message(message)
+                if receipt_handle:
+                    successful_messages.append(
+                        {
+                            "Id": message.get("MessageId", ""),
+                            "ReceiptHandle": receipt_handle,
+                        }
+                    )
+            except Exception as e:
+                self.error_count += 1
                 logger.error(
-                    "[ConversationSQSConsumer] Unexpected error",
-                    extra={"error": str(e)},
+                    "[ConversationSQSConsumer] Error processing message",
+                    extra={
+                        "message_id": message.get("MessageId"),
+                        "error": str(e),
+                    },
                     exc_info=True,
                 )
-                time.sleep(5)
+
+        # Deletar mensagens processadas com sucesso em batch (mais eficiente)
+        if successful_messages:
+            self._delete_messages_batch(successful_messages)
+
+    def _delete_messages_batch(self, successful_messages):
+        """Delete processed messages in batch."""
+        try:
+            # SQS permite até 10 mensagens por batch delete
+            for i in range(0, len(successful_messages), 10):
+                batch = successful_messages[i : i + 10]
+                entries = [{"Id": str(idx), "ReceiptHandle": msg["ReceiptHandle"]} for idx, msg in enumerate(batch)]
+                self.sqs_client.delete_message_batch(
+                    QueueUrl=self.queue_url,
+                    Entries=entries,
+                )
+
+            # Atualizar contador
+            self.processed_count += len(successful_messages)
+
+            # Log ocasional de progresso
+            if self.processed_count % 100 == 0:
+                logger.info(f"[{self.consumer_id}] Processed {self.processed_count} messages")
+
+        except Exception as e:
+            logger.error(
+                "[ConversationSQSConsumer] Error deleting messages in batch",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
+            # Fallback: deletar uma por uma
+            for msg in successful_messages:
+                try:
+                    self.sqs_client.delete_message(
+                        QueueUrl=self.queue_url,
+                        ReceiptHandle=msg["ReceiptHandle"],
+                    )
+                except Exception as e2:
+                    logger.error(
+                        "[ConversationSQSConsumer] Error deleting message",
+                        extra={"error": str(e2), "message_id": msg.get("Id")},
+                    )
+
+    def _handle_client_error(self, e):
+        """Handle SQS client error."""
+        error_code = e.response.get("Error", {}).get("Code")
+        error_message = e.response.get("Error", {}).get("Message", str(e))
+
+        logger.error(
+            "[ConversationSQSConsumer] SQS receive error",
+            extra={"error_code": error_code, "error_message": error_message},
+            exc_info=True,
+        )
+
+        time.sleep(5)
+
+    def _handle_unexpected_error(self, e):
+        """Handle unexpected error."""
+        logger.error(
+            "[ConversationSQSConsumer] Unexpected error",
+            extra={"error": str(e)},
+            exc_info=True,
+        )
+        time.sleep(5)
 
     def stop_consuming(self):
         """Stop consuming messages."""

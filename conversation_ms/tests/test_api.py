@@ -71,27 +71,35 @@ class TestConversationEndpoint:
         # But here resolution is CharField in model with choices, so it returns the string value
         assert str(response.data["results"][0]["resolution"]) == "0"
 
-    def test_include_messages(self, api_client, project, auth_headers):
+    def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(project=project, resolution=0)
+        messages_data = [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi there"}]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse("project-conversations-detail", kwargs={"project_uuid": project.uuid, "pk": conversation.uuid})
+
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["messages"] == messages_data
+
+    def test_list_conversations_ignores_include_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution=0)
         messages_data = [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi there"}]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
 
         url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
 
-        # Without include_messages
-        response = api_client.get(url, **auth_headers)
-        assert response.data["results"][0]["messages"] is None
-
-        # With include_messages=true
+        # With include_messages=true (should be ignored)
         response = api_client.get(f"{url}?include_messages=true", **auth_headers)
-        assert response.data["results"][0]["messages"] == messages_data
+        assert response.data["results"][0]["messages"] is None
 
     def test_project_not_found(self, api_client, auth_headers):
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})
         response = api_client.get(url, **auth_headers)
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_filter_by_date_range_dd_mm_yyyy(self, api_client, project, auth_headers):
+    def test_filter_by_date_range_iso(self, api_client, project, auth_headers):
         # Create conversations
         # Conv 1: Before target date (Feb 4)
         Conversation.objects.create(project=project, start_date="2026-02-04T12:00:00Z", end_date="2026-02-04T13:00:00Z")
@@ -102,9 +110,12 @@ class TestConversationEndpoint:
 
         url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
 
-        # Filter for 05-02-2026
-        # Should match Conv 2 only
-        response = api_client.get(f"{url}?start_date=05-02-2026&end_date=05-02-2026", **auth_headers)
+        # Filter for 05-02-2026 using ISO format with timezone
+        # Start date: 2026-02-05T00:00:00Z
+        # End date: 2026-02-05T23:59:59Z
+        response = api_client.get(
+            f"{url}?start_date=2026-02-05T00:00:00Z&end_date=2026-02-05T23:59:59Z", **auth_headers
+        )
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["count"] == 1

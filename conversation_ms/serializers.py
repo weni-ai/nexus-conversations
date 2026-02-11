@@ -1,9 +1,10 @@
-import uuid
 import logging
+import uuid
 
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import (
     Conversation,
     ConversationClassification,
@@ -136,7 +137,7 @@ class ConversationSerializer(serializers.ModelSerializer):
                     return None
 
             # Smart Routing based on Resolution
-            if str(obj.resolution) == "2":
+            if str(obj.resolution) == str(ResolutionEntities.IN_PROGRESS):
                 messages = get_from_dynamo() or get_from_postgres() or []
             else:
                 messages = get_from_postgres() or get_from_dynamo() or []

@@ -78,7 +78,8 @@ Required variables:
 - `SECRET_KEY` - Django secret key
 - `DEFAULT_DATABASE` - PostgreSQL connection string
 - `CELERY_BROKER_URL` - Redis connection string
-- `SQS_CONVERSATION_QUEUE_URL` - SQS FIFO queue URL
+- `SQS_MESSAGES_QUEUE_URL` - SQS FIFO queue URL for messages
+- `SQS_ROOMS_QUEUE_URL` - SQS FIFO queue URL for rooms
 - `DYNAMODB_MESSAGE_TABLE` - DynamoDB table name
 
 See `.env.example` for all available variables.
@@ -86,6 +87,25 @@ See `.env.example` for all available variables.
 ### Running with Docker
 
 1. Build and start services:
+
+```bash
+docker-compose up --build
+```
+
+2. Run consumers:
+
+The consumer can be started for specific resources:
+
+```bash
+# Consume messages
+python conversation_ms/main.py --resource messages
+
+# Consume rooms
+python conversation_ms/main.py --resource rooms
+
+# Or specify queue URL directly
+python conversation_ms/main.py --queue-url https://sqs.us-east-1.amazonaws.com/123/my-queue.fifo
+```
 
 ```bash
 docker-compose build

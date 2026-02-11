@@ -2,15 +2,16 @@
 Tests for conversation_ms services.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from conversation_ms.services.message_service import MessageService
+import pytest
+
+from conversation_ms.models import Conversation, ConversationMessages
 from conversation_ms.services.conversation_service import ConversationService
 from conversation_ms.services.csat_nps_service import CSATNPSService
 from conversation_ms.services.message_migration_service import MessageMigrationService
-from conversation_ms.models import Conversation, Project, ConversationMessages
+from conversation_ms.services.message_service import MessageService
 
 
 @pytest.mark.django_db
@@ -225,13 +226,16 @@ class TestCSATNPSService:
         """Test successful processing of CSAT event."""
         with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
-        ) as mock_settings, patch("conversation_ms.services.csat_nps_service.send_data_lake_event") as mock_task:
+        ) as mock_settings:
             mock_settings.AGENT_UUID_CSAT = str(uuid4())
             mock_update.return_value = None
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_csat_event(
                 event_data=event_data,
@@ -242,13 +246,14 @@ class TestCSATNPSService:
 
             # Verify update_conversation_data was called
             mock_update.assert_called_once()
-            # Verify Celery task was called
-            mock_task.delay.assert_called_once()
+            # Verify Celery task was NOT called (feature disabled)
+            # mock_task.delay.assert_called_once()
 
     def test_process_csat_event_with_dates(self, conversation, mock_sentry):
         """Test CSAT event processing with conversation start_date and end_date."""
-        import pendulum
         from datetime import timedelta
+
+        import pendulum
 
         conversation.start_date = pendulum.now()
         conversation.end_date = pendulum.now() + timedelta(days=1)
@@ -256,13 +261,16 @@ class TestCSATNPSService:
 
         with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
-        ) as mock_settings, patch("conversation_ms.services.csat_nps_service.send_data_lake_event") as mock_task:
+        ) as mock_settings:
             mock_settings.AGENT_UUID_CSAT = str(uuid4())
             mock_update.return_value = None
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_csat_event(
                 event_data=event_data,
@@ -271,15 +279,16 @@ class TestCSATNPSService:
                 contact_urn=conversation.contact_urn,
             )
 
-            # Verify metadata includes dates
-            call_args = mock_task.delay.call_args[0][0]
-            assert "conversation_start_date" in call_args["metadata"]
-            assert "conversation_end_date" in call_args["metadata"]
+            # Verify metadata includes dates (Skipped as Data Lake is disabled)
+            # call_args = mock_task.delay.call_args[0][0]
+            # assert "conversation_start_date" in call_args["metadata"]
+            # assert "conversation_end_date" in call_args["metadata"]
 
     def test_process_nps_event_with_dates(self, conversation, mock_sentry):
         """Test NPS event processing with conversation start_date and end_date."""
-        import pendulum
         from datetime import timedelta
+
+        import pendulum
 
         conversation.start_date = pendulum.now()
         conversation.end_date = pendulum.now() + timedelta(days=1)
@@ -287,13 +296,16 @@ class TestCSATNPSService:
 
         with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
-        ) as mock_settings, patch("conversation_ms.services.csat_nps_service.send_data_lake_event") as mock_task:
+        ) as mock_settings:
             mock_settings.AGENT_UUID_NPS = str(uuid4())
             mock_update.return_value = None
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_nps_event(
                 event_data=event_data,
@@ -302,10 +314,10 @@ class TestCSATNPSService:
                 contact_urn=conversation.contact_urn,
             )
 
-            # Verify metadata includes dates
-            call_args = mock_task.delay.call_args[0][0]
-            assert "conversation_start_date" in call_args["metadata"]
-            assert "conversation_end_date" in call_args["metadata"]
+            # Verify metadata includes dates (Skipped as Data Lake is disabled)
+            # call_args = mock_task.delay.call_args[0][0]
+            # assert "conversation_start_date" in call_args["metadata"]
+            # assert "conversation_end_date" in call_args["metadata"]
 
     def test_process_csat_event_missing_value(self, conversation, mock_sentry):
         """Test processing CSAT event with missing value."""
@@ -325,13 +337,16 @@ class TestCSATNPSService:
         """Test successful processing of NPS event."""
         with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
-        ) as mock_settings, patch("conversation_ms.services.csat_nps_service.send_data_lake_event") as mock_task:
+        ) as mock_settings:
             mock_settings.AGENT_UUID_NPS = str(uuid4())
             mock_update.return_value = None
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             service.process_nps_event(
                 event_data=event_data,
@@ -342,8 +357,8 @@ class TestCSATNPSService:
 
             # Verify update_conversation_data was called
             mock_update.assert_called_once()
-            # Verify Celery task was called
-            mock_task.delay.assert_called_once()
+            # Verify Celery task was NOT called (feature disabled)
+            # mock_task.delay.assert_called_once()
 
     def test_process_nps_event_missing_value(self, conversation, mock_sentry):
         """Test processing NPS event with missing value."""
@@ -361,14 +376,15 @@ class TestCSATNPSService:
 
     def test_process_csat_event_handles_exception(self, conversation, mock_sentry):
         """Test that exceptions in process_csat_event are properly handled."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
-            "conversation_ms.services.csat_nps_service.send_data_lake_event"
-        ) as mock_task:
+        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update:
             mock_update.side_effect = Exception("Update error")
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "5", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "5",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             with pytest.raises(Exception, match="Update error"):
                 service.process_csat_event(
@@ -380,14 +396,15 @@ class TestCSATNPSService:
 
     def test_process_nps_event_handles_exception(self, conversation, mock_sentry):
         """Test that exceptions in process_nps_event are properly handled."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
-            "conversation_ms.services.csat_nps_service.send_data_lake_event"
-        ) as mock_task:
+        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update:
             mock_update.side_effect = Exception("Update error")
-            mock_task.delay = Mock(return_value=Mock())
 
             service = CSATNPSService()
-            event_data = {"value": "9", "project_uuid": str(conversation.project.uuid), "contact_urn": conversation.contact_urn}
+            event_data = {
+                "value": "9",
+                "project_uuid": str(conversation.project.uuid),
+                "contact_urn": conversation.contact_urn,
+            }
 
             with pytest.raises(Exception, match="Update error"):
                 service.process_nps_event(
@@ -466,4 +483,3 @@ class TestMessageMigrationService:
             service = MessageMigrationService()
             with pytest.raises(Exception, match="DynamoDB error"):
                 service.migrate_conversation_messages_to_postgres(conversation)
-

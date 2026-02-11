@@ -21,12 +21,10 @@ class MessageService:
             event = MessageReceivedEvent.from_sqs_event(event_data)
 
             logger.info(
-                "[MessageService] Processing message.received",
-                extra={
-                    "correlation_id": event.correlation_id,
-                    "project_uuid": event.project_uuid,
-                    "contact_urn": event.contact_urn,
-                },
+                "[MessageService] Processing message.received correlation_id=%s project_uuid=%s contact_urn=%s",
+                event.correlation_id,
+                event.project_uuid,
+                event.contact_urn,
             )
 
             contact_name = event.message.get("contact_name", "")
@@ -39,25 +37,30 @@ class MessageService:
 
             if not conversation:
                 logger.warning(
-                    "[MessageService] Conversation not created (channel_uuid missing), skipping message",
-                    extra={
-                        "correlation_id": event.correlation_id,
-                        "project_uuid": event.project_uuid,
-                        "contact_urn": event.contact_urn,
-                    },
+                    "[MessageService] Conversation not created (channel_uuid missing),"
+                    " skipping message correlation_id=%s project_uuid=%s contact_urn=%s",
+                    event.correlation_id,
+                    event.project_uuid,
+                    event.contact_urn,
                 )
                 return
 
-            self.message_repository.save_received_message(conversation=conversation, event=event)
+            # Skip saving dummy messages (used for events like CSAT/NPS)
+            message_text = event.message.get("text", "")
+            if message_text:
+                self.message_repository.save_received_message(conversation=conversation, event=event)
+            else:
+                logger.debug(
+                    "[MessageService] Skipping dummy message save (empty text) correlation_id=%s",
+                    event.correlation_id,
+                )
 
             self._handle_special_events(event_data, conversation, event.project_uuid, event.contact_urn)
 
             logger.info(
-                "[MessageService] Message.received processed successfully",
-                extra={
-                    "correlation_id": event.correlation_id,
-                    "conversation_uuid": str(conversation.uuid),
-                },
+                "[MessageService] Message.received processed successfully correlation_id=%s conversation_uuid=%s",
+                event.correlation_id,
+                str(conversation.uuid),
             )
 
         except Exception as e:
@@ -73,8 +76,9 @@ class MessageService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[MessageService] Error processing message.received",
-                extra={"event_data": event_data, "error": str(e)},
+                "[MessageService] Error processing message.received event_data=%s error=%s",
+                event_data,
+                str(e),
                 exc_info=True,
             )
             raise
@@ -164,9 +168,17 @@ class MessageService:
                     project_uuid=project_uuid,
                     contact_urn=contact_urn,
                 )
+            else:
+                self.csat_nps_service.process_custom_event(
+                    event_data={"key": event_key, "value": event_value, **event_data},
+                    conversation=conversation,
+                    project_uuid=project_uuid,
+                    contact_urn=contact_urn,
+                )
         except Exception as e:
             logger.warning(
-                "[MessageService] Error handling special events",
-                extra={"event_data": event_data, "error": str(e)},
+                "[MessageService] Error handling special events event_data=%s error=%s",
+                event_data,
+                str(e),
                 exc_info=True,
             )

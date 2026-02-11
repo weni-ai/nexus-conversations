@@ -6,6 +6,7 @@ from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
+from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class ClassificationService:
         messages = None
         if conversation.has_chats_room:
             # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
-            resolution = "4"
+            resolution = ResolutionEntities.HAS_CHAT_ROOM
             logger.info(
                 f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
             )
@@ -71,24 +72,24 @@ class ClassificationService:
             lambda_name = getattr(settings, "CONVERSATION_RESOLUTION_NAME", None)
             if not lambda_name:
                 logger.error("[ClassificationService] CONVERSATION_RESOLUTION_NAME not configured.")
-                return "3"  # Unclassified
+                return str(ResolutionEntities.UNCLASSIFIED)  # Unclassified
 
             response = self._invoke_lambda(lambda_name, payload)
             if not response:
-                return "3"
+                return str(ResolutionEntities.UNCLASSIFIED)
 
             body = response.get("body", {})
             result = body.get("result")
 
             if result is None:
                 logger.warning(f"[ClassificationService] Resolution lambda returned None for {conversation.uuid}")
-                return "3"
+                return str(ResolutionEntities.UNCLASSIFIED)
 
             return str(result)
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error getting resolution for {conversation.uuid}: {e}")
-            return "3"  # Default to Unclassified on error
+            return str(ResolutionEntities.UNCLASSIFIED)  # Default to Unclassified on error
 
     def _classify_topics(
         self, conversation: Conversation, messages: List[Dict[str, Any]]
@@ -239,7 +240,7 @@ class ClassificationService:
     ):
         # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room"
         if has_chats_room:
-            resolution = "Has Chat Room"
+            resolution = ResolutionEntities.HAS_CHAT_ROOM
             # TODO: Add datalake event
             return resolution
 
@@ -259,7 +260,7 @@ class ClassificationService:
                 f"Project: {project_uuid}, Contact: {contact_urn}"
             )
             # TODO: Add sentry error
-            resolution = "unclassified"  # Use unclassified resolution for empty/None values
+            resolution = ResolutionEntities.UNCLASSIFIED  # Use unclassified resolution for empty/None values
 
         _event_data = {
             "event_name": "weni_nexus_data",

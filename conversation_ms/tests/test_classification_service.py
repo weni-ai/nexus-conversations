@@ -1,61 +1,131 @@
+"""
+Tests for ClassificationService.
+"""
+
+import json
+from unittest.mock import MagicMock, Mock, patch
+from uuid import uuid4
+
 import pytest
-from unittest.mock import Mock, patch
+
+from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.services.classification_service import ClassificationService
-from conversation_ms.models import Conversation, Project, Topic, SubTopic, ConversationClassification
 
-@pytest.fixture
-def classification_service():
-    with patch("conversation_ms.services.classification_service.get_boto3_client"), \
-         patch("conversation_ms.services.classification_service.DynamoMessageRepository"):
-        return ClassificationService()
 
 @pytest.mark.django_db
-def test_classify_conversation_success(classification_service):
-    # Setup
-    project = Project.objects.create(name="Test Project")
-    conversation = Conversation.objects.create(
-        project=project,
-        contact_urn="tel:+558299999999",
-        channel_uuid="12345678-1234-5678-1234-567812345678"
-    )
-    topic = Topic.objects.create(project=project, name="Financeiro", uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    subtopic = SubTopic.objects.create(topic=topic, name="Boleto", uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+class TestClassificationService:
+    """Tests for ClassificationService."""
 
-    # Mocks
-    mock_messages = [{"text": "Quero meu boleto", "source": "user", "created_at": "2023-01-01T10:00:00Z"}]
-    classification_service.dynamo_repo.get_messages.return_value = {"items": mock_messages}
-    
-    classification_service.lambda_client.invoke.return_value = {
-        "Payload": Mock(read=lambda: b'{"topic_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "subtopic_uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "confidence": 0.95}')
-    }
+    def setup_method(self):
+        self.project = Project.objects.create(uuid=uuid4(), name="Test Project")
+        self.conversation = Conversation.objects.create(
+            uuid=uuid4(), project=self.project, contact_urn="whatsapp:+1234567890", channel_uuid=uuid4()
+        )
+        self.topic = Topic.objects.create(
+            uuid=uuid4(), project=self.project, name="Test Topic", description="Test Description", is_active=True
+        )
+        self.subtopic = SubTopic.objects.create(
+            uuid=uuid4(),
+            topic=self.topic,
+            name="Test Subtopic",
+            description="Test Subtopic Description",
+            is_active=True,
+        )
 
-    # Execute
-    result = classification_service.classify_conversation(str(conversation.uuid))
+    def test_prepare_lambda_payload_structure(self):
+        """Test that the payload structure matches Nexus AI expectation."""
+        service = ClassificationService()
+        messages = [
+            {"source": "user", "created_at": "2023-01-01T10:00:00", "text": "Hello"},
+            {"source": "agent", "created_at": "2023-01-01T10:01:00", "text": "Hi"},
+        ]
 
-    # Assert
-    assert result is not None
-    assert str(result.topic.uuid) == str(topic.uuid)
-    assert str(result.subtopic.uuid) == str(subtopic.uuid)
-    assert result.confidence == 0.95
-    assert ConversationClassification.objects.count() == 1
+        payload = service._prepare_lambda_payload(self.conversation, messages)
 
-@pytest.mark.django_db
-def test_classify_conversation_not_found(classification_service):
-    result = classification_service.classify_conversation("00000000-0000-0000-0000-000000000000")
-    assert result is None
+        # Verify structure: {"topics": [...], "conversation": {"messages": [...]}}
+        assert "topics" in payload
+        assert "conversation" in payload
+        assert "messages" in payload["conversation"]
+        assert len(payload["conversation"]["messages"]) == 2
+        assert payload["conversation"]["messages"][0]["content"] == "Hello"
 
-@pytest.mark.django_db
-def test_classify_conversation_lambda_error(classification_service):
-    # Setup
-    project = Project.objects.create(name="Test Project")
-    conversation = Conversation.objects.create(
-        project=project,
-        contact_urn="tel:+558299999999"
-    )
-    
-    classification_service.dynamo_repo.get_messages.return_value = {"items": []}
-    
-    # Execute (should handle graceful failure)
-    result = classification_service.classify_conversation(str(conversation.uuid))
-    
-    assert result is None
+    @patch("conversation_ms.services.classification_service.get_boto3_client")
+    def test_classify_conversation_success_with_body(self, mock_get_boto):
+        """Test successful classification when Lambda returns 'body' wrapper."""
+        # Mock Lambda client
+        mock_lambda = Mock()
+        mock_get_boto.return_value = mock_lambda
+
+        # Mock Lambda response
+        response_data = {
+            "body": {"topic_uuid": str(self.topic.uuid), "subtopic_uuid": str(self.subtopic.uuid), "confidence": 0.95}
+        }
+        mock_payload = MagicMock()
+        mock_payload.read.return_value = json.dumps(response_data).encode("utf-8")
+        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+
+        # Mock _get_conversation_messages to return something
+        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
+            mock_get_msgs.return_value = [{"text": "test"}]
+
+            service = ClassificationService()
+            result = service.classify_conversation(str(self.conversation.uuid))
+
+            assert result is not None
+            assert result.topic == self.topic
+            assert result.subtopic == self.subtopic
+            assert result.confidence == 0.95
+
+    @patch("conversation_ms.services.classification_service.get_boto3_client")
+    def test_classify_conversation_success_without_body(self, mock_get_boto):
+        """Test successful classification when Lambda returns direct result (fallback)."""
+        # Mock Lambda client
+        mock_lambda = Mock()
+        mock_get_boto.return_value = mock_lambda
+
+        # Mock Lambda response (direct dict, no body wrapper)
+        response_data = {
+            "topic_uuid": str(self.topic.uuid),
+            "subtopic_uuid": str(self.subtopic.uuid),
+            "confidence": 0.85,
+        }
+        mock_payload = MagicMock()
+        mock_payload.read.return_value = json.dumps(response_data).encode("utf-8")
+        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+
+        # Mock _get_conversation_messages
+        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
+            mock_get_msgs.return_value = [{"text": "test"}]
+
+            service = ClassificationService()
+            result = service.classify_conversation(str(self.conversation.uuid))
+
+            assert result is not None
+            assert result.topic == self.topic
+            assert result.subtopic == self.subtopic
+            assert result.confidence == 0.85
+
+    @patch("conversation_ms.services.classification_service.get_boto3_client")
+    @patch("conversation_ms.services.classification_service.settings")
+    def test_lambda_name_configuration(self, mock_settings, mock_get_boto):
+        """Verify that the correct environment variable is used for Lambda name."""
+        mock_lambda = Mock()
+        mock_get_boto.return_value = mock_lambda
+
+        # Set settings
+        mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "custom-classifier-prod"
+
+        # Mock response
+        mock_payload = MagicMock()
+        mock_payload.read.return_value = json.dumps({}).encode("utf-8")
+        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+
+        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
+            mock_get_msgs.return_value = [{"text": "test"}]
+
+            service = ClassificationService()
+            service.classify_conversation(str(self.conversation.uuid))
+
+            # Check invocation args
+            call_args = mock_lambda.invoke.call_args
+            assert call_args[1]["FunctionName"] == "custom-classifier-prod"

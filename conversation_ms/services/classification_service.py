@@ -18,7 +18,7 @@ class ClassificationService:
     """
 
     def __init__(self):
-        self.lambda_client = get_boto3_client("lambda")
+        self.lambda_client = get_boto3_client("lambda", region_name=settings.AWS_REGION)
         self.dynamo_repo = DynamoMessageRepository()
 
     def classify_conversation(self, conversation_uuid: str) -> Optional[ConversationClassification]:
@@ -227,3 +227,49 @@ class ClassificationService:
             f"Topic={topic.name if topic else 'None'}, Subtopic={subtopic.name if subtopic else 'None'}"
         )
         return classification
+
+    def lambda_conversation_resolution(
+        self,
+        messages,
+        has_chats_room: bool,
+        project_uuid: str,
+        contact_urn: str,
+        channel_uuid: str = None,
+        conversation: object = None,
+    ):
+        # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room"
+        if has_chats_room:
+            resolution = "Has Chat Room"
+            # TODO: Add datalake event
+            return resolution
+
+        # Original logic for when has_chats_room is False
+        lambda_conversation = messages
+        payload_conversation = {"conversation": lambda_conversation}
+        conversation_resolution = self._invoke_lambda(
+            lambda_name=str(settings.CONVERSATION_RESOLUTION_NAME), payload=payload_conversation
+        )
+        conversation_resolution_response = json.loads(conversation_resolution.get("Payload").read()).get("body")
+        resolution = conversation_resolution_response.get("result")
+
+        # Ensure resolution is not None - use "unclassified" if lambda returns empty/None
+        if not resolution:
+            logger.warning(
+                f"Lambda returned None/empty resolution. Using 'unclassified'. "
+                f"Project: {project_uuid}, Contact: {contact_urn}"
+            )
+            # TODO: Add sentry error
+            resolution = "unclassified"  # Use unclassified resolution for empty/None values
+
+        _event_data = {
+            "event_name": "weni_nexus_data",
+            "key": "conversation_classification",
+            "value_type": "string",
+            "value": resolution,
+            "metadata": {
+                "human_support": has_chats_room,
+            },
+        }
+        # TODO: Add datalake event
+
+        return resolution

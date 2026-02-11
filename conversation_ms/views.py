@@ -114,13 +114,20 @@ class SubTopicsViewSet(ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         topic_uuid = self.kwargs.get("topic_uuid")
+        project_uuid = self.kwargs.get("project_uuid")
         if not topic_uuid:
             return Response({"error": "topic_uuid is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            topic = Topic.objects.get(uuid=topic_uuid)
+            topic = Topic.objects.get(uuid=topic_uuid, project__uuid=project_uuid)
         except Topic.DoesNotExist:
             return Response({"error": "Topic not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(topic=topic)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():

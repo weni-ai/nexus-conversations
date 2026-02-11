@@ -81,3 +81,6 @@ sqs_test_report_*.json
 sqs_load_test_results_*.json
 sqs_order_validation*.json
 sqs_order_validation*.txt
+
+
+weni-script*

@@ -94,7 +94,7 @@ class TestConversationEndpoint:
         # Check content
         assert len(messages_response["results"]) == 2
         assert messages_response["results"][0]["text"] == "Hello"
-        assert messages_response["results"][0]["source_type"] == "user"
+        assert messages_response["results"][0]["source"] == "incoming"
 
     def test_project_not_found(self, api_client, auth_headers):
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})

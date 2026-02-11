@@ -172,14 +172,24 @@ SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")
 SQS_ROOMS_QUEUE_URL = env.str("SQS_ROOMS_QUEUE_URL", default="")
 SQS_CONVERSATION_QUEUE_URL = env.str("SQS_CONVERSATION_QUEUE_URL", default="")
 SQS_CONVERSATION_DLQ_URL = env.str("SQS_CONVERSATION_DLQ_URL", default="")
-SQS_CONVERSATION_REGION = env.str("SQS_CONVERSATION_REGION", default="us-east-1")
+SQS_CONVERSATION_REGION = env.str("SQS_CONVERSATION_REGION", default="sa-east-1")
 SQS_CONVERSATION_ENABLED = env.bool("SQS_CONVERSATION_ENABLED", default=False)
 
 # AWS General Configuration
 AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
+AWS_REGION = env.str("AWS_REGION", default="us-east-1")
 CONVERSATION_TOPIC_CLASSIFIER_NAME = env.str("CONVERSATION_TOPIC_CLASSIFIER_NAME", default=None)
 CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=None)
 CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
+
+# Client variables
+BILLING_BASE_URL = env.str("BILLING_BASE_URL", default="")
+BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
+
+# Projects API Configuration
+PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
+PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
+PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
@@ -229,14 +239,3 @@ LOGGING = {
         },
     },
 }
-
-# Client variables
-BILLING_BASE_URL = env.str("BILLING_BASE_URL", default="")
-BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
-
-# Projects API Configuration
-PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
-PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
-PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
-
-AWS_REGION = env.str("AWS_REGION", default="us-east-1")

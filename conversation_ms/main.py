@@ -13,6 +13,7 @@ if str(project_root) not in sys.path:
 
 import django  # noqa: E402
 import environ  # noqa: E402
+from django.conf import settings  # noqa: E402
 
 from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer  # noqa: E402
 
@@ -94,6 +95,7 @@ def main():
         consumer = ConversationSQSConsumer(
             consumer_id=args.consumer_id,
             queue_url=queue_url,
+            region=settings.SQS_CONVERSATION_REGION,
         )
         signal_handler.consumer = consumer
 

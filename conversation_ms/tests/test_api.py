@@ -81,7 +81,14 @@ class TestConversationEndpoint:
         response = api_client.get(url, **auth_headers)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["messages"] == messages_data
+
+        # Check results in paginated response
+        results = response.data["messages"]["results"]
+        assert len(results) == 2
+
+        # Check normalization (user -> incoming, assistant -> outgoing)
+        assert any(m["text"] == "Hello" and m["source"] == "incoming" for m in results)
+        assert any(m["text"] == "Hi there" and m["source"] == "outgoing" for m in results)
 
     def test_list_conversations_ignores_include_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution=0)
@@ -94,15 +101,8 @@ class TestConversationEndpoint:
         response = api_client.get(f"{url}?include_messages=true", **auth_headers)
         messages_response = response.data["results"][0]["messages"]
 
-        # Check pagination structure
-        assert "results" in messages_response
-        assert "next" in messages_response
-        assert "previous" in messages_response
-
-        # Check content
-        assert len(messages_response["results"]) == 2
-        assert messages_response["results"][0]["text"] == "Hello"
-        assert messages_response["results"][0]["source"] == "incoming"
+        # Should be None as include_messages is no longer supported on list endpoint
+        assert messages_response is None
 
     def test_project_not_found(self, api_client, auth_headers):
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})

@@ -69,78 +69,75 @@ class ConversationSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    def _normalize_source(self, source):
+        if source == "user":
+            return "incoming"
+        elif source in ["agent", "assistant"]:
+            return "outgoing"
+        return source
+
+    def _get_from_postgres(self, obj):
+        try:
+            msgs = obj.messages_data.messages
+            # Normalize Postgres messages
+            normalized = []
+            for msg in msgs or []:
+                msg_uuid = msg.get("uuid") or str(uuid.uuid4())
+                source = self._normalize_source(msg.get("source"))
+
+                normalized.append(
+                    {
+                        "uuid": msg_uuid,
+                        "id": msg.get("id") or msg_uuid,
+                        "text": msg.get("text"),
+                        "source": source,
+                        "created_at": msg.get("created_at"),
+                    }
+                )
+            return normalized
+        except ConversationMessages.DoesNotExist:
+            return None
+
+    def _get_from_dynamo(self, obj):
+        try:
+            repo = MessageRepository()
+            items = repo.get_messages_from_dynamo(
+                project_uuid=str(obj.project.uuid),
+                contact_urn=obj.contact_urn,
+                channel_uuid=str(obj.channel_uuid) if obj.channel_uuid else None,
+            )
+            # Normalize Dynamo messages
+            normalized = []
+            for item in items:
+                msg_uuid = item.get("message_id")
+                source = self._normalize_source(item.get("source"))
+
+                normalized.append(
+                    {
+                        "uuid": msg_uuid,
+                        "id": msg_uuid,
+                        "text": item.get("text"),
+                        "source": source,
+                        "created_at": item.get("created_at"),
+                    }
+                )
+            return normalized
+        except Exception:
+            return None
+
     @extend_schema_field(serializers.DictField())
     def get_messages(self, obj):
         view = self.context.get("view")
+        request = self.context.get("request")
 
         is_detail = getattr(view, "action", None) == "retrieve"
 
         if is_detail:
-
-            def get_from_postgres():
-                try:
-                    msgs = obj.messages_data.messages
-                    # Normalize Postgres messages
-                    normalized = []
-                    for msg in msgs or []:
-                        msg_uuid = msg.get("uuid") or str(uuid.uuid4())
-
-                        source = msg.get("source")
-                        if source == "user":
-                            source = "incoming"
-                        elif source in ["agent", "assistant"]:
-                            source = "outgoing"
-
-                        normalized.append(
-                            {
-                                "uuid": msg_uuid,
-                                "id": msg.get("id") or msg_uuid,
-                                "text": msg.get("text"),
-                                "source": source,
-                                "created_at": msg.get("created_at"),
-                            }
-                        )
-                    return normalized
-                except ConversationMessages.DoesNotExist:
-                    return None
-
-            def get_from_dynamo():
-                try:
-                    repo = MessageRepository()
-                    items = repo.get_messages_from_dynamo(
-                        project_uuid=str(obj.project.uuid),
-                        contact_urn=obj.contact_urn,
-                        channel_uuid=str(obj.channel_uuid) if obj.channel_uuid else None,
-                    )
-                    # Normalize Dynamo messages
-                    normalized = []
-                    for item in items:
-                        msg_uuid = item.get("message_id")
-
-                        source = item.get("source")
-                        if source == "user":
-                            source = "incoming"
-                        elif source in ["agent", "assistant"]:
-                            source = "outgoing"
-
-                        normalized.append(
-                            {
-                                "uuid": msg_uuid,
-                                "id": msg_uuid,
-                                "text": item.get("text"),
-                                "source": source,
-                                "created_at": item.get("created_at"),
-                            }
-                        )
-                    return normalized
-                except Exception:
-                    return None
-
             # Smart Routing based on Resolution
             if str(obj.resolution) == str(ResolutionEntities.IN_PROGRESS):
-                messages = get_from_dynamo() or get_from_postgres() or []
+                messages = self._get_from_dynamo(obj) or self._get_from_postgres(obj) or []
             else:
-                messages = get_from_postgres() or get_from_dynamo() or []
+                messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
 
             # Sort by created_at descending (newest first)
             messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)

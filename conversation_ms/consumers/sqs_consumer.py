@@ -19,7 +19,7 @@ class ConversationSQSConsumer:
     def __init__(
         self,
         queue_url: str,
-        region: str = "us-east-1",
+        region: str = "sa-east-1",
         processing_delay: float = 0.0,
         consumer_id: Optional[str] = None,
         heartbeat_file: str = "/tmp/healthy",

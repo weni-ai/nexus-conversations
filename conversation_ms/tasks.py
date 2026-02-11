@@ -356,10 +356,10 @@ def close_daily_conversations_task(self, force_close: bool = False):
 
                             # Trigger billing task for the previous day (the day that just ended)
                             previous_day = now_in_tz.subtract(days=1).date()
-                            send_billing_conversations.delay(
-                                project_uuid=project_uuid,
-                                target_date=previous_day.isoformat(),
-                            )
+                            # send_billing_conversations.delay(
+                            #     project_uuid=project_uuid,
+                            #     target_date=previous_day.isoformat(),
+                            # )
                             logger.info(
                                 f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
                                 extra={

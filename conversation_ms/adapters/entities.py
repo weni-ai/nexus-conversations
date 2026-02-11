@@ -25,6 +25,11 @@ class ResolutionEntities:
 
     @staticmethod
     def convert_resolution_string_to_int(resolution_string: str) -> int:
+        if isinstance(resolution_string, int):
+            return resolution_string
+        if str(resolution_string).isdigit():
+            return int(resolution_string)
+
         resolution_mapping = {
             "resolved": ResolutionEntities.RESOLVED,
             "unresolved": ResolutionEntities.UNRESOLVED,
@@ -33,4 +38,3 @@ class ResolutionEntities:
             "has chat room": ResolutionEntities.HAS_CHAT_ROOM,
         }
         return resolution_mapping.get(resolution_string.lower(), ResolutionEntities.IN_PROGRESS)
-

@@ -1,131 +1,135 @@
-"""
-Tests for ClassificationService.
-"""
-
 import json
-from unittest.mock import MagicMock, Mock, patch
-from uuid import uuid4
+from unittest.mock import Mock, patch
 
 import pytest
 
-from conversation_ms.models import Conversation, Project, SubTopic, Topic
+from conversation_ms.models import Conversation, ConversationClassification, Project, SubTopic, Topic
 from conversation_ms.services.classification_service import ClassificationService
 
 
+@pytest.fixture
+def classification_service():
+    with patch("conversation_ms.services.classification_service.get_boto3_client"), patch(
+        "conversation_ms.services.classification_service.DynamoMessageRepository"
+    ):
+        return ClassificationService()
+
+
 @pytest.mark.django_db
-class TestClassificationService:
-    """Tests for ClassificationService."""
+@patch("conversation_ms.services.classification_service.settings")
+def test_classify_conversation_success(mock_settings, classification_service):
+    # Setup settings
+    mock_settings.CONVERSATION_RESOLUTION_NAME = "resolution-lambda"
+    mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "topic-lambda"
 
-    def setup_method(self):
-        self.project = Project.objects.create(uuid=uuid4(), name="Test Project")
-        self.conversation = Conversation.objects.create(
-            uuid=uuid4(), project=self.project, contact_urn="whatsapp:+1234567890", channel_uuid=uuid4()
-        )
-        self.topic = Topic.objects.create(
-            uuid=uuid4(), project=self.project, name="Test Topic", description="Test Description", is_active=True
-        )
-        self.subtopic = SubTopic.objects.create(
-            uuid=uuid4(),
-            topic=self.topic,
-            name="Test Subtopic",
-            description="Test Subtopic Description",
-            is_active=True,
-        )
+    # Setup
+    project = Project.objects.create(name="Test Project")
+    conversation = Conversation.objects.create(
+        project=project, contact_urn="tel:+558299999999", channel_uuid="12345678-1234-5678-1234-567812345678"
+    )
+    topic = Topic.objects.create(project=project, name="Financeiro", uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    subtopic = SubTopic.objects.create(topic=topic, name="Boleto", uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
-    def test_prepare_lambda_payload_structure(self):
-        """Test that the payload structure matches Nexus AI expectation."""
-        service = ClassificationService()
-        messages = [
-            {"source": "user", "created_at": "2023-01-01T10:00:00", "text": "Hello"},
-            {"source": "agent", "created_at": "2023-01-01T10:01:00", "text": "Hi"},
-        ]
+    # Mocks
+    mock_messages = [{"text": "Quero meu boleto", "source": "user", "created_at": "2023-01-01T10:00:00Z"}]
+    classification_service.dynamo_repo.get_messages.return_value = {"items": mock_messages}
 
-        payload = service._prepare_lambda_payload(self.conversation, messages)
-
-        # Verify structure: {"topics": [...], "conversation": {"messages": [...]}}
-        assert "topics" in payload
-        assert "conversation" in payload
-        assert "messages" in payload["conversation"]
-        assert len(payload["conversation"]["messages"]) == 2
-        assert payload["conversation"]["messages"][0]["content"] == "Hello"
-
-    @patch("conversation_ms.services.classification_service.get_boto3_client")
-    def test_classify_conversation_success_with_body(self, mock_get_boto):
-        """Test successful classification when Lambda returns 'body' wrapper."""
-        # Mock Lambda client
-        mock_lambda = Mock()
-        mock_get_boto.return_value = mock_lambda
-
-        # Mock Lambda response
-        response_data = {
-            "body": {"topic_uuid": str(self.topic.uuid), "subtopic_uuid": str(self.subtopic.uuid), "confidence": 0.95}
+    # Resolution response
+    resolution_payload = json.dumps({"body": {"result": "2"}}).encode("utf-8")
+    # Topic response
+    topic_payload = json.dumps(
+        {
+            "body": {
+                "topic_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "subtopic_uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "confidence": 0.95,
+            }
         }
-        mock_payload = MagicMock()
-        mock_payload.read.return_value = json.dumps(response_data).encode("utf-8")
-        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+    ).encode("utf-8")
 
-        # Mock _get_conversation_messages to return something
-        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
-            mock_get_msgs.return_value = [{"text": "test"}]
+    classification_service.lambda_client.invoke.side_effect = [
+        {"Payload": Mock(read=lambda: resolution_payload)},
+        {"Payload": Mock(read=lambda: topic_payload)},
+    ]
 
-            service = ClassificationService()
-            result = service.classify_conversation(str(self.conversation.uuid))
+    # Execute
+    result = classification_service.classify_conversation(str(conversation.uuid))
 
-            assert result is not None
-            assert result.topic == self.topic
-            assert result.subtopic == self.subtopic
-            assert result.confidence == 0.95
+    # Assert
+    assert result is not None
+    assert str(result.topic.uuid) == str(topic.uuid)
+    assert str(result.subtopic.uuid) == str(subtopic.uuid)
+    assert result.confidence == 0.95
+    assert ConversationClassification.objects.count() == 1
 
-    @patch("conversation_ms.services.classification_service.get_boto3_client")
-    def test_classify_conversation_success_without_body(self, mock_get_boto):
-        """Test successful classification when Lambda returns direct result (fallback)."""
-        # Mock Lambda client
-        mock_lambda = Mock()
-        mock_get_boto.return_value = mock_lambda
 
-        # Mock Lambda response (direct dict, no body wrapper)
-        response_data = {
-            "topic_uuid": str(self.topic.uuid),
-            "subtopic_uuid": str(self.subtopic.uuid),
-            "confidence": 0.85,
+@pytest.mark.django_db
+def test_classify_conversation_not_found(classification_service):
+    result = classification_service.classify_conversation("00000000-0000-0000-0000-000000000000")
+    assert result is None
+
+
+@pytest.mark.django_db
+@patch("conversation_ms.services.classification_service.settings")
+def test_classify_conversation_has_chats_room(mock_settings, classification_service):
+    # Setup settings
+    mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "topic-lambda"
+
+    # Setup
+    project = Project.objects.create(name="Test Project")
+    conversation = Conversation.objects.create(
+        project=project,
+        contact_urn="tel:+558299999999",
+        channel_uuid="12345678-1234-5678-1234-567812345678",
+        has_chats_room=True,
+    )
+    topic = Topic.objects.create(project=project, name="Financeiro", uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    _subtopic = SubTopic.objects.create(topic=topic, name="Boleto", uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    # Mocks
+    mock_messages = [{"text": "Quero meu boleto", "source": "user", "created_at": "2023-01-01T10:00:00Z"}]
+    classification_service.dynamo_repo.get_messages.return_value = {"items": mock_messages}
+
+    # Topic response only (Resolution lambda should NOT be called)
+    topic_payload = json.dumps(
+        {
+            "body": {
+                "topic_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "subtopic_uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "confidence": 0.95,
+            }
         }
-        mock_payload = MagicMock()
-        mock_payload.read.return_value = json.dumps(response_data).encode("utf-8")
-        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+    ).encode("utf-8")
 
-        # Mock _get_conversation_messages
-        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
-            mock_get_msgs.return_value = [{"text": "test"}]
+    classification_service.lambda_client.invoke.return_value = {"Payload": Mock(read=lambda: topic_payload)}
 
-            service = ClassificationService()
-            result = service.classify_conversation(str(self.conversation.uuid))
+    # Execute
+    result = classification_service.classify_conversation(str(conversation.uuid))
 
-            assert result is not None
-            assert result.topic == self.topic
-            assert result.subtopic == self.subtopic
-            assert result.confidence == 0.85
+    # Assert
+    assert result is not None
+    assert str(result.topic.uuid) == str(topic.uuid)
 
-    @patch("conversation_ms.services.classification_service.get_boto3_client")
-    @patch("conversation_ms.services.classification_service.settings")
-    def test_lambda_name_configuration(self, mock_settings, mock_get_boto):
-        """Verify that the correct environment variable is used for Lambda name."""
-        mock_lambda = Mock()
-        mock_get_boto.return_value = mock_lambda
+    # Verify resolution was set to "4" locally
+    conversation.refresh_from_db()
+    assert conversation.resolution == "4"
 
-        # Set settings
-        mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "custom-classifier-prod"
+    # Verify Lambda was called ONLY ONCE (for topics)
+    assert classification_service.lambda_client.invoke.call_count == 1
 
-        # Mock response
-        mock_payload = MagicMock()
-        mock_payload.read.return_value = json.dumps({}).encode("utf-8")
-        mock_lambda.invoke.return_value = {"Payload": mock_payload}
+    # Verify messages were fetched (lazy load for topics)
+    assert classification_service.dynamo_repo.get_messages.called
 
-        with patch.object(ClassificationService, "_get_conversation_messages") as mock_get_msgs:
-            mock_get_msgs.return_value = [{"text": "test"}]
 
-            service = ClassificationService()
-            service.classify_conversation(str(self.conversation.uuid))
+@pytest.mark.django_db
+def test_classify_conversation_lambda_error(classification_service):
+    # Setup
+    project = Project.objects.create(name="Test Project")
+    conversation = Conversation.objects.create(project=project, contact_urn="tel:+558299999999")
 
-            # Check invocation args
-            call_args = mock_lambda.invoke.call_args
-            assert call_args[1]["FunctionName"] == "custom-classifier-prod"
+    classification_service.dynamo_repo.get_messages.return_value = {"items": []}
+
+    # Execute (should handle graceful failure)
+    result = classification_service.classify_conversation(str(conversation.uuid))
+
+    assert result is None

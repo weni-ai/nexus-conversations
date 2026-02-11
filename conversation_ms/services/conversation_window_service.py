@@ -6,7 +6,6 @@ including chat room opening (has_chats_room=True).
 """
 
 import logging
-from typing import Optional
 
 import sentry_sdk
 
@@ -28,7 +27,7 @@ class ConversationWindowService:
     def process_conversation_window(self, event_data: dict):
         """
         Process conversation window event.
-        
+
         This method:
         1. Parses the event data
         2. Gets or creates Project
@@ -46,6 +45,7 @@ class ConversationWindowService:
                     "project_uuid": event.project_uuid,
                     "contact_urn": event.contact_urn,
                     "has_chats_room": event.has_chats_room,
+                    "ticket_uuid": event.ticket_uuid,
                 },
             )
 
@@ -67,11 +67,15 @@ class ConversationWindowService:
             )
 
             # Find existing conversation
-            conversation = Conversation.objects.filter(
-                project=project,
-                channel_uuid=event.channel_uuid,
-                contact_urn=event.contact_urn,
-            ).order_by("-created_at").first()
+            conversation = (
+                Conversation.objects.filter(
+                    project=project,
+                    channel_uuid=event.channel_uuid,
+                    contact_urn=event.contact_urn,
+                )
+                .order_by("-created_at")
+                .first()
+            )
 
             # Determine resolution based on has_chats_room
             if event.has_chats_room:
@@ -91,6 +95,7 @@ class ConversationWindowService:
                 conversation.start_date = event.start_date or conversation.start_date
                 conversation.end_date = event.end_date or conversation.end_date
                 conversation.contact_name = event.contact_name or conversation.contact_name
+                conversation.ticket_uuid = event.ticket_uuid or conversation.ticket_uuid
                 conversation.resolution = resolution
                 conversation.save()
 
@@ -115,6 +120,7 @@ class ConversationWindowService:
                     end_date=event.end_date,
                     has_chats_room=event.has_chats_room,
                     resolution=resolution,
+                    ticket_uuid=event.ticket_uuid,
                 )
 
                 logger.info(
@@ -138,7 +144,7 @@ class ConversationWindowService:
                             "conversation_uuid": str(conversation.uuid),
                         },
                     )
-                    
+
                     # Trigger classification
                     classify_conversation_task.delay(str(conversation.uuid))
                     logger.info(
@@ -186,4 +192,3 @@ class ConversationWindowService:
                 exc_info=True,
             )
             raise
-

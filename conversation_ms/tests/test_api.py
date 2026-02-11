@@ -22,7 +22,7 @@ class TestConversationEndpoint:
     @pytest.fixture
     def auth_headers(self):
         token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"test-service": token}
+        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
     def test_list_conversations_unauthenticated(self, api_client, project):
@@ -98,3 +98,25 @@ class TestConversationEndpoint:
         url = reverse("project-conversations-list", kwargs={"project_uuid": uuid4()})
         response = api_client.get(url, **auth_headers)
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_filter_by_date_range_iso(self, api_client, project, auth_headers):
+        # Create conversations
+        # Conv 1: Before target date (Feb 4)
+        Conversation.objects.create(project=project, start_date="2026-02-04T12:00:00Z", end_date="2026-02-04T13:00:00Z")
+        # Conv 2: On target date (Feb 5)
+        Conversation.objects.create(project=project, start_date="2026-02-05T12:00:00Z", end_date="2026-02-10T13:00:00Z")
+        # Conv 3: After target date (Feb 6)
+        Conversation.objects.create(project=project, start_date="2026-02-06T12:00:00Z", end_date="2026-02-06T13:00:00Z")
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+
+        # Filter for 05-02-2026 using ISO format with timezone
+        # Start date: 2026-02-05T00:00:00Z
+        # End date: 2026-02-05T23:59:59Z
+        response = api_client.get(
+            f"{url}?start_date=2026-02-05T00:00:00Z&end_date=2026-02-05T23:59:59Z", **auth_headers
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 1
+        assert response.data["results"][0]["start_date"] == "2026-02-05T12:00:00Z"

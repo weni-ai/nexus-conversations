@@ -241,6 +241,13 @@ class ConversationSQSConsumer:
 
             event_type = attributes.get("event_type", {}).get("StringValue") or event_data.get("event_type")
 
+            # Fallback: if event_type is missing but ticket_uuid exists, treat as conversation.window
+            if not event_type and event_data.get("ticket_uuid"):
+                event_type = "conversation.window"
+                # If structure is flat (no 'data' wrapper), wrap it to match expected event format
+                if "data" not in event_data:
+                    event_data = {"correlation_id": event_data.get("correlation_id"), "data": event_data}
+
             # Route event to appropriate handler
             self._route_event(event_type, event_data)
 

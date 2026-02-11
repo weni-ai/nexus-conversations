@@ -7,7 +7,7 @@ No external endpoints are exposed.
 
 from django.contrib import admin
 from django.http import HttpResponse
-from django.urls import path
+from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
 from conversation_ms.views import ConversationViewSet, TopicsViewSet, SubTopicsViewSet
@@ -15,19 +15,11 @@ from conversation_ms.views import ConversationViewSet, TopicsViewSet, SubTopicsV
 conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
 
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", lambda _: HttpResponse("Nexus Conversations Microservice")),
-    path(
-        "api/v1/projects/<uuid:project_uuid>/conversations/",
-        conversation_list,
-        name="project-conversations-list",
-    ),
-    path(
-        "api/v1/projects/<uuid:project_uuid>/conversations/<uuid:pk>/",
-        conversation_detail,
-        name="project-conversations-detail",
-    ),
+    path("api/v1/", include("conversation_ms.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/docs/",

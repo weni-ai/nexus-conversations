@@ -36,7 +36,7 @@ if [[ "start" == "$1" ]]; then
     echo "Starting Conversation MS SQS Consumer"
     export PYTHONPATH="${APP_PATH}:${PYTHONPATH}"
     cd "${APP_PATH}"
-    do_gosu "${APP_USER}:${APP_GROUP}" exec python conversation_ms/main.py
+    do_gosu "${APP_USER}:${APP_GROUP}" exec python conversation_ms/main.py "${@:2}"
 elif [[ "web" == "$1" ]]; then
     echo "Starting Gunicorn Web Server"
     do_gosu "${APP_USER}:${APP_GROUP}" exec gunicorn nexus_conversations.wsgi:application \

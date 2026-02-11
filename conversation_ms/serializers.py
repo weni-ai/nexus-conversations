@@ -128,6 +128,7 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.DictField())
     def get_messages(self, obj):
+        request = self.context.get("request")
         view = self.context.get("view")
         request = self.context.get("request")
 

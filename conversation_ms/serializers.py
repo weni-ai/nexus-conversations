@@ -1,4 +1,5 @@
 import uuid
+import logging
 
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -12,6 +13,8 @@ from conversation_ms.models import (
 )
 from conversation_ms.pagination import MessagePagination
 from conversation_ms.repositories.message_repository import MessageRepository
+
+logger = logging.getLogger(__name__)
 
 
 class TopicSerializer(serializers.ModelSerializer):
@@ -67,13 +70,11 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.DictField())
     def get_messages(self, obj):
-        request = self.context.get("request")
         view = self.context.get("view")
 
         is_detail = getattr(view, "action", None) == "retrieve"
-        include_messages = request and request.query_params.get("include_messages") == "true"
 
-        if is_detail or include_messages:
+        if is_detail:
 
             def get_from_postgres():
                 try:

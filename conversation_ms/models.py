@@ -97,6 +97,7 @@ class Conversation(models.Model):
     uuid = models.UUIDField(primary_key=True, default=uuid4)
     created_at = models.DateTimeField(auto_now_add=True)
     contact_urn = models.CharField(max_length=255, null=True, blank=True)
+    ticket_uuid = models.UUIDField(null=True, blank=True)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="conversations")
     external_id = models.CharField(max_length=255, null=True, blank=True)
     start_date = models.DateTimeField(null=True, blank=True)
@@ -124,9 +125,7 @@ class ConversationClassification(models.Model):
     """
 
     uuid = models.UUIDField(primary_key=True, default=uuid4)
-    conversation = models.OneToOneField(
-        Conversation, on_delete=models.CASCADE, related_name="classification"
-    )
+    conversation = models.OneToOneField(Conversation, on_delete=models.CASCADE, related_name="classification")
     topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True)
     subtopic = models.ForeignKey(SubTopic, on_delete=models.SET_NULL, null=True, blank=True)
     confidence = models.FloatField(default=0.0)

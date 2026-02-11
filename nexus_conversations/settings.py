@@ -240,3 +240,4 @@ PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
 
 AWS_REGION = env.str("AWS_REGION", default="us-east-1")
+LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")

@@ -85,12 +85,19 @@ class ConversationSerializer(serializers.ModelSerializer):
                     normalized = []
                     for msg in msgs or []:
                         msg_uuid = msg.get("uuid") or str(uuid.uuid4())
+
+                        source = msg.get("source")
+                        if source == "user":
+                            source = "incoming"
+                        elif source in ["agent", "assistant"]:
+                            source = "outgoing"
+
                         normalized.append(
                             {
                                 "uuid": msg_uuid,
                                 "id": msg.get("id") or msg_uuid,
                                 "text": msg.get("text"),
-                                "source_type": msg.get("source"),
+                                "source": source,
                                 "created_at": msg.get("created_at"),
                             }
                         )
@@ -110,12 +117,19 @@ class ConversationSerializer(serializers.ModelSerializer):
                     normalized = []
                     for item in items:
                         msg_uuid = item.get("message_id")
+
+                        source = item.get("source")
+                        if source == "user":
+                            source = "incoming"
+                        elif source in ["agent", "assistant"]:
+                            source = "outgoing"
+
                         normalized.append(
                             {
                                 "uuid": msg_uuid,
                                 "id": msg_uuid,
                                 "text": item.get("text"),
-                                "source_type": item.get("source"),
+                                "source": source,
                                 "created_at": item.get("created_at"),
                             }
                         )

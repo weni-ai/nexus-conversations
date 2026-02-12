@@ -26,6 +26,8 @@ django.setup()
 
 # Import after django.setup() to avoid AppRegistryNotReady
 
+from django.conf import settings
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -94,6 +96,7 @@ def main():
         consumer = ConversationSQSConsumer(
             consumer_id=args.consumer_id,
             queue_url=queue_url,
+            region=settings.AWS_REGION,
         )
         signal_handler.consumer = consumer
 

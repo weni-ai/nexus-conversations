@@ -18,14 +18,16 @@ class ChannelConversationDTO:
     """Conversation data for a single channel."""
     channel_uuid: str
     date: date
-    resolution_count: ResolutionCountDTO = field(default_factory=ResolutionCountDTO)
+    status_counts: ResolutionCountDTO = field(
+        default_factory=ResolutionCountDTO
+    )
 
     def to_dict(self) -> dict:
         """Convert to dict with proper date serialization."""
         return {
             "channel_uuid": self.channel_uuid,
             "date": self.date.isoformat(),
-            "resolution_count": asdict(self.resolution_count),
+            "status_counts": asdict(self.status_counts),
         }
 
 
@@ -52,7 +54,7 @@ class SendConversationsRequestDTO:
             ChannelConversationDTO(
                 channel_uuid=channel_uuid,
                 date=date,
-                resolution_count=ResolutionCountDTO(
+                status_counts=ResolutionCountDTO(
                     resolved=resolved,
                     unresolved=unresolved,
                     has_chats_rooms=has_chats_rooms,

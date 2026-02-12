@@ -1,5 +1,6 @@
 # Celery tasks for conversation processing
 import logging
+import random
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
@@ -75,7 +76,7 @@ def classify_conversation_task(self, conversation_uuid: str):
 @shared_task(
     name="conversation_ms.tasks.send_billing_conversations",
     bind=True,
-    max_retries=3,
+    max_retries=5,
     default_retry_delay=60,
 )
 def send_billing_conversations(
@@ -146,8 +147,15 @@ def send_billing_conversations(
         }
 
     except Exception as exc:
-        logger.exception(f"Error sending billing conversations for project {project_uuid}")
-        raise self.retry(exc=exc)
+        logger.exception(
+            f"Error sending billing conversations for project {project_uuid}"
+        )
+        base_delay = 60
+        countdown = int(
+            random.uniform(0.5, 1.5)
+            * (base_delay * (2 ** self.request.retries))
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 def _parse_pre_calculated(

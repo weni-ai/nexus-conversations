@@ -13,6 +13,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nexus_conversations.settings")
 app = Celery("nexus_conversations")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
+
+app.conf.imports = ("conversation_ms.tasks",)
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
 task_create_missing_queues = True

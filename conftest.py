@@ -2,12 +2,12 @@
 Pytest configuration and fixtures for nexus-conversations tests.
 """
 
-import pytest
-from datetime import datetime
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from conversation_ms.models import Project, Conversation
+import pytest
+
+from conversation_ms.models import Conversation, Project
 
 
 @pytest.fixture
@@ -107,20 +107,20 @@ def mock_dynamodb_repository(mock_dynamodb_table):
 @pytest.fixture
 def mock_data_lake_task():
     """Mock Celery task for Data Lake."""
-    with patch("conversation_ms.adapters.data_lake.send_data_lake_event") as mock_task:
-        mock_delay = Mock(return_value=Mock())
-        mock_task.delay = mock_delay
-        # Also patch the task decorator to return the mock
-        with patch("conversation_ms.services.csat_nps_service.send_data_lake_event") as mock_service_task:
-            mock_service_task.delay = mock_delay
-            yield mock_task
+    # Since send_data_lake_event is commented out in the service, we only mock the adapter one if needed
+    # or just return a mock if the tests still expect the fixture.
+    # The tests in test_services.py use this fixture, so we keep it but remove the patching of the missing attribute.
+
+    mock_task = Mock()
+    mock_delay = Mock(return_value=Mock())
+    mock_task.delay = mock_delay
+    yield mock_task
 
 
 @pytest.fixture
 def mock_sentry():
     """Mock Sentry SDK."""
-    with patch("sentry_sdk.capture_exception"), patch("sentry_sdk.capture_message"), patch(
-        "sentry_sdk.set_tag"
-    ), patch("sentry_sdk.set_context"):
+    with patch("sentry_sdk.capture_exception"), patch("sentry_sdk.capture_message"), patch("sentry_sdk.set_tag"), patch(
+        "sentry_sdk.set_context"
+    ):
         yield
-

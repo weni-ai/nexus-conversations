@@ -176,7 +176,7 @@ class TestConversationService:
     def test_ensure_conversation_exists_with_channel_uuid(self, project, mock_sentry):
         """Test ensuring conversation exists with channel_uuid."""
         channel_uuid = uuid4()
-        with patch("conversation_ms.adapters.router_service.MainConversationService") as mock_main_service:
+        with patch("conversation_ms.services.conversation_service.MainConversationService") as mock_main_service:
             mock_conversation = Mock(spec=Conversation)
             mock_main_service.return_value.ensure_conversation_exists.return_value = mock_conversation
 
@@ -185,6 +185,7 @@ class TestConversationService:
                 project_uuid=str(project.uuid),
                 contact_urn="whatsapp:+5511999999999",
                 contact_name="Test Contact",
+                msg_created_at="2026-02-20T12:00:00Z",
                 channel_uuid=str(channel_uuid),
             )
 
@@ -198,14 +199,28 @@ class TestConversationService:
             project_uuid=str(project.uuid),
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
+            msg_created_at="2026-02-20T12:00:00Z",
             channel_uuid=None,
+        )
+
+        assert result is None
+
+    def test_ensure_conversation_exists_without_msg_created_at(self, project, mock_sentry):
+        """Test ensuring conversation exists without msg_created_at."""
+        service = ConversationService()
+        result = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Test Contact",
+            msg_created_at=None,
+            channel_uuid=str(uuid4()),
         )
 
         assert result is None
 
     def test_ensure_conversation_exists_handles_exception(self, project, mock_sentry):
         """Test that exceptions in ensure_conversation_exists are properly handled."""
-        with patch("conversation_ms.adapters.router_service.MainConversationService") as mock_main_service:
+        with patch("conversation_ms.services.conversation_service.MainConversationService") as mock_main_service:
             mock_main_service.return_value.ensure_conversation_exists.side_effect = Exception("Service error")
 
             service = ConversationService()
@@ -214,6 +229,7 @@ class TestConversationService:
                     project_uuid=str(project.uuid),
                     contact_urn="whatsapp:+5511999999999",
                     contact_name="Test Contact",
+                    msg_created_at="2026-02-20T12:00:00Z",
                     channel_uuid=str(uuid4()),
                 )
 
@@ -224,7 +240,7 @@ class TestCSATNPSService:
 
     def test_process_csat_event_success(self, conversation, mock_sentry):
         """Test successful processing of CSAT event."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
         ) as mock_settings:
             mock_settings.AGENT_UUID_CSAT = str(uuid4())
@@ -259,7 +275,7 @@ class TestCSATNPSService:
         conversation.end_date = pendulum.now() + timedelta(days=1)
         conversation.save()
 
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
         ) as mock_settings:
             mock_settings.AGENT_UUID_CSAT = str(uuid4())
@@ -294,7 +310,7 @@ class TestCSATNPSService:
         conversation.end_date = pendulum.now() + timedelta(days=1)
         conversation.save()
 
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
         ) as mock_settings:
             mock_settings.AGENT_UUID_NPS = str(uuid4())
@@ -335,7 +351,7 @@ class TestCSATNPSService:
 
     def test_process_nps_event_success(self, conversation, mock_sentry):
         """Test successful processing of NPS event."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update, patch(
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update, patch(
             "django.conf.settings"
         ) as mock_settings:
             mock_settings.AGENT_UUID_NPS = str(uuid4())
@@ -376,7 +392,7 @@ class TestCSATNPSService:
 
     def test_process_csat_event_handles_exception(self, conversation, mock_sentry):
         """Test that exceptions in process_csat_event are properly handled."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update:
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update:
             mock_update.side_effect = Exception("Update error")
 
             service = CSATNPSService()
@@ -396,7 +412,7 @@ class TestCSATNPSService:
 
     def test_process_nps_event_handles_exception(self, conversation, mock_sentry):
         """Test that exceptions in process_nps_event are properly handled."""
-        with patch("conversation_ms.adapters.conversation.update_conversation_data") as mock_update:
+        with patch("conversation_ms.services.csat_nps_service.update_conversation_data") as mock_update:
             mock_update.side_effect = Exception("Update error")
 
             service = CSATNPSService()

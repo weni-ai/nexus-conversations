@@ -35,7 +35,7 @@ class ClassificationService:
         messages = None
         if conversation.has_chats_room:
             # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
-            resolution = ResolutionEntities.HAS_CHAT_ROOM
+            resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
             logger.info(
                 f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
             )
@@ -50,13 +50,14 @@ class ClassificationService:
 
         # Update conversation resolution
         conversation.resolution = resolution
-        conversation.save()
+        conversation.save(update_fields=["resolution"])
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
             messages = self._get_conversation_messages(conversation)
 
         if not messages:
+            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
             return None
 
         return self._classify_topics(conversation, messages)
@@ -78,8 +79,8 @@ class ClassificationService:
             if not response:
                 return str(ResolutionEntities.UNCLASSIFIED)
 
-            body = response.get("body", {})
-            result = body.get("result")
+            # _invoke_lambda already extracts 'body' if present
+            result = response.get("result")
 
             if result is None:
                 logger.warning(f"[ClassificationService] Resolution lambda returned None for {conversation.uuid}")
@@ -118,8 +119,8 @@ class ClassificationService:
             if not response:
                 return None
 
-            body = response.get("body", {})
-            return self._save_classification(conversation, body)
+            # _invoke_lambda already extracts 'body' if present
+            return self._save_classification(conversation, response)
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error classifying topics for {conversation.uuid}: {e}")
@@ -170,6 +171,9 @@ class ClassificationService:
         Serialize topics and subtopics for the Lambda context.
         """
         topics = Topic.objects.filter(project=project, is_active=True)
+        if not topics.exists():
+            logger.warning(f"[ClassificationService] No active topics found for project {project.uuid}")
+
         payload = []
         for topic in topics:
             subtopics = []

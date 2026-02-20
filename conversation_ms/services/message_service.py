@@ -28,10 +28,12 @@ class MessageService:
             )
 
             contact_name = event.message.get("contact_name", "")
+            msg_created_at = event.message.get("created_at")
             conversation = self.conversation_service.ensure_conversation_exists(
                 project_uuid=event.project_uuid,
                 contact_urn=event.contact_urn,
                 contact_name=contact_name,
+                msg_created_at=msg_created_at,
                 channel_uuid=event.channel_uuid,
             )
 
@@ -97,10 +99,12 @@ class MessageService:
             )
 
             contact_name = event.message.get("contact_name", "")
+            msg_created_at = event.message.get("created_at")
             conversation = self.conversation_service.ensure_conversation_exists(
                 project_uuid=event.project_uuid,
                 contact_urn=event.contact_urn,
                 contact_name=contact_name,
+                msg_created_at=msg_created_at,
                 channel_uuid=event.channel_uuid,
             )
 

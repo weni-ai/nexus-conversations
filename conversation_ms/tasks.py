@@ -22,11 +22,12 @@ from conversation_ms.services.resolution_counter import (
     ChannelResolutionCount,
     get_resolution_counter,
 )
+from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(
+@celery_app.task(
     name="conversation_ms.tasks.classify_conversation_task",
     bind=True,
     max_retries=5,
@@ -73,7 +74,7 @@ def classify_conversation_task(self, conversation_uuid: str):
         raise self.retry(exc=e, countdown=countdown)
 
 
-@shared_task(
+@celery_app.task(
     name="conversation_ms.tasks.send_billing_conversations",
     bind=True,
     max_retries=5,
@@ -221,7 +222,7 @@ def _build_request_dto(
     return request_dto
 
 
-@shared_task(
+@celery_app.task(
     name="conversation_ms.tasks.close_daily_conversations_task",
     bind=True,
     max_retries=3,
@@ -581,7 +582,7 @@ def _process_project_conversations(project_uuid: str) -> int:
     return conversations_closed
 
 
-@shared_task(name="conversation_ms.tasks.reclassify_unclassified_conversations")
+@celery_app.task(name="conversation_ms.tasks.reclassify_unclassified_conversations")
 def reclassify_unclassified_conversations():
     """
     Periodic task to retry classification for conversations marked as Unclassified.

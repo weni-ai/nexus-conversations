@@ -1,6 +1,5 @@
 # Client responsible for billing internal operations
 import requests
-
 from django.conf import settings
 
 from conversation_ms.clients.dtos import SendConversationsRequestDTO
@@ -43,4 +42,3 @@ class BillingClient:
         )
         response.raise_for_status()
         return response.json()
-

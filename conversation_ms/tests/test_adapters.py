@@ -121,7 +121,7 @@ class TestMainConversationService:
         """Test that migration errors are handled gracefully when closing multiple conversations."""
         channel_uuid = uuid4()
         # Create multiple conversations in progress
-        _old_conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
@@ -450,7 +450,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_triggers_migration(self, project):
         """Test that updating resolution triggers message migration."""
         channel_uuid = uuid4()
-        _conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -473,7 +473,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_no_migration_when_still_in_progress(self, project):
         """Test that migration is not triggered when conversation is still in progress."""
         channel_uuid = uuid4()
-        _conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -621,7 +621,7 @@ class TestUpdateConversationData:
     def test_update_conversation_data_handles_migration_exception(self, project):
         """Test that exceptions during migration are handled gracefully."""
         channel_uuid = uuid4()
-        _conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,

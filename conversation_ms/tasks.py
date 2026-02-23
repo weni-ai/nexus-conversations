@@ -147,7 +147,7 @@ def classify_conversation_task(self, conversation_uuid: str):
 
         # Custom backoff: 1st retry immediate (0s), then +20s each time (20s, 40s, 60s...)
         countdown = self.request.retries * 20
-        raise self.retry(exc=e, countdown=countdown)
+        raise self.retry(exc=e, countdown=countdown) from e
 
 
 @celery_app.task(
@@ -225,7 +225,7 @@ def send_billing_conversations(
 
     except Exception as exc:
         logger.exception(f"Error sending billing conversations for project {project_uuid}")
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
 
 def _parse_pre_calculated(
@@ -821,7 +821,71 @@ def close_daily_conversations_task(
 
     except Exception as exc:
         logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
+
+
+def _process_project_daily_closure(
+    project_data: dict,
+    fallback_timezone: str,
+    now_utc: pendulum.DateTime,
+    force_close: bool,
+) -> int:
+    """
+    Handle daily closure for a single project.
+
+    Args:
+        project_data: Project data dictionary
+        fallback_timezone: Fallback timezone string
+        now_utc: Current UTC time
+        force_close: Whether to force closure
+
+    Returns:
+        Number of conversations closed
+    """
+    project_uuid = project_data.get("uuid")
+    project_timezone = project_data.get("timezone") or fallback_timezone
+
+    if not project_uuid:
+        logger.warning(f"[CloseDailyConversationsTask] Project data missing UUID, skipping. Data: {project_data}")
+        return 0
+
+    try:
+        tz = pendulum.timezone(project_timezone)
+    except Exception as e:
+        logger.warning(
+            f"[CloseDailyConversationsTask] Invalid timezone '{project_timezone}' for project {project_uuid}, "
+            f"using fallback. Error: {e}"
+        )
+        tz = pendulum.timezone(fallback_timezone)
+
+    # Get current time in project timezone
+    now_in_tz = now_utc.in_timezone(tz)
+
+    # Check if day has ended (23:59:59 has passed)
+    # Day has ended if we're past midnight (00:00:01 or later)
+    # This means the previous day's 23:59:59 has passed
+    day_ended = now_in_tz.hour == 0 and now_in_tz.minute >= 0 and now_in_tz.second >= 1
+
+    if day_ended or force_close:
+        # Day has ended, process open conversations
+        logger.info(
+            f"[CloseDailyConversationsTask] Day ended for project {project_uuid}, processing open conversations. "
+            f"Timezone: {project_timezone}, Current time: {now_in_tz.isoformat()}"
+        )
+
+        project_conversations_closed = _process_project_conversations(project_uuid)
+
+        logger.info(
+            f"[CloseDailyConversationsTask] Closed {project_conversations_closed} conversations "
+            f"for project {project_uuid}"
+        )
+        return project_conversations_closed
+    else:
+        logger.debug(
+            f"[CloseDailyConversationsTask] Day not ended yet for project {project_uuid}. "
+            f"Current time: {now_in_tz.isoformat()}"
+        )
+        return 0
 
 
 def _is_conversation_already_processed(
@@ -995,8 +1059,7 @@ def _process_project_conversations(
         project = Project.objects.get(uuid=project_uuid)
     except Project.DoesNotExist:
         logger.warning(
-            f"[CloseDailyConversationsTask] Project {project_uuid} not found in database, skipping conversations",
-            extra={"project_uuid": project_uuid},
+            f"[CloseDailyConversationsTask] Project {project_uuid} not found in database, skipping conversations"
         )
         return 0
 

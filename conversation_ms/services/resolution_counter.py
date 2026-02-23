@@ -51,22 +51,15 @@ class DatabaseResolutionCounter(ResolutionCounterBackend):
         channel_uuid: str,
         target_date: date,
     ) -> ChannelResolutionCount:
-        counts = (
-            Conversation.objects
-            .filter(
-                project_id=project_uuid,
-                channel_uuid=channel_uuid,
-                created_at__date=target_date,
-            )
-            .aggregate(
-                resolved=Count("uuid", filter=Q(resolution="0")),
-                unresolved=Count("uuid", filter=Q(resolution="1")),
-                has_chats_rooms=Count(
-                    "uuid",
-                    filter=Q(resolution="4") | Q(has_chats_room=True)
-                ),
-                unclassified=Count("uuid", filter=Q(resolution="3")),
-            )
+        counts = Conversation.objects.filter(
+            project_id=project_uuid,
+            channel_uuid=channel_uuid,
+            created_at__date=target_date,
+        ).aggregate(
+            resolved=Count("uuid", filter=Q(resolution="0")),
+            unresolved=Count("uuid", filter=Q(resolution="1")),
+            has_chats_rooms=Count("uuid", filter=Q(resolution="4") | Q(has_chats_room=True)),
+            unclassified=Count("uuid", filter=Q(resolution="3")),
         )
 
         return ChannelResolutionCount(
@@ -84,8 +77,7 @@ class DatabaseResolutionCounter(ResolutionCounterBackend):
     ) -> List[ChannelResolutionCount]:
         """Single optimized query with GROUP BY."""
         channel_counts = (
-            Conversation.objects
-            .filter(
+            Conversation.objects.filter(
                 project_id=project_uuid,
                 channel_uuid__isnull=False,
                 created_at__date=target_date,
@@ -94,10 +86,7 @@ class DatabaseResolutionCounter(ResolutionCounterBackend):
             .annotate(
                 resolved=Count("uuid", filter=Q(resolution="0")),
                 unresolved=Count("uuid", filter=Q(resolution="1")),
-                has_chats_rooms=Count(
-                    "uuid",
-                    filter=Q(resolution="4") | Q(has_chats_room=True)
-                ),
+                has_chats_rooms=Count("uuid", filter=Q(resolution="4") | Q(has_chats_room=True)),
                 unclassified=Count("uuid", filter=Q(resolution="3")),
             )
         )

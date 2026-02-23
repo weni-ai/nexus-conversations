@@ -1,5 +1,6 @@
 import logging
 
+import pendulum
 import sentry_sdk
 
 from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
@@ -29,6 +30,19 @@ class MessageService:
 
             contact_name = event.message.get("contact_name", "")
             msg_created_at = event.message.get("created_at")
+
+            # Handle missing created_at for dummy messages (CSAT, NPS, etc)
+            # Dummy messages have empty text and empty created_at
+            if not msg_created_at and not event.message.get("text"):
+                msg_created_at = pendulum.now("UTC").to_iso8601_string()
+                logger.info(
+                    "[MessageService] Generating timestamp for dummy message "
+                    "project_uuid=%s contact_urn=%s correlation_id=%s",
+                    event.project_uuid,
+                    event.contact_urn,
+                    event.correlation_id,
+                )
+
             conversation = self.conversation_service.ensure_conversation_exists(
                 project_uuid=event.project_uuid,
                 contact_urn=event.contact_urn,

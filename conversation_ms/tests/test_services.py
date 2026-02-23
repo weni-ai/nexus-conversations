@@ -39,20 +39,47 @@ class TestMessageService:
             # Verify message repository was called
             mock_msg_repo.return_value.save_received_message.assert_called_once()
 
-    def test_process_message_received_no_conversation(self, sample_sqs_received_event, mock_sentry):
-        """Test processing message.received when conversation is not created."""
+    def test_process_message_received_dummy_message_no_created_at(self, sample_sqs_received_event, mock_sentry):
+        """Test processing dummy message (empty text) with missing created_at."""
+        sample_sqs_received_event["data"]["message"]["text"] = ""
+        sample_sqs_received_event["data"]["message"]["created_at"] = ""
+
         with patch("conversation_ms.services.message_service.ConversationService") as mock_conv_service, patch(
             "conversation_ms.services.message_service.MessageRepository"
         ) as mock_msg_repo:
-            # Setup mocks - conversation service returns None
-            mock_conv_service.return_value.ensure_conversation_exists.return_value = None
+            # Setup mocks
+            mock_conversation = Mock(spec=Conversation)
+            mock_conversation.uuid = uuid4()
+            mock_conv_service.return_value.ensure_conversation_exists.return_value = mock_conversation
             mock_msg_repo.return_value.save_received_message = Mock()
 
             service = MessageService()
             service.process_message_received(sample_sqs_received_event)
 
-            # Verify message repository was NOT called
+            # Verify ensure_conversation_exists was called with a generated timestamp (not empty)
+            call_args = mock_conv_service.return_value.ensure_conversation_exists.call_args
+            assert call_args is not None
+            assert call_args[1]["msg_created_at"]  # Should be truthy (generated timestamp)
+
+            # Verify dummy message was NOT saved
             mock_msg_repo.return_value.save_received_message.assert_not_called()
+
+    def test_process_message_received_real_message_no_created_at(self, sample_sqs_received_event, mock_sentry):
+        """Test processing real message with missing created_at (should fail)."""
+        sample_sqs_received_event["data"]["message"]["text"] = "Real message"
+        sample_sqs_received_event["data"]["message"]["created_at"] = ""
+
+        with patch("conversation_ms.services.message_service.ConversationService") as mock_conv_service:
+            # Setup mocks - conversation service returns None because date is missing (original behavior)
+            mock_conv_service.return_value.ensure_conversation_exists.return_value = None
+
+            service = MessageService()
+            service.process_message_received(sample_sqs_received_event)
+
+            # Verify ensure_conversation_exists was called with empty timestamp (not generated)
+            call_args = mock_conv_service.return_value.ensure_conversation_exists.call_args
+            assert call_args is not None
+            assert not call_args[1]["msg_created_at"]  # Should be empty/None
 
     def test_process_message_sent_success(self, sample_sqs_sent_event, mock_dynamodb_repository, mock_sentry):
         """Test successful processing of message.sent event."""
@@ -208,15 +235,21 @@ class TestConversationService:
     def test_ensure_conversation_exists_without_msg_created_at(self, project, mock_sentry):
         """Test ensuring conversation exists without msg_created_at."""
         service = ConversationService()
-        result = service.ensure_conversation_exists(
-            project_uuid=str(project.uuid),
-            contact_urn="whatsapp:+5511999999999",
-            contact_name="Test Contact",
-            msg_created_at=None,
-            channel_uuid=str(uuid4()),
-        )
 
-        assert result is None
+        # Should return None because msg_created_at is required
+        with patch("conversation_ms.services.conversation_service.MainConversationService") as mock_main_service:
+            result = service.ensure_conversation_exists(
+                project_uuid=str(project.uuid),
+                contact_urn="whatsapp:+5511999999999",
+                contact_name="Test Contact",
+                msg_created_at=None,
+                channel_uuid=str(uuid4()),
+            )
+
+            assert result is None
+
+            # Verify MainConversationService was NOT called
+            mock_main_service.return_value.ensure_conversation_exists.assert_not_called()
 
     def test_ensure_conversation_exists_handles_exception(self, project, mock_sentry):
         """Test that exceptions in ensure_conversation_exists are properly handled."""

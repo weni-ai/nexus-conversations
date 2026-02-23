@@ -114,8 +114,8 @@ class TestComplexFilters:
         base_url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
         params = {
             "page": 1,
-            "start_date": "04-02-2026",
-            "end_date": "10-02-2026",
+            "start_date": "2026-02-04",
+            "end_date": "2026-02-10",
             "resolution": "0,1,4,2,3",
             "csat": "5,4,3,2,1",
             "topics": "Atendimento,Produto,Pagamento,Entrega,Reclamação",

@@ -3,13 +3,49 @@ from typing import Optional
 
 import sentry_sdk
 
+from conversation_ms.adapters.router_service import MainConversationService
+
 logger = logging.getLogger(__name__)
 
 
 class ConversationService:
     def ensure_conversation_exists(
-        self, project_uuid: str, contact_urn: str, contact_name: str, channel_uuid: Optional[str] = None
+        self,
+        project_uuid: str,
+        contact_urn: str,
+        contact_name: str,
+        msg_created_at: str,
+        channel_uuid: Optional[str] = None,
     ) -> Optional[object]:
+        if not msg_created_at:
+            sentry_sdk.set_tag("project_uuid", project_uuid)
+            sentry_sdk.set_tag("contact_urn", contact_urn)
+            sentry_sdk.set_context(
+                "conversation_creation",
+                {
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                    "contact_name": contact_name,
+                    "channel_uuid": channel_uuid,
+                    "msg_created_at": msg_created_at,
+                    "method": "ensure_conversation_exists",
+                    "reason": "msg_created_at is None or empty",
+                },
+            )
+            sentry_sdk.capture_message(
+                "Conversation not created: msg_created_at is None or empty (ConversationService)", level="warning"
+            )
+            logger.warning(
+                "[ConversationService] Conversation not created: msg_created_at is None or empty",
+                extra={
+                    "project_uuid": project_uuid,
+                    "contact_urn": contact_urn,
+                    "contact_name": contact_name,
+                    "channel_uuid": channel_uuid,
+                },
+            )
+            return None
+
         if not channel_uuid:
             sentry_sdk.set_tag("project_uuid", project_uuid)
             sentry_sdk.set_tag("contact_urn", contact_urn)
@@ -38,12 +74,14 @@ class ConversationService:
             return None
 
         try:
-            from conversation_ms.adapters.router_service import MainConversationService
-
             main_service = MainConversationService()
 
             conversation = main_service.ensure_conversation_exists(
-                project_uuid=project_uuid, contact_urn=contact_urn, contact_name=contact_name, channel_uuid=channel_uuid
+                project_uuid=project_uuid,
+                contact_urn=contact_urn,
+                contact_name=contact_name,
+                channel_uuid=channel_uuid,
+                msg_created_at=msg_created_at,
             )
 
             if conversation:

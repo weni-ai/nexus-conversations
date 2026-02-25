@@ -116,7 +116,7 @@ class ConversationSerializer(serializers.ModelSerializer):
                 normalized.append(
                     {
                         "uuid": msg_uuid,
-                        "id": msg_uuid,
+                        "id": item.get("id"),
                         "text": item.get("text"),
                         "source": source,
                         "created_at": item.get("created_at"),

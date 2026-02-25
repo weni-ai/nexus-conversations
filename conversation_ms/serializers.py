@@ -140,14 +140,19 @@ class ConversationSerializer(serializers.ModelSerializer):
             else:
                 messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
 
-            # Sort by created_at ascending (oldest first)
-            messages.sort(key=lambda x: x.get("created_at") or "", reverse=False)
+            # Sort by created_at descending (newest first) for pagination
+            messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
-            # Handle timezone if requested
+            # Handle timezone
             timezone_name = request.query_params.get("timezone")
             if timezone_name:
                 try:
-                    target_tz = pendulum.timezone(timezone_name)
+                    if timezone_name.startswith("+") or timezone_name.startswith("-"):
+                        dummy = pendulum.parse(f"2024-01-01T00:00:00{timezone_name}")
+                        target_tz = dummy.timezone
+                    else:
+                        target_tz = pendulum.timezone(timezone_name)
+
                     for msg in messages:
                         if msg.get("created_at"):
                             try:
@@ -163,6 +168,11 @@ class ConversationSerializer(serializers.ModelSerializer):
             # Paginate
             paginator = MessagePagination()
             paginated_messages = paginator.paginate_queryset(messages, request)
+
+            # Sort paginated messages ascending (oldest first) for display
+            if paginated_messages:
+                paginated_messages.sort(key=lambda x: x.get("created_at") or "", reverse=False)
+
             return paginator.get_paginated_response(paginated_messages)
 
         return None

@@ -50,7 +50,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             queryset = queryset.select_related("messages_data")
 
-        return queryset.order_by("-start_date", "-uuid")
+        return queryset.order_by("-created_at", "-uuid")
 
 
 class TopicsViewSet(ModelViewSet):

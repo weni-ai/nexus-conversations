@@ -139,8 +139,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             else:
                 messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
 
-            # Sort by created_at descending (newest first)
-            messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+            # Sort by created_at ascending (oldest first)
+            messages.sort(key=lambda x: x.get("created_at") or "", reverse=False)
 
             # Paginate
             paginator = MessagePagination()

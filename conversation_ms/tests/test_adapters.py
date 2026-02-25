@@ -36,7 +36,7 @@ class TestMainConversationService:
         assert conversation.contact_urn == "whatsapp:+5511999999999"
         assert conversation.contact_name == "Test Contact"
         assert str(conversation.channel_uuid) == str(channel_uuid)
-        assert conversation.resolution == 2  # IN_PROGRESS
+        assert conversation.resolution == "2"  # IN_PROGRESS
         assert conversation.start_date is not None
         assert conversation.end_date is not None
 
@@ -48,7 +48,7 @@ class TestMainConversationService:
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
 
         service = MainConversationService()
@@ -89,14 +89,14 @@ class TestMainConversationService:
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
         new_conversation = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
 
         with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
@@ -126,14 +126,14 @@ class TestMainConversationService:
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
         new_conversation = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
 
         with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
@@ -190,7 +190,7 @@ class TestDynamoMessageRepository:
                 contact_urn="whatsapp:+5511999999999",
                 message_data=message_data,
                 channel_uuid=str(uuid4()),
-                resolution_status=2,
+                resolution_status="2",
                 ttl_hours=48,
             )
 

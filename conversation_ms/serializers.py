@@ -1,6 +1,7 @@
 import logging
 import uuid
 
+import pendulum
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -141,6 +142,23 @@ class ConversationSerializer(serializers.ModelSerializer):
 
             # Sort by created_at ascending (oldest first)
             messages.sort(key=lambda x: x.get("created_at") or "", reverse=False)
+
+            # Handle timezone if requested
+            timezone_name = request.query_params.get("timezone")
+            if timezone_name:
+                try:
+                    target_tz = pendulum.timezone(timezone_name)
+                    for msg in messages:
+                        if msg.get("created_at"):
+                            try:
+                                # Parse and convert to target timezone
+                                dt = pendulum.parse(msg["created_at"])
+                                dt_in_tz = dt.in_tz(target_tz)
+                                msg["created_at"] = dt_in_tz.isoformat()
+                            except Exception:
+                                pass  # Keep original if parsing fails
+                except Exception:
+                    pass  # Invalid timezone, ignore
 
             # Paginate
             paginator = MessagePagination()

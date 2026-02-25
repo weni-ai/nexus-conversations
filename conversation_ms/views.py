@@ -8,6 +8,7 @@ from rest_framework.viewsets import ModelViewSet
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
 from conversation_ms.models import Conversation, Project, SubTopic, Topic
+from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import ConversationSerializer, SubTopicsSerializer, TopicsSerializer
 
 
@@ -28,6 +29,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     serializer_class = ConversationSerializer
+    pagination_class = ConversationCursorPagination
     authentication_classes = [InternalTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]

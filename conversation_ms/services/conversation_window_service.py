@@ -79,14 +79,14 @@ class ConversationWindowService:
 
             # Determine resolution based on has_chats_room
             if event.has_chats_room:
-                resolution = str(ResolutionEntities.HAS_CHAT_ROOM)  # "4"
+                resolution = ResolutionEntities.HAS_CHAT_ROOM  # "4"
             else:
                 # Keep existing resolution if conversation exists, otherwise IN_PROGRESS
-                resolution = conversation.resolution if conversation else str(ResolutionEntities.IN_PROGRESS)
+                resolution = conversation.resolution if conversation else ResolutionEntities.IN_PROGRESS
 
             # Check if conversation is being closed (resolution changed from IN_PROGRESS to something else)
-            was_in_progress = conversation and str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS)
-            will_be_closed = str(resolution) != str(ResolutionEntities.IN_PROGRESS)
+            was_in_progress = conversation and str(conversation.resolution) == ResolutionEntities.IN_PROGRESS
+            will_be_closed = str(resolution) != ResolutionEntities.IN_PROGRESS
 
             if conversation:
                 # Update existing conversation

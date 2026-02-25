@@ -2,10 +2,11 @@
 Tests for conversation_ms models.
 """
 
-import pytest
 from uuid import uuid4
 
-from conversation_ms.models import Project, Conversation, ConversationMessages
+import pytest
+
+from conversation_ms.models import Conversation, ConversationMessages, Project
 
 
 @pytest.mark.django_db
@@ -69,21 +70,21 @@ class TestConversation:
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=uuid4(),
-            resolution=0,  # RESOLVED
+            resolution="0",  # RESOLVED
         )
-        assert conversation.resolution == 0
+        assert conversation.resolution == "0"
 
-        conversation.resolution = 1  # UNRESOLVED
+        conversation.resolution = "1"  # UNRESOLVED
         conversation.save()
-        assert conversation.resolution == 1
+        assert conversation.resolution == "1"
 
-        conversation.resolution = 2  # IN_PROGRESS
+        conversation.resolution = "2"  # IN_PROGRESS
         conversation.save()
-        assert conversation.resolution == 2
+        assert conversation.resolution == "2"
 
-        conversation.resolution = 3  # UNCLASSIFIED
+        conversation.resolution = "3"  # UNCLASSIFIED
         conversation.save()
-        assert conversation.resolution == 3
+        assert conversation.resolution == "3"
 
     def test_conversation_csat_choices(self, project):
         """Test conversation CSAT choices."""
@@ -102,7 +103,7 @@ class TestConversation:
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=uuid4(),
         )
-        assert conversation.resolution == 2  # IN_PROGRESS
+        assert conversation.resolution == "2"  # IN_PROGRESS
 
 
 @pytest.mark.django_db
@@ -115,9 +116,7 @@ class TestConversationMessages:
             {"text": "Hello", "source": "incoming", "created_at": "2024-01-01T12:00:00"},
             {"text": "Hi there", "source": "outgoing", "created_at": "2024-01-01T12:01:00"},
         ]
-        conversation_messages = ConversationMessages.objects.create(
-            conversation=conversation, messages=messages_data
-        )
+        conversation_messages = ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
         assert conversation_messages.conversation == conversation
         assert len(conversation_messages.messages) == 2
         assert conversation_messages.messages[0]["text"] == "Hello"
@@ -152,4 +151,3 @@ class TestConversationMessages:
         )
         assert created is False
         assert len(conversation_messages.messages) == 2
-

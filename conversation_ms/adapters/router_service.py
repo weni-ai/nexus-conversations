@@ -194,7 +194,7 @@ class MainConversationService:
             channel_uuid=channel_uuid,
             start_date=start_date,
             end_date=end_date,
-            resolution=2,  # IN_PROGRESS
+            resolution="2",  # IN_PROGRESS
         )
 
         return conversation

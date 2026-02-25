@@ -5,14 +5,14 @@ Copied from router.repositories.entities for standalone microservice.
 
 
 class ResolutionEntities:
-    RESOLVED = 0
-    UNRESOLVED = 1
-    IN_PROGRESS = 2
-    UNCLASSIFIED = 3
-    HAS_CHAT_ROOM = 4
+    RESOLVED = "0"
+    UNRESOLVED = "1"
+    IN_PROGRESS = "2"
+    UNCLASSIFIED = "3"
+    HAS_CHAT_ROOM = "4"
 
     @staticmethod
-    def resolution_mapping(resolution_status: int) -> tuple:
+    def resolution_mapping(resolution_status: str) -> tuple:
         resolution_choices = {
             ResolutionEntities.RESOLVED: (ResolutionEntities.RESOLVED, "Resolved"),
             ResolutionEntities.UNRESOLVED: (ResolutionEntities.UNRESOLVED, "Unresolved"),
@@ -24,11 +24,11 @@ class ResolutionEntities:
         return resolution_choices.get(resolution_status, (ResolutionEntities.UNCLASSIFIED, "Unclassified"))
 
     @staticmethod
-    def convert_resolution_string_to_int(resolution_string: str) -> int:
+    def convert_resolution_string_to_int(resolution_string: str) -> str:
         if isinstance(resolution_string, int):
-            return resolution_string
+            return str(resolution_string)
         if str(resolution_string).isdigit():
-            return int(resolution_string)
+            return str(resolution_string)
 
         resolution_mapping = {
             "resolved": ResolutionEntities.RESOLVED,

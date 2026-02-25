@@ -79,19 +79,19 @@ class Conversation(models.Model):
     """
 
     RESOLUTION_CHOICES = [
-        (0, "Resolved"),
-        (1, "Unresolved"),
-        (2, "In Progress"),
-        (3, "Unclassified"),
-        (4, "Has Chat Room"),
+        ("0", "Resolved"),
+        ("1", "Unresolved"),
+        ("2", "In Progress"),
+        ("3", "Unclassified"),
+        ("4", "Has Chat Room"),
     ]
 
     CSAT_CHOICES = [
-        (1, "Very unsatisfied"),
-        (2, "Unatisfied"),
-        (3, "Neutral"),
-        (4, "Satisfied"),
-        (5, "Very satisfied"),
+        ("1", "Very unsatisfied"),
+        ("2", "Unsatisfied"),
+        ("3", "Neutral"),
+        ("4", "Satisfied"),
+        ("5", "Very satisfied"),
     ]
 
     uuid = models.UUIDField(primary_key=True, default=uuid4)
@@ -107,7 +107,7 @@ class Conversation(models.Model):
     channel_uuid = models.UUIDField(null=True, blank=True)
     nps = models.IntegerField(null=True, blank=True)
     csat = models.CharField(max_length=255, choices=CSAT_CHOICES, null=True, blank=True)
-    resolution = models.CharField(max_length=255, choices=RESOLUTION_CHOICES, default=2)
+    resolution = models.CharField(max_length=255, choices=RESOLUTION_CHOICES, default="2")
 
     class Meta:
         db_table = "intelligences_conversation"

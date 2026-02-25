@@ -2,8 +2,6 @@
 Tests for conversation_ms entities.
 """
 
-import pytest
-
 from conversation_ms.adapters.entities import ResolutionEntities
 
 
@@ -12,11 +10,11 @@ class TestResolutionEntities:
 
     def test_resolution_mapping_all_statuses(self):
         """Test resolution_mapping for all statuses."""
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.RESOLVED) == (0, "Resolved")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNRESOLVED) == (1, "Unresolved")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.IN_PROGRESS) == (2, "In Progress")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNCLASSIFIED) == (3, "Unclassified")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.HAS_CHAT_ROOM) == (4, "Has Chat Room")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.RESOLVED) == ("0", "Resolved")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNRESOLVED) == ("1", "Unresolved")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.IN_PROGRESS) == ("2", "In Progress")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNCLASSIFIED) == ("3", "Unclassified")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.HAS_CHAT_ROOM) == ("4", "Has Chat Room")
 
     def test_resolution_mapping_invalid_status(self):
         """Test resolution_mapping with invalid status."""
@@ -40,4 +38,3 @@ class TestResolutionEntities:
         """Test convert_resolution_string_to_int with invalid string."""
         result = ResolutionEntities.convert_resolution_string_to_int("invalid")
         assert result == ResolutionEntities.IN_PROGRESS  # Default
-

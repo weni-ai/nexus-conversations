@@ -40,14 +40,14 @@ class TestConversationEndpoint:
         Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+1234567890",
-            resolution=0,  # Resolved
+            resolution="0",  # Resolved
             start_date="2024-01-01T10:00:00Z",
             end_date="2024-01-01T10:30:00Z",
         )
         Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+0987654321",
-            resolution=2,  # In Progress
+            resolution="2",  # In Progress
             start_date="2024-01-02T10:00:00Z",
         )
 
@@ -59,8 +59,8 @@ class TestConversationEndpoint:
         assert len(response.data["results"]) == 2
 
     def test_filter_conversations_by_status(self, api_client, project, auth_headers):
-        Conversation.objects.create(project=project, resolution=0)  # Resolved
-        Conversation.objects.create(project=project, resolution=2)  # In Progress
+        Conversation.objects.create(project=project, resolution="0")  # Resolved
+        Conversation.objects.create(project=project, resolution="2")  # In Progress
 
         url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
         response = api_client.get(f"{url}?status=0", **auth_headers)
@@ -72,7 +72,7 @@ class TestConversationEndpoint:
         assert str(response.data["results"][0]["resolution"]) == "0"
 
     def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
-        conversation = Conversation.objects.create(project=project, resolution=0)
+        conversation = Conversation.objects.create(project=project, resolution="0")
         messages_data = [{"source": "user", "text": "Hello"}, {"source": "assistant", "text": "Hi there"}]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
 
@@ -91,7 +91,7 @@ class TestConversationEndpoint:
         assert any(m["text"] == "Hi there" and m["source"] == "outgoing" for m in results)
 
     def test_list_conversations_ignores_include_messages(self, api_client, project, auth_headers):
-        conversation = Conversation.objects.create(project=project, resolution=0)
+        conversation = Conversation.objects.create(project=project, resolution="0")
         messages_data = [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi there"}]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
 

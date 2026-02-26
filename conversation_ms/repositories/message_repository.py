@@ -2,9 +2,8 @@ import logging
 
 import sentry_sdk
 
-from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
-from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +40,8 @@ class MessageRepository:
                     if hasattr(event.timestamp, "isoformat")
                     else str(event.timestamp),
                 }
+                if message_id:
+                    formatted_message["message_id"] = str(message_id)
 
                 self.dynamo_repository.storage_message(
                     project_uuid=event.project_uuid,
@@ -109,6 +110,8 @@ class MessageRepository:
                     if hasattr(event.timestamp, "isoformat")
                     else str(event.timestamp),
                 }
+                if message_id:
+                    formatted_message["message_id"] = str(message_id)
 
                 self.dynamo_repository.storage_message(
                     project_uuid=event.project_uuid,

@@ -5,8 +5,8 @@ from typing import Dict, List, Optional
 
 import pendulum
 import sentry_sdk
-from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
@@ -214,13 +214,57 @@ def _build_request_dto(
     return request_dto
 
 
+def _get_daily_cache_key(project_uuid: str, project_timezone: str) -> tuple[str, str]:
+    local_now = pendulum.now(project_timezone)
+    target_date = local_now.subtract(days=1).to_date_string()
+    return f"daily_process_{project_uuid}_{target_date}", target_date
+
+
+def check_day_ended(project_uuid: str, project_timezone: str) -> tuple[bool, str]:
+    cache_key, target_date = _get_daily_cache_key(project_uuid, project_timezone)
+    timeout_seconds = 3 * 24 * 60 * 60
+    return cache.add(cache_key, "executed", timeout=timeout_seconds), target_date
+
+
+def _determine_date_range(
+    force_close: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    day_ended: bool,
+    target_date: str,
+    project_timezone: str,
+) -> Optional[tuple[str, str]]:
+    """
+    Determine the date range to process conversations.
+
+    Returns:
+        Tuple of (date_start_str, date_end_str) if should process, None otherwise
+    """
+    if force_close and start_date:
+        date_start_str = start_date
+        date_end_str = (
+            end_date if end_date else pendulum.parse(start_date, tz=project_timezone).end_of("day").to_date_string()
+        )
+        return date_start_str, date_end_str
+
+    if day_ended or force_close:
+        return target_date, target_date
+
+    return None
+
+
 @celery_app.task(
     name="conversation_ms.tasks.close_daily_conversations_task",
     bind=True,
     max_retries=3,
     default_retry_delay=300,
 )
-def close_daily_conversations_task(self, force_close: bool = False):
+def close_daily_conversations_task(
+    self,
+    force_close: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
 
@@ -239,42 +283,37 @@ def close_daily_conversations_task(self, force_close: bool = False):
 
     try:
         fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
-        now_utc = pendulum.now("UTC")
 
-        # Process projects in batches to manage memory
         projects_processed = 0
         conversations_closed = 0
 
-        # Fetch projects from external API with pagination
         project_client = ProjectClient()
         page = 1
         page_size = project_client.page_size
         pages_processed = 0
         consecutive_empty_pages = 0
-        max_consecutive_empty = 3  # Safety: break if we get 3 empty pages in a row
+        max_consecutive_empty = 3
 
         while True:
             try:
-                # Fetch projects page
                 response = project_client.get_projects_paginated(page=page, page_size=page_size)
                 projects_data = response.get("results", [])
                 next_page = response.get("next")
 
-                # Safety check: if no projects AND no next page, we're done
                 if not projects_data and not next_page:
                     logger.info(
-                        f"[CloseDailyConversationsTask] No more projects to process (page {page} returned empty results and no next page)",
+                        f"[CloseDailyConversationsTask]\
+No more projects to process (page {page} returned empty results and no next page)",
                         extra={"page": page, "pages_processed": pages_processed},
                     )
                     break
 
-                # Safety check: detect infinite loop - if we get empty results but there's a next page
-                # Count consecutive empty pages to avoid breaking on legitimate empty pages
                 if not projects_data and next_page:
                     consecutive_empty_pages += 1
                     if consecutive_empty_pages >= max_consecutive_empty:
                         logger.error(
-                            f"[CloseDailyConversationsTask] Detected possible infinite loop: {consecutive_empty_pages} consecutive empty pages with next page, breaking",
+                            f"[CloseDailyConversationsTask] Detected possible infinite loop:\
+{consecutive_empty_pages} consecutive empty pages with next page, breaking",
                             extra={
                                 "page": page,
                                 "next_page": next_page,
@@ -285,24 +324,22 @@ def close_daily_conversations_task(self, force_close: bool = False):
                         break
                     else:
                         logger.warning(
-                            f"[CloseDailyConversationsTask] Empty results but next page exists at page {page} (consecutive empty: {consecutive_empty_pages}/{max_consecutive_empty})",
+                            f"[CloseDailyConversationsTask] Empty results but next\
+page exists at page {page} (consecutive empty: {consecutive_empty_pages}/{max_consecutive_empty})",
                             extra={
                                 "page": page,
                                 "next_page": next_page,
                                 "consecutive_empty_pages": consecutive_empty_pages,
                             },
                         )
-                        # Continue to next page but increment counter
                         page += 1
                         continue
 
-                # Reset consecutive empty counter if we got results
                 if projects_data:
                     consecutive_empty_pages = 0
 
                 pages_processed += 1
 
-                # Process each project in the current page
                 for project_data in projects_data:
                     try:
                         project_uuid = project_data.get("uuid")
@@ -315,69 +352,78 @@ def close_daily_conversations_task(self, force_close: bool = False):
                             )
                             continue
 
-                        try:
-                            tz = pendulum.timezone(project_timezone)
-                        except Exception as e:
-                            logger.warning(
-                                f"[CloseDailyConversationsTask] Invalid timezone '{project_timezone}' for project {project_uuid}, using fallback",
-                                extra={"project_uuid": project_uuid, "error": str(e)},
-                            )
-                            tz = pendulum.timezone(fallback_timezone)
+                        day_ended, target_date = check_day_ended(project_uuid, project_timezone)
 
-                        # Get current time in project timezone
-                        now_in_tz = now_utc.in_timezone(tz)
+                        date_range = _determine_date_range(
+                            force_close, start_date, end_date, day_ended, target_date, project_timezone
+                        )
 
-                        # Check if day has ended (23:59:59 has passed)
-                        # Day has ended if we're past midnight (00:00:01 or later)
-                        # This means the previous day's 23:59:59 has passed
-                        day_ended = now_in_tz.hour == 0 and now_in_tz.minute >= 0 and now_in_tz.second >= 1
-
-                        if day_ended or force_close:
-                            # Day has ended, process open conversations
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Day ended for project {project_uuid}, processing open conversations",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "project_timezone": project_timezone,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
-                                },
-                            )
-
-                            project_conversations_closed = _process_project_conversations(project_uuid)
-                            conversations_closed += project_conversations_closed
-                            projects_processed += 1
-
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Closed {project_conversations_closed} conversations for project {project_uuid}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "conversations_closed": project_conversations_closed,
-                                },
-                            )
-
-                            # Trigger billing task for the previous day (the day that just ended)
-                            # previous_day = now_in_tz.subtract(days=1).date()
-                            # send_billing_conversations.delay(
-                            #     project_uuid=project_uuid,
-                            #     target_date=previous_day.isoformat(),
-                            # )
-                            # logger.info(
-                            #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
-                            #     extra={
-                            #         "project_uuid": project_uuid,
-                            #         "target_date": previous_day.isoformat(),
-                            #     },
-                            # )
-                        else:
+                        if not date_range:
                             logger.debug(
                                 f"[CloseDailyConversationsTask] Day not ended yet for project {project_uuid}",
                                 extra={
                                     "project_uuid": project_uuid,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
+                                    "current_time_in_tz": target_date,
                                 },
                             )
+                            continue
+
+                        date_start_str, date_end_str = date_range
+
+                        start_of_range = pendulum.parse(date_start_str, tz=project_timezone).start_of("day")
+                        end_of_range = pendulum.parse(date_end_str, tz=project_timezone).end_of("day")
+
+                        start_of_range_utc = start_of_range.in_timezone("UTC")
+                        end_of_range_utc = end_of_range.in_timezone("UTC")
+
+                        logger.info(
+                            f"[CloseDailyConversationsTask] Processing conversations for project {project_uuid}",
+                            extra={
+                                "project_uuid": project_uuid,
+                                "project_timezone": project_timezone,
+                                "date_start": date_start_str,
+                                "date_end": date_end_str,
+                                "start_of_range_utc": start_of_range_utc.isoformat(),
+                                "end_of_range_utc": end_of_range_utc.isoformat(),
+                                "force_close": force_close,
+                            },
+                        )
+
+                        project_conversations_closed = _process_project_conversations(
+                            project_uuid, project_timezone, start_of_range_utc, end_of_range_utc
+                        )
+                        conversations_closed += project_conversations_closed
+                        projects_processed += 1
+
+                        logger.info(
+                            f"[CloseDailyConversationsTask] Closed {project_conversations_closed} conversations\
+for project {project_uuid}",
+                            extra={
+                                "project_uuid": project_uuid,
+                                "conversations_closed": project_conversations_closed,
+                            },
+                        )
+
+                    # Trigger billing task for the previous day (the day that just ended)
+                    # previous_day = now_in_tz.subtract(days=1).date()
+                    # send_billing_conversations.delay(
+                    #     project_uuid=project_uuid,
+                    #     target_date=previous_day.isoformat(),
+                    # )
+                    # logger.info(
+                    #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
+                    #     extra={
+                    #         "project_uuid": project_uuid,
+                    #         "target_date": previous_day.isoformat(),
+                    #     },
+                    # )
 
                     except Exception as e:
+                        if day_ended and not force_close:
+                            cache_key, target_date = _get_daily_cache_key(project_uuid, project_timezone)
+                            cache.delete(cache_key)
+                            logger.warning(f"Cache key {cache_key} removed. The system will try again next hour.")
+
                         sentry_sdk.set_tag("project_uuid", project_uuid)
                         sentry_sdk.capture_exception(e)
                         logger.error(
@@ -411,7 +457,9 @@ def close_daily_conversations_task(self, force_close: bool = False):
                 break
 
         logger.info(
-            f"[CloseDailyConversationsTask] Task completed. Pages processed: {pages_processed}, Projects processed: {projects_processed}, Conversations closed: {conversations_closed}",
+            f"[CloseDailyConversationsTask] Task completed.\
+Pages processed: {pages_processed}, Projects processed: {projects_processed},\
+Conversations closed: {conversations_closed}",
             extra={
                 "pages_processed": pages_processed,
                 "projects_processed": projects_processed,
@@ -430,12 +478,17 @@ def close_daily_conversations_task(self, force_close: bool = False):
         raise self.retry(exc=exc)
 
 
-def _process_project_conversations(project_uuid: str) -> int:
+def _process_project_conversations(
+    project_uuid: str, project_timezone: str, start_of_range_utc: pendulum.DateTime, end_of_range_utc: pendulum.DateTime
+) -> int:
     """
-    Process all open conversations for a project.
+    Process all open conversations for a project that were started within the date range.
 
     Args:
         project_uuid: The project UUID to process conversations for
+        project_timezone: The timezone of the project
+        start_of_range_utc: Start of date range in UTC (pendulum.DateTime)
+        end_of_range_utc: End of date range in UTC (pendulum.DateTime)
 
     Returns:
         Number of conversations closed
@@ -446,7 +499,6 @@ def _process_project_conversations(project_uuid: str) -> int:
 
     conversations_closed = 0
 
-    # Get project from database to use in filter
     try:
         project = Project.objects.get(uuid=project_uuid)
     except Project.DoesNotExist:
@@ -456,12 +508,15 @@ def _process_project_conversations(project_uuid: str) -> int:
         )
         return 0
 
-    # Process conversations in batches to manage memory
-    # Use iterator with select_related to minimize queries
     conversations = (
-        Conversation.objects.filter(project=project, resolution=str(ResolutionEntities.IN_PROGRESS))
+        Conversation.objects.filter(
+            project=project,
+            resolution=str(ResolutionEntities.IN_PROGRESS),
+            start_date__gte=start_of_range_utc,
+            start_date__lte=end_of_range_utc,
+        )
         .select_related("project")
-        .only("uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution")
+        .only("uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution", "start_date")
         .iterator(chunk_size=50)
     )
 
@@ -473,7 +528,6 @@ def _process_project_conversations(project_uuid: str) -> int:
                 extra={"conversation_uuid": str(conversation_uuid), "project_uuid": project_uuid},
             )
 
-            # Get messages from DynamoDB
             messages = message_repository.get_messages_from_dynamo(
                 project_uuid=project_uuid,
                 contact_urn=conversation.contact_urn,
@@ -482,13 +536,12 @@ def _process_project_conversations(project_uuid: str) -> int:
 
             if not messages:
                 logger.warning(
-                    f"[CloseDailyConversationsTask] No messages found for conversation {conversation_uuid}, setting as unclassified",
+                    f"[CloseDailyConversationsTask] No messages\
+found for conversation {conversation_uuid}, setting as unclassified",
                     extra={"conversation_uuid": str(conversation_uuid)},
                 )
-                # If no messages, set as unclassified
                 resolution_int = ResolutionEntities.UNCLASSIFIED
             else:
-                # Classify conversation to get resolution
                 resolution_string = classification_service.lambda_conversation_resolution(
                     messages=messages,
                     has_chats_room=conversation.has_chats_room,
@@ -498,25 +551,21 @@ def _process_project_conversations(project_uuid: str) -> int:
                     conversation=conversation,
                 )
 
-                # Convert resolution string to int
                 resolution_int = ResolutionEntities.convert_resolution_string_to_int(resolution_string)
 
-            # Refresh conversation from DB to get latest state
             conversation.refresh_from_db()
 
-            # Only update if still in progress (avoid race conditions)
             if str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS):
-                # Update conversation with resolution
                 conversation.resolution = str(resolution_int)
 
-                # Set end_date if not already set
                 if not conversation.end_date:
                     conversation.end_date = pendulum.now("UTC")
 
                 conversation.save(update_fields=["resolution", "end_date"])
 
                 logger.info(
-                    f"[CloseDailyConversationsTask] Updated conversation {conversation_uuid} with resolution {resolution_int}",
+                    f"[CloseDailyConversationsTask] Updated conversation {conversation_uuid}\
+with resolution {resolution_int}",
                     extra={
                         "conversation_uuid": str(conversation_uuid),
                         "resolution": resolution_int,

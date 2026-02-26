@@ -65,11 +65,11 @@ class DynamoMessageRepository:
         message_data: dict,
         channel_uuid: str = None,
         resolution_status: int = 2,  # IN_PROGRESS
-        ttl_hours: int = 48,
+        ttl_hours: int = 168,  # 7 days
     ) -> None:
         """Store message with proper conversation and resolution tracking.
         Uses message_id from message_data when provided (e.g. from nexus-ai for traces).
-        Otherwise generates a new UUID for backward compatibility.
+        Otherwise generates a new UUID and reports to Sentry for monitoring.
         """
 
         conversation_key = f"{project_uuid}#{contact_urn}#{channel_uuid}"

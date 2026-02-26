@@ -179,7 +179,7 @@ poetry run pytest
 - **Active Conversations** (resolution == "2"):
 
   - Messages stored in DynamoDB
-  - TTL of 48 hours for automatic cleanup
+  - TTL of 7 days for automatic cleanup
   - Avoids constant PostgreSQL updates
 
 - **Closed Conversations**:

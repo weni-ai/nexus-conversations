@@ -49,7 +49,7 @@ class MessageRepository:
                     message_data=formatted_message,
                     channel_uuid=event.channel_uuid,
                     resolution_status=2,  # IN_PROGRESS
-                    ttl_hours=48,
+                    ttl_hours=168,  # 7 days
                 )
 
                 logger.debug(
@@ -119,7 +119,7 @@ class MessageRepository:
                     message_data=formatted_message,
                     channel_uuid=event.channel_uuid,
                     resolution_status=2,  # IN_PROGRESS
-                    ttl_hours=48,
+                    ttl_hours=168,  # 7 days
                 )
 
                 logger.debug(

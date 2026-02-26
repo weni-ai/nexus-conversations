@@ -777,17 +777,28 @@ def _process_project_conversations(
         )
         return 0
 
+    start_of_range_project_tz = start_of_range_utc.in_timezone(project_timezone)
+    end_of_range_project_tz = end_of_range_utc.in_timezone(project_timezone)
+
+    start_of_day_project_tz = start_of_range_project_tz.start_of("day")
+    end_of_day_project_tz = end_of_range_project_tz.end_of("day")
+
+    start_of_day_utc = start_of_day_project_tz.in_timezone("UTC")
+    end_of_day_utc = end_of_day_project_tz.in_timezone("UTC")
+
     conversations = (
         Conversation.objects.filter(
             project=project,
             resolution=str(ResolutionEntities.IN_PROGRESS),
-            start_date__gte=start_of_range_utc,
-            start_date__lte=end_of_range_utc,
+            start_date__gte=start_of_day_utc,
+            start_date__lte=end_of_day_utc,
         )
         .select_related("project")
         .only("uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution", "start_date")
         .iterator(chunk_size=50)
     )
+
+    end_of_day_in_project_tz = end_of_day_project_tz
 
     for conversation in conversations:
         conversation_uuid = str(conversation.uuid)
@@ -796,6 +807,9 @@ def _process_project_conversations(
                 f"[CloseDailyConversationsTask] Processing conversation {conversation_uuid}",
                 extra={"conversation_uuid": str(conversation_uuid), "project_uuid": project_uuid},
             )
+
+            conversation.end_date = end_of_day_in_project_tz.in_timezone("UTC")
+            conversation.save(update_fields=["end_date"])
 
             task = classify_conversation_task.delay(conversation_uuid)
             result = task.wait()

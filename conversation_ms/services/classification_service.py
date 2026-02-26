@@ -94,7 +94,7 @@ class ClassificationService:
                 logger.warning(f"[ClassificationService] Resolution lambda returned None for {conversation.uuid}")
                 return str(ResolutionEntities.UNCLASSIFIED)
 
-            return str(result)
+            return ResolutionEntities.convert_resolution_string_to_int(result)
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error getting resolution for {conversation.uuid}: {e}")

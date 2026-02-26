@@ -40,9 +40,6 @@ class MessageRepository:
                     if hasattr(event.timestamp, "isoformat")
                     else str(event.timestamp),
                 }
-                if message_id:
-                    formatted_message["message_id"] = str(message_id)
-
                 self.dynamo_repository.storage_message(
                     project_uuid=event.project_uuid,
                     contact_urn=event.contact_urn,
@@ -110,9 +107,6 @@ class MessageRepository:
                     if hasattr(event.timestamp, "isoformat")
                     else str(event.timestamp),
                 }
-                if message_id:
-                    formatted_message["message_id"] = str(message_id)
-
                 self.dynamo_repository.storage_message(
                     project_uuid=event.project_uuid,
                     contact_urn=event.contact_urn,

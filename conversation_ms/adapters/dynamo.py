@@ -11,7 +11,6 @@ import uuid
 from contextlib import contextmanager
 from functools import partial
 
-import boto3
 import pendulum
 from django.conf import settings
 
@@ -68,7 +67,6 @@ class DynamoMessageRepository:
         ttl_hours: int = 48,
     ) -> None:
         """Store message with proper conversation and resolution tracking."""
-        from conversation_ms.adapters.entities import ResolutionEntities
 
         conversation_key = f"{project_uuid}#{contact_urn}#{channel_uuid}"
         message_id = str(uuid.uuid4())
@@ -156,20 +154,20 @@ class DynamoMessageRepository:
         with get_message_table() as table:
             # Step 1: Query all messages (keys only)
             last_evaluated_key = None
-            
+
             while True:
                 query_params = {
                     "KeyConditionExpression": "conversation_key = :conv_key",
                     "ExpressionAttributeValues": {":conv_key": conversation_key},
                     "ProjectionExpression": "conversation_key, message_timestamp",
                 }
-                
+
                 if last_evaluated_key:
                     query_params["ExclusiveStartKey"] = last_evaluated_key
 
                 response = table.query(**query_params)
                 items = response.get("Items", [])
-                
+
                 if not items:
                     break
 
@@ -183,18 +181,30 @@ class DynamoMessageRepository:
                             }
                         )
                         deleted_count += 1
-                
+
                 last_evaluated_key = response.get("LastEvaluatedKey")
                 if not last_evaluated_key:
                     break
-        
+
         return deleted_count
 
     def _format_message(self, item: dict) -> dict:
         """Format message item for consistent output."""
-        return {
-            "text": item["message_text"],
-            "source": item["source_type"],
-            "created_at": item["created_at"],
-        }
+        message_id = item.get("message_id")
 
+        # Fallback: Extract message_id from range key (message_timestamp)
+        # Format: YYYY-MM-DDTHH:mm:ss#UUID
+        if not message_id:
+            msg_ts = item.get("message_timestamp", "")
+            if "#" in msg_ts:
+                try:
+                    message_id = msg_ts.split("#")[1]
+                except IndexError:
+                    pass
+
+        return {
+            "text": item.get("message_text"),
+            "source": item.get("source_type"),
+            "created_at": item.get("created_at"),
+            "message_id": message_id,
+        }

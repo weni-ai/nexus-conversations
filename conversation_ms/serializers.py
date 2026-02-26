@@ -1,6 +1,7 @@
 import logging
 import uuid
 
+import pendulum
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -115,7 +116,7 @@ class ConversationSerializer(serializers.ModelSerializer):
                 normalized.append(
                     {
                         "uuid": msg_uuid,
-                        "id": msg_uuid,
+                        "id": item.get("id") or msg_uuid,
                         "text": item.get("text"),
                         "source": source,
                         "created_at": item.get("created_at"),
@@ -139,12 +140,39 @@ class ConversationSerializer(serializers.ModelSerializer):
             else:
                 messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
 
-            # Sort by created_at descending (newest first)
+            # Sort by created_at descending (newest first) for pagination
             messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+
+            # Handle timezone
+            timezone_name = request.query_params.get("timezone")
+            if timezone_name:
+                try:
+                    if timezone_name.startswith("+") or timezone_name.startswith("-"):
+                        dummy = pendulum.parse(f"2024-01-01T00:00:00{timezone_name}")
+                        target_tz = dummy.timezone
+                    else:
+                        target_tz = pendulum.timezone(timezone_name)
+
+                    for msg in messages:
+                        if msg.get("created_at"):
+                            try:
+                                # Parse and convert to target timezone
+                                dt = pendulum.parse(msg["created_at"])
+                                dt_in_tz = dt.in_tz(target_tz)
+                                msg["created_at"] = dt_in_tz.isoformat()
+                            except Exception:
+                                pass  # Keep original if parsing fails
+                except Exception:
+                    pass  # Invalid timezone, ignore
 
             # Paginate
             paginator = MessagePagination()
             paginated_messages = paginator.paginate_queryset(messages, request)
+
+            # Sort paginated messages ascending (oldest first) for display
+            if paginated_messages:
+                paginated_messages.sort(key=lambda x: x.get("created_at") or "", reverse=False)
+
             return paginator.get_paginated_response(paginated_messages)
 
         return None

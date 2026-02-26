@@ -1,20 +1,16 @@
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import permissions, viewsets, status
 from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import permissions, status, viewsets
 from rest_framework.exceptions import NotFound
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet
 
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
-from conversation_ms.models import (
-    Conversation,
-    Project,
-    Topic,
-    SubTopic
-)
-from conversation_ms.serializers import ConversationSerializer, TopicsSerializer, SubTopicsSerializer
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework.viewsets import ModelViewSet
+from conversation_ms.models import Conversation, Project, SubTopic, Topic
+from conversation_ms.pagination import ConversationCursorPagination
+from conversation_ms.serializers import ConversationSerializer, SubTopicsSerializer, TopicsSerializer
+
 
 @extend_schema(
     parameters=[
@@ -33,6 +29,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     serializer_class = ConversationSerializer
+    pagination_class = ConversationCursorPagination
     authentication_classes = [InternalTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
@@ -55,7 +52,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             queryset = queryset.select_related("messages_data")
 
-        return queryset.order_by("-start_date")
+        return queryset.order_by("-created_at", "-uuid")
 
 
 class TopicsViewSet(ModelViewSet):

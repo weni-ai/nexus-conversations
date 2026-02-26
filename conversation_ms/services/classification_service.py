@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
 
@@ -22,15 +22,22 @@ class ClassificationService:
         self.lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
         self.dynamo_repo = DynamoMessageRepository()
 
-    def classify_conversation(self, conversation_uuid: str) -> Optional[ConversationClassification]:
+    def classify_conversation(
+        self, conversation_uuid: str
+    ) -> Tuple[Optional[Conversation], Optional[ConversationClassification]]:
         """
         Main entry point to classify a conversation.
+
+        Returns:
+            Tuple of (conversation, classification) where:
+            - conversation: The Conversation object (or None if not found)
+            - classification: The ConversationClassification object (or None if classification failed)
         """
         try:
             conversation = Conversation.objects.get(uuid=conversation_uuid)
         except Conversation.DoesNotExist:
             logger.error(f"[ClassificationService] Conversation {conversation_uuid} not found.")
-            return None
+            return (None, None)
 
         messages = None
         if conversation.has_chats_room:
@@ -44,7 +51,7 @@ class ClassificationService:
             messages = self._get_conversation_messages(conversation)
             if not messages:
                 logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-                return None
+                return (conversation, None)
 
             resolution = self._get_resolution_classification(conversation, messages)
 
@@ -58,9 +65,10 @@ class ClassificationService:
 
         if not messages:
             logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return None
+            return (conversation, None)
 
-        return self._classify_topics(conversation, messages)
+        classification = self._classify_topics(conversation, messages)
+        return (conversation, classification)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
         """
@@ -262,8 +270,7 @@ class ClassificationService:
         conversation_resolution = self._invoke_lambda(
             lambda_name=str(settings.CONVERSATION_RESOLUTION_NAME), payload=payload_conversation
         )
-        conversation_resolution_response = json.loads(conversation_resolution.get("Payload").read()).get("body")
-        resolution = conversation_resolution_response.get("result")
+        resolution = conversation_resolution.get("result")
 
         # Ensure resolution is not None - use "unclassified" if lambda returns empty/None
         if not resolution:

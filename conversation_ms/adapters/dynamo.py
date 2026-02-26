@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from functools import partial
 
 import pendulum
-import sentry_sdk
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_resource
@@ -67,31 +66,10 @@ class DynamoMessageRepository:
         resolution_status: int = 2,  # IN_PROGRESS
         ttl_hours: int = 168,  # 7 days
     ) -> None:
-        """Store message with proper conversation and resolution tracking.
-        Uses message_id from message_data when provided (e.g. from nexus-ai for traces).
-        Otherwise generates a new UUID and reports to Sentry for monitoring.
-        """
+        """Store message with proper conversation and resolution tracking."""
 
         conversation_key = f"{project_uuid}#{contact_urn}#{channel_uuid}"
-        message_id = message_data.get("message_id") or message_data.get("id")
-        if message_id:
-            message_id = str(message_id)
-        else:
-            sentry_sdk.set_tag("project_uuid", project_uuid)
-            sentry_sdk.set_tag("contact_urn", contact_urn)
-            sentry_sdk.set_tag("channel_uuid", channel_uuid or "")
-            sentry_sdk.set_context(
-                "dynamo_storage_message",
-                {
-                    "message_data_keys": list(message_data.keys()),
-                    "conversation_key": conversation_key,
-                },
-            )
-            sentry_sdk.capture_message(
-                "Message stored without message_id from event (DynamoMessageRepository)",
-                level="warning",
-            )
-            message_id = str(uuid.uuid4())
+        message_id = str(uuid.uuid4())
 
         # Calculate TTL timestamp (current time + TTL hours)
         ttl_timestamp = int(time.time()) + (ttl_hours * 3600)

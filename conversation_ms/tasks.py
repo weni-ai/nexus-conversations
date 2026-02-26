@@ -5,14 +5,13 @@ from typing import Dict, List, Optional
 
 import pendulum
 import sentry_sdk
-from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.models import Conversation, Project
-from conversation_ms.repositories.message_repository import MessageRepository
 from conversation_ms.services.classification_service import (
     ClassificationService,
 )
@@ -24,6 +23,26 @@ from conversation_ms.services.resolution_counter import (
 from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _migrate_messages_to_postgres(conversation: Conversation):
+    migration_service = MessageMigrationService()
+    conversation_uuid = str(conversation.uuid)
+    try:
+        migration_service.migrate_conversation_messages_to_postgres(conversation)
+        logger.debug(
+            f"[CloseDailyConversationsTask] Migrated messages for conversation {conversation_uuid}",
+            extra={"conversation_uuid": str(conversation_uuid)},
+        )
+    except Exception as e:
+        # Log error but don't fail the whole task
+        sentry_sdk.set_tag("conversation_uuid", str(conversation_uuid))
+        sentry_sdk.capture_exception(e)
+        logger.error(
+            f"[CloseDailyConversationsTask] Error migrating messages for conversation {conversation_uuid}",
+            extra={"conversation_uuid": str(conversation_uuid), "error": str(e)},
+            exc_info=True,
+        )
 
 
 @celery_app.task(
@@ -43,10 +62,16 @@ def classify_conversation_task(self, conversation_uuid: str):
 
     try:
         service = ClassificationService()
-        result = service.classify_conversation(conversation_uuid)
+        conversation, classification = service.classify_conversation(conversation_uuid)
 
-        if result:
+        if conversation is None:
+            logger.error(f"[ClassificationTask] Conversation {conversation_uuid} not found")
+            return
+
+        if classification:
             logger.info(f"[ClassificationTask] Successfully classified " f"conversation {conversation_uuid}")
+            _migrate_messages_to_postgres(conversation)
+            return classification
         else:
             logger.warning(f"[ClassificationTask] Failed to classify " f"conversation {conversation_uuid}")
     except Exception as e:
@@ -214,13 +239,438 @@ def _build_request_dto(
     return request_dto
 
 
+def _get_daily_cache_key(project_uuid: str, project_timezone: str) -> tuple[str, str]:
+    local_now = pendulum.now(project_timezone)
+    target_date = local_now.subtract(days=1).to_date_string()
+    return f"daily_process_{project_uuid}_{target_date}", target_date
+
+
+def check_day_ended(project_uuid: str, project_timezone: str) -> tuple[bool, str]:
+    cache_key, target_date = _get_daily_cache_key(project_uuid, project_timezone)
+    timeout_seconds = 3 * 24 * 60 * 60
+    day_not_processed = cache.add(cache_key, "executed", timeout=timeout_seconds)
+    return day_not_processed, target_date
+
+
+def _determine_date_range(
+    force_close: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    day_ended: bool,
+    target_date: str,
+    project_timezone: str,
+) -> Optional[tuple[pendulum.DateTime, pendulum.DateTime]]:
+    """
+    Determine the date range to process conversations.
+
+    Returns:
+        Tuple of (start_of_range, end_of_range) as pendulum.DateTime objects if should process, None otherwise.
+        Both dates are already set to start_of("day") and end_of("day") respectively.
+    """
+    if force_close and start_date:
+        start_of_range = pendulum.parse(start_date, tz=project_timezone).start_of("day")
+        if end_date:
+            end_of_range = pendulum.parse(end_date, tz=project_timezone).end_of("day")
+        else:
+            end_of_range = start_of_range.end_of("day")
+        return start_of_range, end_of_range
+
+    if day_ended or force_close:
+        # YYYY-MM-DD
+        parsed_date = pendulum.parse(target_date, tz=project_timezone)
+        start_of_range = parsed_date.start_of("day")
+        end_of_range = parsed_date.end_of("day")
+        return start_of_range, end_of_range
+
+    return None
+
+
+def _validate_timezone(project_timezone: str, fallback_timezone: str, project_uuid: str) -> str:
+    """Validate timezone and return fallback if invalid."""
+    try:
+        pendulum.now(project_timezone)
+        return project_timezone
+    except Exception as tz_error:
+        logger.warning(
+            f"[CloseDailyConversationsTask] Invalid timezone '{project_timezone}' "
+            f"for project {project_uuid}, using fallback",
+            extra={
+                "project_uuid": project_uuid,
+                "project_timezone": project_timezone,
+                "fallback_timezone": fallback_timezone,
+                "error": str(tz_error),
+            },
+        )
+        return fallback_timezone
+
+
+def _handle_project_error(
+    error: Exception,
+    project_uuid: Optional[str],
+    project_data: Optional[dict],
+    day_ended: bool,
+    project_timezone: Optional[str],
+    force_close: bool,
+):
+    """Centralized error handling for project processing errors.
+    Clear cache if day was marked as ended but processing failed."""
+    if day_ended and not force_close and project_uuid and project_timezone:
+        try:
+            cache_key, _ = _get_daily_cache_key(project_uuid, project_timezone)
+            cache.delete(cache_key)
+            logger.warning(
+                f"Cache key {cache_key} removed. The system will try again next hour.",
+                extra={"project_uuid": project_uuid},
+            )
+        except Exception as cache_error:
+            logger.warning(
+                f"Failed to delete cache key: {cache_error}",
+                extra={"project_uuid": project_uuid},
+            )
+
+    if project_uuid:
+        sentry_sdk.set_tag("project_uuid", project_uuid)
+    sentry_sdk.capture_exception(error)
+
+    logger.error(
+        f"[CloseDailyConversationsTask] Error processing project {project_uuid or 'unknown'}",
+        extra={
+            "project_uuid": project_uuid,
+            "project_data": project_data,
+            "error": str(error),
+        },
+        exc_info=True,
+    )
+
+
+class TaskLogger:
+    """Centralized logger for CloseDailyConversationsTask."""
+
+    PREFIX = "[CloseDailyConversationsTask]"
+
+    @staticmethod
+    def _log_task_start():
+        """Log task start."""
+        logger.info(f"{TaskLogger.PREFIX} Starting daily conversation closing task")
+
+    @staticmethod
+    def _log_infinite_loop_detected(consecutive_empty_pages: int, page: int, next_page: str, pages_processed: int):
+        """Log infinite loop detection."""
+        logger.error(
+            f"{TaskLogger.PREFIX} Detected possible infinite loop: "
+            f"{consecutive_empty_pages} consecutive empty pages with next page, breaking",
+            extra={
+                "page": page,
+                "next_page": next_page,
+                "pages_processed": pages_processed,
+                "consecutive_empty_pages": consecutive_empty_pages,
+            },
+        )
+
+    @staticmethod
+    def _log_empty_page_warning(page: int, next_page: str, consecutive_empty_pages: int, max_consecutive_empty: int):
+        """Log warning for empty page with next page."""
+        logger.warning(
+            f"{TaskLogger.PREFIX} Empty results but next page exists at page {page} "
+            f"(consecutive empty: {consecutive_empty_pages}/{max_consecutive_empty})",
+            extra={
+                "page": page,
+                "next_page": next_page,
+                "consecutive_empty_pages": consecutive_empty_pages,
+            },
+        )
+
+    @staticmethod
+    def _log_missing_uuid(project_data: dict):
+        """Log warning for missing project UUID."""
+        logger.warning(
+            f"{TaskLogger.PREFIX} Project data missing UUID, skipping",
+            extra={"project_data": project_data},
+        )
+
+    @staticmethod
+    def _log_day_not_ended(project_uuid: str, target_date: str):
+        """Log when day hasn't ended yet."""
+        logger.debug(
+            f"{TaskLogger.PREFIX} Day not ended yet for project {project_uuid}",
+            extra={
+                "project_uuid": project_uuid,
+                "target_date": target_date,
+            },
+        )
+
+    @staticmethod
+    def _log_processing_project(
+        project_uuid: str,
+        project_timezone: str,
+        start_of_range: pendulum.DateTime,
+        end_of_range: pendulum.DateTime,
+        start_of_range_utc: pendulum.DateTime,
+        end_of_range_utc: pendulum.DateTime,
+        force_close: bool,
+    ):
+        """Log when starting to process a project."""
+        logger.info(
+            f"{TaskLogger.PREFIX} Processing conversations for project {project_uuid}",
+            extra={
+                "project_uuid": project_uuid,
+                "project_timezone": project_timezone,
+                "date_start": start_of_range.to_date_string(),
+                "date_end": end_of_range.to_date_string(),
+                "start_of_range_utc": start_of_range_utc.isoformat(),
+                "end_of_range_utc": end_of_range_utc.isoformat(),
+                "force_close": force_close,
+            },
+        )
+
+    @staticmethod
+    def _log_project_completed(project_uuid: str, conversations_closed: int):
+        """Log when project processing is completed."""
+        logger.info(
+            f"{TaskLogger.PREFIX} Closed {conversations_closed} conversations for project {project_uuid}",
+            extra={
+                "project_uuid": project_uuid,
+                "conversations_closed": conversations_closed,
+            },
+        )
+
+    @staticmethod
+    def _log_last_page(page: int, pages_processed: int):
+        """Log when reaching last page."""
+        logger.info(
+            f"{TaskLogger.PREFIX} Reached last page ({page}), no more pages to process",
+            extra={"page": page, "pages_processed": pages_processed},
+        )
+
+    @staticmethod
+    def _log_page_fetch_error(page: int, error: Exception):
+        """Log error when fetching page."""
+        sentry_sdk.capture_exception(error)
+        logger.error(
+            f"{TaskLogger.PREFIX} Error fetching projects page {page}",
+            extra={"page": page, "error": str(error)},
+            exc_info=True,
+        )
+
+    @staticmethod
+    def _log_task_completed(pages_processed: int, projects_processed: int, conversations_closed: int):
+        """Log task completion."""
+        logger.info(
+            f"{TaskLogger.PREFIX} Task completed. Pages processed: {pages_processed}, "
+            f"Projects processed: {projects_processed}, Conversations closed: {conversations_closed}",
+            extra={
+                "pages_processed": pages_processed,
+                "projects_processed": projects_processed,
+                "conversations_closed": conversations_closed,
+            },
+        )
+
+    # Mapping of log keys to their corresponding methods
+    _LOG_METHODS = {
+        "task_start": _log_task_start,
+        "infinite_loop_detected": _log_infinite_loop_detected,
+        "empty_page_warning": _log_empty_page_warning,
+        "missing_uuid": _log_missing_uuid,
+        "day_not_ended": _log_day_not_ended,
+        "processing_project": _log_processing_project,
+        "project_completed": _log_project_completed,
+        "last_page": _log_last_page,
+        "page_fetch_error": _log_page_fetch_error,
+        "task_completed": _log_task_completed,
+    }
+
+    @classmethod
+    def log(cls, log_key: str, **kwargs):
+        """
+        Execute log function by key.
+
+        Args:
+            log_key: Key identifying which log function to execute
+            **kwargs: Arguments to pass to the log function
+
+        Example:
+            TaskLogger.log("task_start")
+            TaskLogger.log("processing_project", project_uuid="...", ...)
+        """
+        log_method = cls._LOG_METHODS.get(log_key)
+        if not log_method:
+            logger.warning(
+                f"{cls.PREFIX} Unknown log key: {log_key}",
+                extra={"log_key": log_key, "available_keys": list(cls._LOG_METHODS.keys())},
+            )
+            return
+
+        try:
+            log_method(**kwargs)
+        except TypeError as e:
+            logger.error(
+                f"{cls.PREFIX} Error calling log method '{log_key}': {e}",
+                extra={"log_key": log_key, "kwargs": kwargs, "error": str(e)},
+                exc_info=True,
+            )
+
+
+def _process_single_project(
+    project_data: dict,
+    fallback_timezone: str,
+    force_close: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> tuple[int, bool]:
+    """
+    Process a single project.
+
+    Returns:
+        Tuple of (conversations_closed: int, success: bool)
+    """
+    project_uuid = None
+    project_timezone = None
+    day_ended = False
+    target_date = None
+
+    try:
+        project_uuid = project_data.get("uuid")
+        if not project_uuid:
+            TaskLogger.log("missing_uuid", project_data=project_data)
+            return 0, False
+
+        project_timezone = project_data.get("timezone") or fallback_timezone
+        project_timezone = _validate_timezone(project_timezone, fallback_timezone, project_uuid)
+
+        day_ended, target_date = check_day_ended(project_uuid, project_timezone)
+
+        date_range = _determine_date_range(force_close, start_date, end_date, day_ended, target_date, project_timezone)
+
+        if not date_range:
+            TaskLogger.log("day_not_ended", project_uuid=project_uuid, target_date=target_date)
+            return 0, False
+
+        start_of_range, end_of_range = date_range
+        start_of_range_utc = start_of_range.in_timezone("UTC")
+        end_of_range_utc = end_of_range.in_timezone("UTC")
+
+        TaskLogger.log(
+            "processing_project",
+            project_uuid=project_uuid,
+            project_timezone=project_timezone,
+            start_of_range=start_of_range,
+            end_of_range=end_of_range,
+            start_of_range_utc=start_of_range_utc,
+            end_of_range_utc=end_of_range_utc,
+            force_close=force_close,
+        )
+
+        conversations_closed = _process_project_conversations(
+            project_uuid, project_timezone, start_of_range_utc, end_of_range_utc
+        )
+
+        TaskLogger.log("project_completed", project_uuid=project_uuid, conversations_closed=conversations_closed)
+
+        # Trigger billing task for the previous day (the day that just ended)
+        # previous_day = now_in_tz.subtract(days=1).date()
+        # send_billing_conversations.delay(
+        #     project_uuid=project_uuid,
+        #     target_date=previous_day.isoformat(),
+        # )
+        # logger.info(
+        #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
+        #     extra={
+        #         "project_uuid": project_uuid,
+        #         "target_date": previous_day.isoformat(),
+        #     },
+        # )
+
+        return conversations_closed, True
+
+    except Exception as e:
+        _handle_project_error(e, project_uuid, project_data, day_ended, project_timezone, force_close)
+        return 0, False
+
+
+def _process_projects_page(
+    projects_data: list,
+    fallback_timezone: str,
+    force_close: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> tuple[int, int]:
+    """
+    Process all projects in a page.
+
+    Returns:
+        Tuple of (total_conversations_closed: int, projects_processed: int)
+    """
+    total_conversations_closed = 0
+    projects_processed = 0
+
+    for project_data in projects_data:
+        conversations_closed, success = _process_single_project(
+            project_data, fallback_timezone, force_close, start_date, end_date
+        )
+        total_conversations_closed += conversations_closed
+        if success:
+            projects_processed += 1
+
+    return total_conversations_closed, projects_processed
+
+
+def _should_continue_pagination(
+    projects_data: list,
+    next_page: Optional[str],
+    page: int,
+    consecutive_empty_pages: int,
+    max_consecutive_empty: int,
+    pages_processed: int,
+) -> tuple[bool, int, int]:
+    """
+    Determine if pagination should continue and update counters.
+
+    Returns:
+        Tuple of (should_continue: bool, updated_consecutive_empty_pages: int, updated_pages_processed: int)
+    """
+    if not projects_data and not next_page:
+        return False, consecutive_empty_pages, pages_processed
+
+    if not projects_data and next_page:
+        consecutive_empty_pages += 1
+        if consecutive_empty_pages >= max_consecutive_empty:
+            TaskLogger.log(
+                "infinite_loop_detected",
+                consecutive_empty_pages=consecutive_empty_pages,
+                page=page,
+                next_page=next_page,
+                pages_processed=pages_processed,
+            )
+            return False, consecutive_empty_pages, pages_processed
+        else:
+            TaskLogger.log(
+                "empty_page_warning",
+                page=page,
+                next_page=next_page,
+                consecutive_empty_pages=consecutive_empty_pages,
+                max_consecutive_empty=max_consecutive_empty,
+            )
+            return True, consecutive_empty_pages, pages_processed
+
+    if projects_data:
+        consecutive_empty_pages = 0
+        pages_processed += 1
+
+    return True, consecutive_empty_pages, pages_processed
+
+
 @celery_app.task(
     name="conversation_ms.tasks.close_daily_conversations_task",
     bind=True,
     max_retries=3,
     default_retry_delay=300,
 )
-def close_daily_conversations_task(self, force_close: bool = False):
+def close_daily_conversations_task(
+    self,
+    force_close: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
 
@@ -235,188 +685,58 @@ def close_daily_conversations_task(self, force_close: bool = False):
 
     Processes in batches to avoid OOMKilled errors.
     """
-    logger.info("[CloseDailyConversationsTask] Starting daily conversation closing task")
+    TaskLogger.log("task_start")
 
     try:
         fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
-        now_utc = pendulum.now("UTC")
+        project_client = ProjectClient()
 
-        # Process projects in batches to manage memory
         projects_processed = 0
         conversations_closed = 0
-
-        # Fetch projects from external API with pagination
-        project_client = ProjectClient()
-        page = 1
-        page_size = project_client.page_size
         pages_processed = 0
         consecutive_empty_pages = 0
-        max_consecutive_empty = 3  # Safety: break if we get 3 empty pages in a row
+        max_consecutive_empty = 3
+        page = 1
+        page_size = project_client.page_size
 
         while True:
             try:
-                # Fetch projects page
                 response = project_client.get_projects_paginated(page=page, page_size=page_size)
                 projects_data = response.get("results", [])
                 next_page = response.get("next")
 
-                # Safety check: if no projects AND no next page, we're done
-                if not projects_data and not next_page:
-                    logger.info(
-                        f"[CloseDailyConversationsTask] No more projects to process (page {page} returned empty results and no next page)",
-                        extra={"page": page, "pages_processed": pages_processed},
-                    )
+                should_continue, consecutive_empty_pages, pages_processed = _should_continue_pagination(
+                    projects_data, next_page, page, consecutive_empty_pages, max_consecutive_empty, pages_processed
+                )
+
+                if not should_continue:
                     break
 
-                # Safety check: detect infinite loop - if we get empty results but there's a next page
-                # Count consecutive empty pages to avoid breaking on legitimate empty pages
-                if not projects_data and next_page:
-                    consecutive_empty_pages += 1
-                    if consecutive_empty_pages >= max_consecutive_empty:
-                        logger.error(
-                            f"[CloseDailyConversationsTask] Detected possible infinite loop: {consecutive_empty_pages} consecutive empty pages with next page, breaking",
-                            extra={
-                                "page": page,
-                                "next_page": next_page,
-                                "pages_processed": pages_processed,
-                                "consecutive_empty_pages": consecutive_empty_pages,
-                            },
-                        )
-                        break
-                    else:
-                        logger.warning(
-                            f"[CloseDailyConversationsTask] Empty results but next page exists at page {page} (consecutive empty: {consecutive_empty_pages}/{max_consecutive_empty})",
-                            extra={
-                                "page": page,
-                                "next_page": next_page,
-                                "consecutive_empty_pages": consecutive_empty_pages,
-                            },
-                        )
-                        # Continue to next page but increment counter
-                        page += 1
-                        continue
+                if not projects_data:
+                    page += 1
+                    continue
 
-                # Reset consecutive empty counter if we got results
-                if projects_data:
-                    consecutive_empty_pages = 0
+                page_conversations_closed, page_projects_processed = _process_projects_page(
+                    projects_data, fallback_timezone, force_close, start_date, end_date
+                )
+                conversations_closed += page_conversations_closed
+                projects_processed += page_projects_processed
 
-                pages_processed += 1
-
-                # Process each project in the current page
-                for project_data in projects_data:
-                    try:
-                        project_uuid = project_data.get("uuid")
-                        project_timezone = project_data.get("timezone") or fallback_timezone
-
-                        if not project_uuid:
-                            logger.warning(
-                                "[CloseDailyConversationsTask] Project data missing UUID, skipping",
-                                extra={"project_data": project_data},
-                            )
-                            continue
-
-                        try:
-                            tz = pendulum.timezone(project_timezone)
-                        except Exception as e:
-                            logger.warning(
-                                f"[CloseDailyConversationsTask] Invalid timezone '{project_timezone}' for project {project_uuid}, using fallback",
-                                extra={"project_uuid": project_uuid, "error": str(e)},
-                            )
-                            tz = pendulum.timezone(fallback_timezone)
-
-                        # Get current time in project timezone
-                        now_in_tz = now_utc.in_timezone(tz)
-
-                        # Check if day has ended (23:59:59 has passed)
-                        # Day has ended if we're past midnight (00:00:01 or later)
-                        # This means the previous day's 23:59:59 has passed
-                        day_ended = now_in_tz.hour == 0 and now_in_tz.minute >= 0 and now_in_tz.second >= 1
-
-                        if day_ended or force_close:
-                            # Day has ended, process open conversations
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Day ended for project {project_uuid}, processing open conversations",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "project_timezone": project_timezone,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
-                                },
-                            )
-
-                            project_conversations_closed = _process_project_conversations(project_uuid)
-                            conversations_closed += project_conversations_closed
-                            projects_processed += 1
-
-                            logger.info(
-                                f"[CloseDailyConversationsTask] Closed {project_conversations_closed} conversations for project {project_uuid}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "conversations_closed": project_conversations_closed,
-                                },
-                            )
-
-                            # Trigger billing task for the previous day (the day that just ended)
-                            # previous_day = now_in_tz.subtract(days=1).date()
-                            # send_billing_conversations.delay(
-                            #     project_uuid=project_uuid,
-                            #     target_date=previous_day.isoformat(),
-                            # )
-                            # logger.info(
-                            #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
-                            #     extra={
-                            #         "project_uuid": project_uuid,
-                            #         "target_date": previous_day.isoformat(),
-                            #     },
-                            # )
-                        else:
-                            logger.debug(
-                                f"[CloseDailyConversationsTask] Day not ended yet for project {project_uuid}",
-                                extra={
-                                    "project_uuid": project_uuid,
-                                    "current_time_in_tz": now_in_tz.isoformat(),
-                                },
-                            )
-
-                    except Exception as e:
-                        sentry_sdk.set_tag("project_uuid", project_uuid)
-                        sentry_sdk.capture_exception(e)
-                        logger.error(
-                            f"[CloseDailyConversationsTask] Error processing project {project_uuid}",
-                            extra={"project_uuid": project_uuid, "error": str(e)},
-                            exc_info=True,
-                        )
-                        # Continue processing other projects
-                        continue
-
-                # Check if there are more pages
                 if not next_page:
-                    # No more pages to process
-                    logger.info(
-                        f"[CloseDailyConversationsTask] Reached last page ({page}), no more pages to process",
-                        extra={"page": page, "pages_processed": pages_processed},
-                    )
+                    TaskLogger.log("last_page", page=page, pages_processed=pages_processed)
                     break
 
                 page += 1
 
             except Exception as e:
-                sentry_sdk.capture_exception(e)
-                logger.error(
-                    f"[CloseDailyConversationsTask] Error fetching projects page {page}",
-                    extra={"page": page, "error": str(e)},
-                    exc_info=True,
-                )
-                # Continue to next page or break if retries exhausted
-                # For now, break to avoid infinite loop on persistent errors
+                TaskLogger.log("page_fetch_error", page=page, error=e)
                 break
 
-        logger.info(
-            f"[CloseDailyConversationsTask] Task completed. Pages processed: {pages_processed}, Projects processed: {projects_processed}, Conversations closed: {conversations_closed}",
-            extra={
-                "pages_processed": pages_processed,
-                "projects_processed": projects_processed,
-                "conversations_closed": conversations_closed,
-            },
+        TaskLogger.log(
+            "task_completed",
+            pages_processed=pages_processed,
+            projects_processed=projects_processed,
+            conversations_closed=conversations_closed,
         )
 
         return {
@@ -430,23 +750,24 @@ def close_daily_conversations_task(self, force_close: bool = False):
         raise self.retry(exc=exc)
 
 
-def _process_project_conversations(project_uuid: str) -> int:
+def _process_project_conversations(
+    project_uuid: str, project_timezone: str, start_of_range_utc: pendulum.DateTime, end_of_range_utc: pendulum.DateTime
+) -> int:
     """
-    Process all open conversations for a project.
+    Process all open conversations for a project that were started within the date range.
 
     Args:
         project_uuid: The project UUID to process conversations for
+        project_timezone: The timezone of the project
+        start_of_range_utc: Start of date range in UTC (pendulum.DateTime)
+        end_of_range_utc: End of date range in UTC (pendulum.DateTime)
 
     Returns:
         Number of conversations closed
     """
-    classification_service = ClassificationService()
-    message_repository = MessageRepository()
-    migration_service = MessageMigrationService()
 
     conversations_closed = 0
 
-    # Get project from database to use in filter
     try:
         project = Project.objects.get(uuid=project_uuid)
     except Project.DoesNotExist:
@@ -456,12 +777,15 @@ def _process_project_conversations(project_uuid: str) -> int:
         )
         return 0
 
-    # Process conversations in batches to manage memory
-    # Use iterator with select_related to minimize queries
     conversations = (
-        Conversation.objects.filter(project=project, resolution=str(ResolutionEntities.IN_PROGRESS))
+        Conversation.objects.filter(
+            project=project,
+            resolution=str(ResolutionEntities.IN_PROGRESS),
+            start_date__gte=start_of_range_utc,
+            start_date__lte=end_of_range_utc,
+        )
         .select_related("project")
-        .only("uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution")
+        .only("uuid", "project", "contact_urn", "channel_uuid", "has_chats_room", "resolution", "start_date")
         .iterator(chunk_size=50)
     )
 
@@ -473,91 +797,29 @@ def _process_project_conversations(project_uuid: str) -> int:
                 extra={"conversation_uuid": str(conversation_uuid), "project_uuid": project_uuid},
             )
 
-            # Get messages from DynamoDB
-            messages = message_repository.get_messages_from_dynamo(
-                project_uuid=project_uuid,
-                contact_urn=conversation.contact_urn,
-                channel_uuid=str(conversation.channel_uuid) if conversation.channel_uuid else None,
-            )
+            task = classify_conversation_task.delay(conversation_uuid)
+            result = task.wait()
 
-            if not messages:
-                logger.warning(
-                    f"[CloseDailyConversationsTask] No messages found for conversation {conversation_uuid}, setting as unclassified",
-                    extra={"conversation_uuid": str(conversation_uuid)},
-                )
-                # If no messages, set as unclassified
-                resolution_int = ResolutionEntities.UNCLASSIFIED
-            else:
-                # Classify conversation to get resolution
-                resolution_string = classification_service.lambda_conversation_resolution(
-                    messages=messages,
-                    has_chats_room=conversation.has_chats_room,
-                    project_uuid=project_uuid,
-                    contact_urn=conversation.contact_urn,
-                    channel_uuid=str(conversation.channel_uuid) if conversation.channel_uuid else None,
-                    conversation=conversation,
-                )
-
-                # Convert resolution string to int
-                resolution_int = ResolutionEntities.convert_resolution_string_to_int(resolution_string)
-
-            # Refresh conversation from DB to get latest state
-            conversation.refresh_from_db()
-
-            # Only update if still in progress (avoid race conditions)
-            if str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS):
-                # Update conversation with resolution
-                conversation.resolution = str(resolution_int)
-
-                # Set end_date if not already set
-                if not conversation.end_date:
-                    conversation.end_date = pendulum.now("UTC")
-
-                conversation.save(update_fields=["resolution", "end_date"])
-
-                logger.info(
-                    f"[CloseDailyConversationsTask] Updated conversation {conversation_uuid} with resolution {resolution_int}",
-                    extra={
-                        "conversation_uuid": str(conversation_uuid),
-                        "resolution": resolution_int,
-                    },
-                )
-
-                # Migrate messages to PostgreSQL
-                try:
-                    migration_service.migrate_conversation_messages_to_postgres(conversation)
-                    logger.debug(
-                        f"[CloseDailyConversationsTask] Migrated messages for conversation {conversation_uuid}",
-                        extra={"conversation_uuid": str(conversation_uuid)},
-                    )
-                except Exception as e:
-                    # Log error but don't fail the whole task
-                    sentry_sdk.set_tag("conversation_uuid", str(conversation_uuid))
-                    sentry_sdk.capture_exception(e)
-                    logger.error(
-                        f"[CloseDailyConversationsTask] Error migrating messages for conversation {conversation_uuid}",
-                        extra={"conversation_uuid": str(conversation_uuid), "error": str(e)},
-                        exc_info=True,
-                    )
-
+            if result:
                 conversations_closed += 1
-
-                classify_conversation_task.delay(conversation_uuid)
-                logger.info(
-                    f"[CloseDailyConversationsTask] Triggered classification task for conversation {conversation_uuid}",
-                    extra={"conversation_uuid": str(conversation_uuid)},
-                )
             else:
-                logger.debug(
-                    f"[CloseDailyConversationsTask] Conversation {conversation_uuid} already closed, skipping",
-                    extra={
-                        "conversation_uuid": str(conversation_uuid),
-                        "current_resolution": conversation.resolution,
-                    },
-                )
+                try:
+                    updated_conversation = Conversation.objects.get(uuid=conversation_uuid)
+                    if str(updated_conversation.resolution) == str(ResolutionEntities.UNCLASSIFIED):
+                        conversations_closed += 1
+                        logger.debug(
+                            f"[CloseDailyConversationsTask] Conversation {conversation_uuid} "
+                            f"marked as Unclassified, counting as processed",
+                            extra={"conversation_uuid": conversation_uuid},
+                        )
+                except Conversation.DoesNotExist:
+                    logger.warning(
+                        f"[CloseDailyConversationsTask] Conversation {conversation_uuid} "
+                        f"not found after classification attempt",
+                        extra={"conversation_uuid": conversation_uuid},
+                    )
 
         except Exception as e:
-            # Log error but continue processing other conversations
             sentry_sdk.set_tag("conversation_uuid", str(conversation_uuid))
             sentry_sdk.capture_exception(e)
             logger.error(

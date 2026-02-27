@@ -115,7 +115,8 @@ class ClassificationService:
             )
             return None
 
-        payload = {"topics": topics_payload, "conversation": self._format_messages_for_lambda(messages)}
+        formatted_messages = self._format_messages_for_lambda(messages)
+        payload = {"topics": topics_payload, "conversation": {"messages": formatted_messages}}
 
         try:
             lambda_name = getattr(settings, "CONVERSATION_TOPIC_CLASSIFIER_NAME", None)

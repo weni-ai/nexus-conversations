@@ -23,21 +23,26 @@ class ClassificationService:
         self.dynamo_repo = DynamoMessageRepository()
 
     def classify_conversation(
-        self, conversation_uuid: str
-    ) -> Tuple[Optional[Conversation], Optional[ConversationClassification]]:
+        self, conversation_uuid: str, save_resolution: bool = True
+    ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
         Main entry point to classify a conversation.
 
+        Args:
+            conversation_uuid: UUID of the conversation to classify
+            save_resolution: If False, returns resolution without saving (for bulk updates)
+
         Returns:
-            Tuple of (conversation, classification) where:
+            Tuple of (conversation, classification, resolution) where:
             - conversation: The Conversation object (or None if not found)
             - classification: The ConversationClassification object (or None if classification failed)
+            - resolution: The resolution string (or None if classification failed)
         """
         try:
             conversation = Conversation.objects.get(uuid=conversation_uuid)
         except Conversation.DoesNotExist:
             logger.error(f"[ClassificationService] Conversation {conversation_uuid} not found.")
-            return (None, None)
+            return (None, None, None)
 
         messages = None
         if conversation.has_chats_room:
@@ -51,13 +56,17 @@ class ClassificationService:
             messages = self._get_conversation_messages(conversation)
             if not messages:
                 logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-                return (conversation, None)
+                return (conversation, None, None)
 
             resolution = self._get_resolution_classification(conversation, messages)
 
-        # Update conversation resolution
-        conversation.resolution = resolution
-        conversation.save(update_fields=["resolution"])
+        # Update conversation resolution conditionally
+        if save_resolution:
+            conversation.resolution = resolution
+            conversation.save(update_fields=["resolution"])
+        else:
+            # Just set the resolution on the object without saving (for bulk update)
+            conversation.resolution = resolution
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
@@ -65,10 +74,10 @@ class ClassificationService:
 
         if not messages:
             logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return (conversation, None)
+            return (conversation, None, resolution)
 
         classification = self._classify_topics(conversation, messages)
-        return (conversation, classification)
+        return (conversation, classification, resolution)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
         """

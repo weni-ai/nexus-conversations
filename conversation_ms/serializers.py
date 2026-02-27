@@ -179,6 +179,37 @@ class ConversationSerializer(serializers.ModelSerializer):
         return None
 
 
+class ConversationDetailSerializer(ConversationSerializer):
+    """
+    Normalized conversation format for detail (retrieve) - matches nexus-ai output.
+    Fields: conversation_uuid, created_at, ended_at, status, topic, channel_uuid, contact_urn, messages
+    """
+
+    conversation_uuid = serializers.UUIDField(source="uuid", read_only=True)
+    ended_at = serializers.DateTimeField(source="end_date", read_only=True)
+    topic = serializers.SerializerMethodField()
+
+    class Meta(ConversationSerializer.Meta):
+        fields = [
+            "conversation_uuid",
+            "created_at",
+            "ended_at",
+            "status",
+            "topic",
+            "channel_uuid",
+            "contact_urn",
+            "messages",
+        ]
+
+    def get_topic(self, obj):
+        try:
+            if obj.classification and obj.classification.topic:
+                return obj.classification.topic.name
+        except (ConversationClassification.DoesNotExist, AttributeError):
+            pass
+        return None
+
+
 class TopicsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic

@@ -305,6 +305,29 @@ def check_day_ended(project_uuid: str, project_timezone: str) -> tuple[bool, str
     return day_not_processed, target_date
 
 
+def _normalize_date_string(date_string: str) -> str:
+    """
+    Normaliza uma string de data para o formato YYYY-MM-DD.
+    Aceita tanto timestamps ISO completos quanto datas simples.
+
+    Args:
+        date_string: String de data (YYYY-MM-DD ou timestamp ISO)
+
+    Returns:
+        String no formato YYYY-MM-DD
+    """
+    try:
+        dt = pendulum.parse(date_string)
+        return dt.format("YYYY-MM-DD")
+    except (ValueError, TypeError):
+        try:
+            date.fromisoformat(date_string)
+            return date_string
+        except ValueError:
+            parts = date_string.split("T")[0].split(" ")[0]
+            return parts
+
+
 def _determine_date_range(
     force_close: bool,
     start_date: Optional[str],
@@ -320,7 +343,9 @@ def _determine_date_range(
         Tuple (start_utc, end_utc) se deve processar, None caso contrário.
     """
     if force_close and start_date:
-        start_day, end_day = ProjectDay.for_date_range(start_date, end_date, project_timezone)
+        normalized_start = _normalize_date_string(start_date)
+        normalized_end = _normalize_date_string(end_date) if end_date else None
+        start_day, end_day = ProjectDay.for_date_range(normalized_start, normalized_end, project_timezone)
         return start_day.get_utc_range()[0], end_day.get_utc_range()[1]
 
     if day_ended or force_close:

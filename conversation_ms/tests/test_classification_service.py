@@ -53,7 +53,9 @@ def test_classify_conversation_success(mock_settings, classification_service):
     ]
 
     # Execute
-    result_conversation, result_classification = classification_service.classify_conversation(str(conversation.uuid))
+    result_conversation, result_classification, result_resolution = classification_service.classify_conversation(
+        str(conversation.uuid)
+    )
 
     # Assert
     assert result_conversation is not None
@@ -62,16 +64,18 @@ def test_classify_conversation_success(mock_settings, classification_service):
     assert str(result_classification.topic.uuid) == str(topic.uuid)
     assert str(result_classification.subtopic.uuid) == str(subtopic.uuid)
     assert result_classification.confidence == 0.95
+    assert result_resolution == "2"
     assert ConversationClassification.objects.count() == 1
 
 
 @pytest.mark.django_db
 def test_classify_conversation_not_found(classification_service):
-    result_conversation, result_classification = classification_service.classify_conversation(
+    result_conversation, result_classification, result_resolution = classification_service.classify_conversation(
         "00000000-0000-0000-0000-000000000000"
     )
     assert result_conversation is None
     assert result_classification is None
+    assert result_resolution is None
 
 
 @pytest.mark.django_db
@@ -109,13 +113,16 @@ def test_classify_conversation_has_chats_room(mock_settings, classification_serv
     classification_service.lambda_client.invoke.return_value = {"Payload": Mock(read=lambda: topic_payload)}
 
     # Execute
-    result_conversation, result_classification = classification_service.classify_conversation(str(conversation.uuid))
+    result_conversation, result_classification, result_resolution = classification_service.classify_conversation(
+        str(conversation.uuid)
+    )
 
     # Assert
     assert result_conversation is not None
     assert result_conversation.uuid == conversation.uuid
     assert result_classification is not None
     assert str(result_classification.topic.uuid) == str(topic.uuid)
+    assert result_resolution == "4"
 
     # Verify resolution was set to "4" locally
     conversation.refresh_from_db()
@@ -137,8 +144,11 @@ def test_classify_conversation_lambda_error(classification_service):
     classification_service.dynamo_repo.get_messages.return_value = {"items": []}
 
     # Execute (should handle graceful failure)
-    result_conversation, result_classification = classification_service.classify_conversation(str(conversation.uuid))
+    result_conversation, result_classification, result_resolution = classification_service.classify_conversation(
+        str(conversation.uuid)
+    )
 
     assert result_conversation is not None
     assert result_conversation.uuid == conversation.uuid
     assert result_classification is None
+    assert result_resolution is None

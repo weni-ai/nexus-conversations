@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+
+  pull_request:
+    branches:
+      - "**"
+
+env:
+  SECRET_KEY: "SK"
+  ALLOWED_HOSTS: "*,"
+  DEBUG: "true"
+  DJANGO_SETTINGS_MODULE: "nexus_conversations.settings"
+  DEFAULT_DATABASE: "postgres://nexus:nexus@postgres:5432/nexus"
+  CELERY_BROKER_URL: "redis://redis:6379/0"
+  REDIS_URL: "redis://redis:6379/1"
+  USE_SQLITE_FOR_TESTS: "false"
+
+jobs:
+  container-job:
+    runs-on: ubuntu-latest
+    container: python:3.10-slim
+
+    services:
+      postgres:
+        image: postgres:16
+
+        env:
+          DEFAULT_DATABASE: postgres://nexus:nexus@postgres:5432/nexus
+          POSTGRES_HOST: postgres
+          POSTGRES_USER: nexus
+          POSTGRES_DATABASE: nexus
+          POSTGRES_PASSWORD: nexus
+
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:latest
+
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        run: |
+          apt-get update && apt-get install -y git
+          pip install poetry
+          poetry config virtualenvs.create false --local
+          poetry install --with dev
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files
+
+      - name: Run tests with Coverage
+        run: poetry run pytest -v --cov --cov-report=term-missing --no-cov-on-fail
+
+      - name: Coverage Report
+        run: poetry run coverage report

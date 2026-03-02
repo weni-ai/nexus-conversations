@@ -203,6 +203,65 @@ class TestDynamoMessageRepository:
             assert item["source_type"] == "incoming"
             assert "ExpiresOn" in item
 
+    def test_storage_message_uses_message_id_from_event(self, mock_dynamodb_table):
+        """Test that message_id from event (message_data) is used when provided."""
+        repository = DynamoMessageRepository()
+        expected_message_id = "evt-abc123-from-nexus-ai"
+        message_data = {
+            "message_id": expected_message_id,
+            "text": "Hello",
+            "source": "incoming",
+            "created_at": "2024-01-01T12:00:00Z",
+        }
+
+        with patch("conversation_ms.adapters.dynamo.get_message_table") as mock_get_table:
+            mock_get_table.return_value.__enter__.return_value = mock_dynamodb_table
+            mock_get_table.return_value.__exit__.return_value = None
+            with patch("conversation_ms.adapters.dynamo.sentry_sdk.capture_message") as mock_capture_message:
+                repository.storage_message(
+                    project_uuid=str(uuid4()),
+                    contact_urn="whatsapp:+5511999999999",
+                    message_data=message_data,
+                    channel_uuid=str(uuid4()),
+                    resolution_status="2",
+                    ttl_hours=48,
+                )
+
+                # Provided message_id is used in stored item
+                mock_dynamodb_table.put_item.assert_called_once()
+                item = mock_dynamodb_table.put_item.call_args.kwargs["Item"]
+                assert item["message_id"] == expected_message_id
+                assert item["message_timestamp"].endswith(f"#{expected_message_id}")
+
+                # Sentry warning path is not triggered
+                mock_capture_message.assert_not_called()
+
+    def test_storage_message_uses_id_fallback_from_event(self, mock_dynamodb_table):
+        """Test that message_data['id'] is used when message_id is not present."""
+        repository = DynamoMessageRepository()
+        expected_id = "evt-fallback-id-456"
+        message_data = {
+            "id": expected_id,
+            "text": "Hello",
+            "source": "incoming",
+            "created_at": "2024-01-01T12:00:00Z",
+        }
+
+        with patch("conversation_ms.adapters.dynamo.get_message_table") as mock_get_table:
+            mock_get_table.return_value.__enter__.return_value = mock_dynamodb_table
+            mock_get_table.return_value.__exit__.return_value = None
+            with patch("conversation_ms.adapters.dynamo.sentry_sdk.capture_message") as mock_capture_message:
+                repository.storage_message(
+                    project_uuid=str(uuid4()),
+                    contact_urn="whatsapp:+5511999999999",
+                    message_data=message_data,
+                    channel_uuid=str(uuid4()),
+                )
+
+                item = mock_dynamodb_table.put_item.call_args.kwargs["Item"]
+                assert item["message_id"] == expected_id
+                mock_capture_message.assert_not_called()
+
     def test_get_messages(self, mock_dynamodb_table):
         """Test getting messages from DynamoDB."""
         mock_items = [

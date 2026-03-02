@@ -30,6 +30,7 @@ pyjwt = "^2.12.1"
 tenacity = "^9.0.0"
 
 [tool.poetry.group.dev.dependencies]
+virtualenv = ">=20.24,<21"  # Pin: 21.x has LogCmd import issue with poetry/pendulum
 ipython = "^8.16.1"
 pytest-django = "^4.6.0"
 pytest-cov = "^4.1.0"

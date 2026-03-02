@@ -191,7 +191,7 @@ class TestDynamoMessageRepository:
                 message_data=message_data,
                 channel_uuid=str(uuid4()),
                 resolution_status="2",
-                ttl_hours=48,
+                ttl_hours=168,
             )
 
             # Verify put_item was called

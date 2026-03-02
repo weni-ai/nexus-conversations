@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
 
@@ -22,15 +22,27 @@ class ClassificationService:
         self.lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
         self.dynamo_repo = DynamoMessageRepository()
 
-    def classify_conversation(self, conversation_uuid: str) -> Optional[ConversationClassification]:
+    def classify_conversation(
+        self, conversation_uuid: str, save_resolution: bool = True
+    ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
         Main entry point to classify a conversation.
+
+        Args:
+            conversation_uuid: UUID of the conversation to classify
+            save_resolution: If False, returns resolution without saving (for bulk updates)
+
+        Returns:
+            Tuple of (conversation, classification, resolution) where:
+            - conversation: The Conversation object (or None if not found)
+            - classification: The ConversationClassification object (or None if classification failed)
+            - resolution: The resolution string (or None if classification failed)
         """
         try:
             conversation = Conversation.objects.get(uuid=conversation_uuid)
         except Conversation.DoesNotExist:
             logger.error(f"[ClassificationService] Conversation {conversation_uuid} not found.")
-            return None
+            return (None, None, None)
 
         messages = None
         if conversation.has_chats_room:
@@ -44,13 +56,17 @@ class ClassificationService:
             messages = self._get_conversation_messages(conversation)
             if not messages:
                 logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-                return None
+                return (conversation, None, None)
 
             resolution = self._get_resolution_classification(conversation, messages)
 
-        # Update conversation resolution
-        conversation.resolution = resolution
-        conversation.save(update_fields=["resolution"])
+        # Update conversation resolution conditionally
+        if save_resolution:
+            conversation.resolution = resolution
+            conversation.save(update_fields=["resolution"])
+        else:
+            # Just set the resolution on the object without saving (for bulk update)
+            conversation.resolution = resolution
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
@@ -58,9 +74,10 @@ class ClassificationService:
 
         if not messages:
             logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return None
+            return (conversation, None, resolution)
 
-        return self._classify_topics(conversation, messages)
+        classification = self._classify_topics(conversation, messages)
+        return (conversation, classification, resolution)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
         """
@@ -86,7 +103,7 @@ class ClassificationService:
                 logger.warning(f"[ClassificationService] Resolution lambda returned None for {conversation.uuid}")
                 return str(ResolutionEntities.UNCLASSIFIED)
 
-            return str(result)
+            return ResolutionEntities.convert_resolution_string_to_int(result)
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error getting resolution for {conversation.uuid}: {e}")
@@ -107,7 +124,8 @@ class ClassificationService:
             )
             return None
 
-        payload = {"topics": topics_payload, "conversation": self._format_messages_for_lambda(messages)}
+        formatted_messages = self._format_messages_for_lambda(messages)
+        payload = {"topics": topics_payload, "conversation": {"messages": formatted_messages}}
 
         try:
             lambda_name = getattr(settings, "CONVERSATION_TOPIC_CLASSIFIER_NAME", None)
@@ -262,8 +280,7 @@ class ClassificationService:
         conversation_resolution = self._invoke_lambda(
             lambda_name=str(settings.CONVERSATION_RESOLUTION_NAME), payload=payload_conversation
         )
-        conversation_resolution_response = json.loads(conversation_resolution.get("Payload").read()).get("body")
-        resolution = conversation_resolution_response.get("result")
+        resolution = conversation_resolution.get("result")
 
         # Ensure resolution is not None - use "unclassified" if lambda returns empty/None
         if not resolution:

@@ -9,7 +9,12 @@ from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
 from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
-from conversation_ms.serializers import ConversationSerializer, SubTopicsSerializer, TopicsSerializer
+from conversation_ms.serializers import (
+    ConversationDetailSerializer,
+    ConversationSerializer,
+    SubTopicsSerializer,
+    TopicsSerializer,
+)
 
 
 @extend_schema(
@@ -30,6 +35,12 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = ConversationSerializer
     pagination_class = ConversationCursorPagination
+
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return ConversationDetailSerializer
+        return ConversationSerializer
+
     authentication_classes = [InternalTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]

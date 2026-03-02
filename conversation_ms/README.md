@@ -139,7 +139,7 @@ MessageService.process_message_received/sent()
 
 ### Message Storage Strategy
 
-- **In Progress**: Messages stored in DynamoDB with 48-hour TTL
+- **In Progress**: Messages stored in DynamoDB with 7-day TTL
 - **After Closure**: Messages migrated to PostgreSQL `ConversationMessages` table (JSONField)
 - **Rationale**: Avoids constant PostgreSQL updates during active conversations
 

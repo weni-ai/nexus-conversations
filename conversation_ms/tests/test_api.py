@@ -82,6 +82,15 @@ class TestConversationEndpoint:
 
         assert response.status_code == status.HTTP_200_OK
 
+        # Normalized fields (matches nexus-ai format)
+        assert "conversation_uuid" in response.data
+        assert response.data["conversation_uuid"] == str(conversation.uuid)
+        assert "ended_at" in response.data
+        assert "topic" in response.data
+        assert "uuid" not in response.data
+        assert "end_date" not in response.data
+        assert "contact_name" not in response.data
+
         # Check results in paginated response
         results = response.data["messages"]["results"]
         assert len(results) == 2

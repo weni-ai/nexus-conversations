@@ -80,7 +80,7 @@ def migrate_messages_task(self, conversation_uuid: str):
         )
         sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
         sentry_sdk.capture_exception(e)
-        raise self.retry(exc=e)
+        raise self.retry(exc=e) from e
 
 
 @celery_app.task(

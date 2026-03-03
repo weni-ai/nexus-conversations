@@ -48,12 +48,11 @@ class MainConversationService:
         """
         if not channel_uuid:
             logger.warning(
-                "[MainConversationService] channel_uuid is None, cannot create conversation",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "contact_name": contact_name,
-                },
+                "[MainConversationService] channel_uuid is None, cannot create conversation "
+                "project_uuid=%s contact_urn=%s contact_name=%s",
+                project_uuid,
+                contact_urn,
+                contact_name,
             )
             return None
 
@@ -95,12 +94,11 @@ class MainConversationService:
                     msg_created_at=msg_created_at,
                 )
                 logger.info(
-                    "[MainConversationService] Created new conversation",
-                    extra={
-                        "conversation_uuid": str(conversation.uuid),
-                        "project_uuid": project_uuid,
-                        "contact_urn": contact_urn,
-                    },
+                    "[MainConversationService] Created new conversation "
+                    "conversation_uuid=%s project_uuid=%s contact_urn=%s",
+                    conversation.uuid,
+                    project_uuid,
+                    contact_urn,
                 )
                 return conversation
 
@@ -121,39 +119,62 @@ class MainConversationService:
                             migration_service = MessageMigrationService()
                             migration_service.migrate_conversation_messages_to_postgres(conversation)
                             logger.info(
-                                "[MainConversationService] Message migration completed for closed conversation",
-                                extra={"conversation_uuid": str(conversation.uuid)},
+                                "[MainConversationService] Message migration completed for closed "
+                                "conversation conversation_uuid=%s",
+                                conversation.uuid,
                             )
                         except Exception as e:
                             logger.error(
-                                "[MainConversationService] Error during message migration",
-                                extra={
-                                    "conversation_uuid": str(conversation.uuid),
-                                    "error": str(e),
-                                },
+                                "[MainConversationService] Error during message migration "
+                                "conversation_uuid=%s error=%s",
+                                conversation.uuid,
+                                str(e),
                                 exc_info=True,
                             )
 
                 logger.warning(
-                    "[MainConversationService] Multiple conversations found, marked old ones as Unclassified",
-                    extra={
-                        "project_uuid": project_uuid,
-                        "contact_urn": contact_urn,
-                        "channel_uuid": str(channel_uuid),
-                        "count": conversation_queryset.count(),
-                        "closed_count": conversations_to_close.count(),
-                    },
+                    "[MainConversationService] Multiple conversations found, marked old ones as Unclassified "
+                    "project_uuid=%s contact_urn=%s channel_uuid=%s count=%s closed_count=%s",
+                    project_uuid,
+                    contact_urn,
+                    channel_uuid,
+                    conversation_queryset.count(),
+                    conversations_to_close.count(),
                 )
 
             # Return the most recent conversation in progress
             conversation = conversation_queryset.first()
+
+            # Backfill start_date/end_date when conversation was created by another path (e.g. Mailroom)
+            if conversation.start_date is None and msg_created_at:
+                try:
+                    msg_date = pendulum.parse(msg_created_at)
+                    conversation.start_date = msg_date
+                    conversation.end_date = msg_date.add(days=1)
+                    conversation.save(update_fields=["start_date", "end_date"])
+                    logger.info(
+                        "[MainConversationService] Backfilled start_date/end_date from first message "
+                        "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",
+                        conversation.uuid,
+                        project_uuid,
+                        contact_urn,
+                        conversation.start_date,
+                    )
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        "[MainConversationService] Could not backfill start_date: invalid msg_created_at "
+                        "conversation_uuid=%s msg_created_at=%s error=%s",
+                        conversation.uuid,
+                        msg_created_at,
+                        str(e),
+                    )
+
             logger.debug(
-                "[MainConversationService] Found existing conversation",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                },
+                "[MainConversationService] Found existing conversation "
+                "conversation_uuid=%s project_uuid=%s contact_urn=%s",
+                conversation.uuid,
+                project_uuid,
+                contact_urn,
             )
             return conversation
 
@@ -173,13 +194,12 @@ class MainConversationService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[MainConversationService] Error ensuring conversation exists",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "channel_uuid": channel_uuid,
-                    "error": str(e),
-                },
+                "[MainConversationService] Error ensuring conversation exists "
+                "project_uuid=%s contact_urn=%s channel_uuid=%s error=%s",
+                project_uuid,
+                contact_urn,
+                channel_uuid,
+                str(e),
                 exc_info=True,
             )
             raise

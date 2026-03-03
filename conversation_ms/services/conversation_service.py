@@ -1,9 +1,10 @@
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import sentry_sdk
 
 from conversation_ms.adapters.router_service import MainConversationService
+from conversation_ms.sentry_reports import report_missing_required_sentry
 
 logger = logging.getLogger(__name__)
 
@@ -16,24 +17,19 @@ class ConversationService:
         contact_name: str,
         msg_created_at: str,
         channel_uuid: Optional[str] = None,
+        event_metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[object]:
+        # Sentry when creating would need required fields but created_at is missing
         if not msg_created_at:
-            sentry_sdk.set_tag("project_uuid", project_uuid)
-            sentry_sdk.set_tag("contact_urn", contact_urn)
-            sentry_sdk.set_context(
-                "conversation_creation",
-                {
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "contact_name": contact_name,
-                    "channel_uuid": channel_uuid,
-                    "msg_created_at": msg_created_at,
-                    "method": "ensure_conversation_exists",
-                    "reason": "msg_created_at is None or empty",
-                },
-            )
-            sentry_sdk.capture_message(
-                "Conversation not created: msg_created_at is None or empty (ConversationService)", level="warning"
+            report_missing_required_sentry(
+                reason="msg_created_at is None or empty",
+                missing_fields=["msg_created_at"],
+                project_uuid=project_uuid,
+                contact_urn=contact_urn,
+                contact_name=contact_name,
+                channel_uuid=channel_uuid,
+                msg_created_at=msg_created_at,
+                event_metadata=event_metadata,
             )
             logger.warning(
                 "[ConversationService] Conversation not created: msg_created_at is None or empty",
@@ -47,21 +43,15 @@ class ConversationService:
             return None
 
         if not channel_uuid:
-            sentry_sdk.set_tag("project_uuid", project_uuid)
-            sentry_sdk.set_tag("contact_urn", contact_urn)
-            sentry_sdk.set_context(
-                "conversation_creation",
-                {
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "contact_name": contact_name,
-                    "channel_uuid": None,
-                    "method": "ensure_conversation_exists",
-                    "reason": "channel_uuid is None",
-                },
-            )
-            sentry_sdk.capture_message(
-                "Conversation not created: channel_uuid is None (ConversationService)", level="info"
+            report_missing_required_sentry(
+                reason="channel_uuid is None or missing",
+                missing_fields=["channel_uuid"],
+                project_uuid=project_uuid,
+                contact_urn=contact_urn,
+                contact_name=contact_name,
+                channel_uuid=channel_uuid,
+                msg_created_at=msg_created_at,
+                event_metadata=event_metadata,
             )
             logger.warning(
                 "[ConversationService] Conversation not created: channel_uuid is None",
@@ -82,6 +72,7 @@ class ConversationService:
                 contact_name=contact_name,
                 channel_uuid=channel_uuid,
                 msg_created_at=msg_created_at,
+                event_metadata=event_metadata,
             )
 
             if conversation:

@@ -30,6 +30,7 @@ class ConversationService:
                 channel_uuid=channel_uuid,
                 msg_created_at=msg_created_at,
                 event_metadata=event_metadata,
+                level="warning",
             )
             logger.warning(
                 "[ConversationService] Conversation not created: msg_created_at is None or empty",
@@ -52,6 +53,7 @@ class ConversationService:
                 channel_uuid=channel_uuid,
                 msg_created_at=msg_created_at,
                 event_metadata=event_metadata,
+                level="warning",
             )
             logger.warning(
                 "[ConversationService] Conversation not created: channel_uuid is None",

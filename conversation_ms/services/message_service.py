@@ -155,7 +155,7 @@ class MessageService:
             self.message_repository.save_sent_message(conversation=conversation, event=event)
             self._handle_special_events(event_data, conversation, event.project_uuid, event.contact_urn)
             logger.info(
-                "[MessageService] Message.sent processed successfully " "correlation_id=%s conversation_uuid=%s",
+                "[MessageService] Message.sent processed successfully correlation_id=%s conversation_uuid=%s",
                 event.correlation_id,
                 str(conversation.uuid),
             )

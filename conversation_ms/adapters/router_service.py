@@ -103,9 +103,11 @@ class MainConversationService:
                 return conversation
 
             # Handle multiple conversations in progress
-            if conversation_queryset.count() > 1:
+            in_progress_count = conversation_queryset.count()
+            if in_progress_count > 1:
                 conversation_queryset = conversation_queryset.order_by("-created_at")
                 conversations_to_close = conversation_queryset.exclude(uuid=conversation_queryset.first().uuid)
+                closed_count = conversations_to_close.count()
 
                 for conversation in conversations_to_close:
                     original_resolution = str(conversation.resolution)
@@ -138,8 +140,8 @@ class MainConversationService:
                     project_uuid,
                     contact_urn,
                     channel_uuid,
-                    conversation_queryset.count(),
-                    conversations_to_close.count(),
+                    in_progress_count,
+                    closed_count,
                 )
 
             # Return the most recent conversation in progress
@@ -153,7 +155,7 @@ class MainConversationService:
                     conversation.end_date = msg_date.add(days=1)
                     conversation.save(update_fields=["start_date", "end_date"])
                     logger.info(
-                        "[MainConversationService] Backfilled start_date/end_date from first message "
+                        "[MainConversationService] Backfilled start_date/end_date from message timestamp "
                         "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",
                         conversation.uuid,
                         project_uuid,

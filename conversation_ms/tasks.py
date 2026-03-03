@@ -55,11 +55,11 @@ def _migrate_messages_to_postgres(conversation: Conversation):
 )
 def migrate_messages_task(self, conversation_uuid: str):
     """
-    Celery task para migrar mensagens de uma conversa do DynamoDB para PostgreSQL.
-    Executada de forma assíncrona para não bloquear o processamento principal.
+    Celery task to migrate messages from a conversation from DynamoDB to PostgreSQL.
+    Executed asynchronously to avoid blocking the main processing.
 
     Args:
-        conversation_uuid: UUID da conversa para migrar mensagens
+        conversation_uuid: Conversation UUID to migrate messages
     """
     try:
         conversation = Conversation.objects.get(uuid=conversation_uuid)
@@ -99,7 +99,7 @@ def classify_conversation_task(self, conversation_uuid: str):
     """
     logger.info(f"[ClassificationTask] Starting classification for " f"conversation {conversation_uuid}")
 
-    # Verificar idempotência: se conversa já foi classificada, retornar early
+    # Check idempotency: if conversation already classified, return early
     try:
         conv = Conversation.objects.only("resolution").get(uuid=conversation_uuid)
         if str(conv.resolution) != str(ResolutionEntities.IN_PROGRESS):
@@ -313,6 +313,29 @@ def check_day_ended(project_uuid: str, project_timezone: str) -> tuple[bool, str
     return day_not_processed, target_date
 
 
+def _normalize_date_string(date_string: str) -> str:
+    """
+    Normalize a date string to YYYY-MM-DD format.
+    Accepts both full ISO timestamps and simple dates.
+
+    Args:
+        date_string: Date string (YYYY-MM-DD or ISO timestamp)
+
+    Returns:
+        String in YYYY-MM-DD format
+    """
+    try:
+        dt = pendulum.parse(date_string)
+        return dt.format("YYYY-MM-DD")
+    except (ValueError, TypeError):
+        try:
+            date.fromisoformat(date_string)
+            return date_string
+        except ValueError:
+            parts = date_string.split("T")[0].split(" ")[0]
+            return parts
+
+
 def _determine_date_range(
     force_close: bool,
     start_date: Optional[str],
@@ -322,13 +345,15 @@ def _determine_date_range(
     project_timezone: str,
 ) -> Optional[tuple[pendulum.DateTime, pendulum.DateTime]]:
     """
-    Determina o range de datas a processar usando ProjectDay.
+    Determine the date range to process using ProjectDay.
 
     Returns:
-        Tuple (start_utc, end_utc) se deve processar, None caso contrário.
+        Tuple (start_utc, end_utc) if should process, None otherwise.
     """
     if force_close and start_date:
-        start_day, end_day = ProjectDay.for_date_range(start_date, end_date, project_timezone)
+        normalized_start = _normalize_date_string(start_date)
+        normalized_end = _normalize_date_string(end_date) if end_date else None
+        start_day, end_day = ProjectDay.for_date_range(normalized_start, normalized_end, project_timezone)
         return start_day.get_utc_range()[0], end_day.get_utc_range()[1]
 
     if day_ended or force_close:
@@ -601,7 +626,7 @@ def _process_single_project(
         start_of_range_utc = start_of_range.in_timezone("UTC")
         end_of_range_utc = end_of_range.in_timezone("UTC")
 
-        # Criar ProjectDay para logging e processamento
+        # Create ProjectDay for logging and processing
         start_in_project_tz = start_of_range_utc.in_timezone(project_timezone)
         project_day = ProjectDay.for_date(start_in_project_tz.to_date_string(), project_timezone)
 
@@ -614,7 +639,7 @@ def _process_single_project(
         )
 
         conversations_closed = _process_project_conversations(
-            project_uuid, project_timezone, start_of_range_utc, end_of_range_utc
+            project_uuid, project_timezone, start_of_range_utc, end_of_range_utc, classification_service
         )
 
         TaskLogger.log("project_completed", project_uuid=project_uuid, conversations_closed=conversations_closed)
@@ -725,6 +750,7 @@ def close_daily_conversations_task(
     force_close: bool = False,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    project_client: Optional[ProjectClient] = None,
 ):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
@@ -739,14 +765,18 @@ def close_daily_conversations_task(
        - Migrates messages to PostgreSQL
 
     Processes in batches to avoid OOMKilled errors.
+
+    Args:
+        force_close: Force processing even if day hasn't ended
+        start_date: Optional start date (YYYY-MM-DD or ISO timestamp)
+        end_date: Optional end date (YYYY-MM-DD or ISO timestamp)
+        project_client: Optional ProjectClient instance (for testing)
     """
     TaskLogger.log("task_start")
 
     try:
         fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
-        # Note: project_client can be injected for testing, but Celery tasks don't support it directly
-        # For testing, we'll need to patch ProjectClient
-        project_client = ProjectClient()
+        project_client = project_client or ProjectClient()
 
         projects_processed = 0
         conversations_closed = 0
@@ -774,7 +804,7 @@ def close_daily_conversations_task(
                     continue
 
                 page_conversations_closed, page_projects_processed = _process_projects_page(
-                    projects_data, fallback_timezone, force_close, start_date, end_date
+                    projects_data, fallback_timezone, force_close, start_date, end_date, project_client
                 )
                 conversations_closed += page_conversations_closed
                 projects_processed += page_projects_processed
@@ -812,14 +842,14 @@ def _is_conversation_already_processed(
     project_day: ProjectDay,
 ) -> bool:
     """
-    Verifica se conversa já foi processada (idempotência).
+    Check if conversation has already been processed (idempotency).
 
     Args:
-        conversation_uuid: UUID da conversa a verificar
-        project_day: ProjectDay representando o dia que está sendo processado
+        conversation_uuid: Conversation UUID to check
+        project_day: ProjectDay representing the day being processed
 
     Returns:
-        True se a conversa já foi processada (end_date definido e resolution != IN_PROGRESS)
+        True if conversation has already been processed (end_date set and resolution != IN_PROGRESS)
     """
     try:
         conv = Conversation.objects.only("end_date", "resolution").get(uuid=conversation_uuid)
@@ -834,18 +864,20 @@ def _process_conversation_batch(
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
     classification_service: Optional[ClassificationService] = None,
+    topics_cache: Optional[dict] = None,
 ) -> int:
     """
-    Processa batch de conversas com bulk updates.
+    Process a batch of conversations with bulk updates.
 
     Args:
-        conversation_batch: Lista de objetos Conversation para processar
-        project_uuid: UUID do projeto (para logging)
-        end_date_utc: Data de fim em UTC (pendulum.DateTime)
-        classification_service: ClassificationService opcional (para testes)
+        conversation_batch: List of Conversation objects to process
+        project_uuid: Project UUID (for logging)
+        end_date_utc: End date in UTC (pendulum.DateTime)
+        classification_service: Optional ClassificationService (for testing)
+        topics_cache: Cache of topics_payload by project_uuid (avoids N+1 queries)
 
     Returns:
-        Número de conversas fechadas com sucesso
+        Number of conversations closed successfully
     """
     from django.db import transaction
 
@@ -853,6 +885,10 @@ def _process_conversation_batch(
     service = classification_service or ClassificationService()
     conversations_to_update_resolution = []
     conversations_to_migrate = []
+
+    # Cache topics_payload per project (avoids N+1 queries)
+    if topics_cache is None:
+        topics_cache = {}
 
     try:
         # 1. Bulk update end_date
@@ -863,12 +899,25 @@ def _process_conversation_batch(
             extra={"project_uuid": project_uuid, "batch_size": len(conversation_batch)},
         )
 
-        # 2. Classificar todas (sem salvar individualmente)
+        # 2. Pre-load topics_payload once per project (avoids N+1 queries)
+        # We assume all conversations in the batch are from the same project
+        if conversation_batch:
+            first_conversation = conversation_batch[0]
+            project_uuid_key = str(first_conversation.project.uuid)
+            if project_uuid_key not in topics_cache:
+                topics_cache[project_uuid_key] = service._get_topics_payload(first_conversation.project)
+            cached_topics = topics_cache[project_uuid_key]
+        else:
+            cached_topics = None
+
+        # 3. Classify all (without saving individually)
+        # Pass Conversation object directly to avoid N+1 query
+        # Pass cached topics_payload to avoid N+1 queries
         for conversation in conversation_batch:
             conversation_uuid = str(conversation.uuid)
             try:
                 conv, classification, resolution = service.classify_conversation(
-                    conversation_uuid, save_resolution=False
+                    conversation, save_resolution=False, topics_payload=cached_topics
                 )
 
                 if conv and resolution:
@@ -897,7 +946,7 @@ def _process_conversation_batch(
                 )
                 continue
 
-        # 3. Bulk update resolution (com transação para atomicidade)
+        # 4. Bulk update resolution (with transaction for atomicity)
         if conversations_to_update_resolution:
             try:
                 with transaction.atomic():
@@ -918,17 +967,17 @@ def _process_conversation_batch(
                     },
                     exc_info=True,
                 )
-                # Não incrementa conversations_closed se falhou o update
+                # Don't increment conversations_closed if update failed
 
-        # 4. Migrar mensagens síncronamente (já temos o objeto em memória, evita get extra)
-        # Como estamos em batch, não precisa ser assíncrono e evita query desnecessária
+        # 5. Migrate messages asynchronously to avoid blocking processing
+        # This avoids overloading the database with synchronous migration queries
         for conv in conversations_to_migrate:
             try:
-                _migrate_messages_to_postgres(conv)
+                migrate_messages_task.delay(str(conv.uuid))
             except Exception as e:
-                # Log erro mas não quebra o batch
+                # Log error but don't break the batch
                 logger.warning(
-                    f"[CloseDailyConversationsTask] Failed to migrate messages for conversation {conv.uuid}",
+                    f"[CloseDailyConversationsTask] Failed to queue message migration for conversation {conv.uuid}",
                     extra={
                         "conversation_uuid": str(conv.uuid),
                         "project_uuid": project_uuid,
@@ -957,20 +1006,22 @@ def _process_project_conversations(
     start_of_range_utc: pendulum.DateTime,
     end_of_range_utc: pendulum.DateTime,
     classification_service: Optional[ClassificationService] = None,
+    topics_cache: Optional[dict] = None,
 ) -> int:
     """
-    Processa todas as conversas abertas de um projeto que foram iniciadas
-    dentro do intervalo de um dia no timezone do projeto.
+    Process all open conversations of a project that were started
+    within a day interval in the project's timezone.
 
     Args:
-        project_uuid: UUID do projeto
-        project_timezone: Timezone do projeto
-        start_of_range_utc: Início do range em UTC (pendulum.DateTime)
-        end_of_range_utc: Fim do range em UTC (pendulum.DateTime)
-        classification_service: ClassificationService opcional (para testes)
+        project_uuid: Project UUID
+        project_timezone: Project timezone
+        start_of_range_utc: Start of range in UTC (pendulum.DateTime)
+        end_of_range_utc: End of range in UTC (pendulum.DateTime)
+        classification_service: Optional ClassificationService (for testing)
+        topics_cache: Cache of topics_payload by project_uuid (avoids N+1 queries)
 
     Returns:
-        Número de conversas fechadas
+        Number of conversations closed
     """
     conversations_closed = 0
 
@@ -983,15 +1034,15 @@ def _process_project_conversations(
         )
         return 0
 
-    # Determinar qual dia do projeto estamos processando
-    # (assumindo que start e end são do mesmo dia)
+    # Determine which project day we're processing
+    # (assuming start and end are the same day)
     start_in_project_tz = start_of_range_utc.in_timezone(project_timezone)
     project_day = ProjectDay.for_date(start_in_project_tz.to_date_string(), project_timezone)
 
-    # Usar o range UTC do ProjectDay (mais preciso)
+    # Use ProjectDay's UTC range (more precise)
     start_utc, end_utc = project_day.get_utc_range()
 
-    # Buscar conversas que começaram neste dia (no timezone do projeto)
+    # Fetch conversations that started on this day (in project timezone)
     conversations = (
         Conversation.objects.filter(
             project=project,
@@ -1006,15 +1057,20 @@ def _process_project_conversations(
         .iterator(chunk_size=50)
     )
 
-    # Batch size para bulk updates
+    # Batch size for bulk updates
     BATCH_SIZE = 50
     conversation_batch = []
+
+    # Cache topics_payload per project (avoids N+1 queries)
+    if topics_cache is None:
+        topics_cache = {}
 
     for conversation in conversations:
         conversation_uuid = str(conversation.uuid)
         try:
-            # Verificar idempotência
-            if _is_conversation_already_processed(conversation_uuid, project_day):
+            # Check idempotency only if end_date is already set
+            # (we already filter by resolution=IN_PROGRESS, so only need to check end_date)
+            if conversation.end_date and conversation.end_date == end_utc:
                 logger.debug(
                     f"[CloseDailyConversationsTask] Conversation {conversation_uuid} already processed, skipping",
                     extra={"conversation_uuid": conversation_uuid, "project_uuid": project_uuid},
@@ -1026,14 +1082,14 @@ def _process_project_conversations(
                 extra={"conversation_uuid": conversation_uuid, "project_uuid": project_uuid},
             )
 
-            # end_date = fim do dia no timezone do projeto (em UTC)
+            # end_date = end of day in project timezone (in UTC)
             conversation.end_date = end_utc
             conversation_batch.append(conversation)
 
-            # Processar batch quando atingir BATCH_SIZE
+            # Process batch when reaching BATCH_SIZE
             if len(conversation_batch) >= BATCH_SIZE:
                 batch_closed = _process_conversation_batch(
-                    conversation_batch, project_uuid, end_utc, classification_service
+                    conversation_batch, project_uuid, end_utc, classification_service, topics_cache
                 )
                 conversations_closed += batch_closed
                 conversation_batch = []
@@ -1052,9 +1108,11 @@ def _process_project_conversations(
             )
             continue
 
-    # Processar batch restante
+    # Process remaining batch
     if conversation_batch:
-        batch_closed = _process_conversation_batch(conversation_batch, project_uuid, end_utc, classification_service)
+        batch_closed = _process_conversation_batch(
+            conversation_batch, project_uuid, end_utc, classification_service, topics_cache
+        )
         conversations_closed += batch_closed
 
     return conversations_closed

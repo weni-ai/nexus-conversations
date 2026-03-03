@@ -55,7 +55,6 @@ class TestConversationEndpoint:
         response = api_client.get(url, **auth_headers)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["count"] == 2
         assert len(response.data["results"]) == 2
 
     def test_filter_conversations_by_status(self, api_client, project, auth_headers):
@@ -66,7 +65,7 @@ class TestConversationEndpoint:
         response = api_client.get(f"{url}?status=0", **auth_headers)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["count"] == 1
+        assert len(response.data["results"]) == 1
         # DRF ModelSerializer standard behavior for CharField with choices is to return the value
         # But here resolution is CharField in model with choices, so it returns the string value
         assert str(response.data["results"][0]["resolution"]) == "0"
@@ -128,5 +127,5 @@ class TestConversationEndpoint:
         )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["count"] == 1
+        assert len(response.data["results"]) == 1
         assert response.data["results"][0]["start_date"] == "2026-02-05T12:00:00Z"

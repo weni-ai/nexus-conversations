@@ -23,14 +23,15 @@ class ClassificationService:
         self.dynamo_repo = DynamoMessageRepository()
 
     def classify_conversation(
-        self, conversation_uuid: str, save_resolution: bool = True
+        self, conversation_or_uuid, save_resolution: bool = True, topics_payload: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
         Main entry point to classify a conversation.
 
         Args:
-            conversation_uuid: UUID of the conversation to classify
+            conversation_or_uuid: Conversation object or UUID string
             save_resolution: If False, returns resolution without saving (for bulk updates)
+            topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
 
         Returns:
             Tuple of (conversation, classification, resolution) where:
@@ -38,11 +39,17 @@ class ClassificationService:
             - classification: The ConversationClassification object (or None if classification failed)
             - resolution: The resolution string (or None if classification failed)
         """
-        try:
-            conversation = Conversation.objects.get(uuid=conversation_uuid)
-        except Conversation.DoesNotExist:
-            logger.error(f"[ClassificationService] Conversation {conversation_uuid} not found.")
-            return (None, None, None)
+        # Accept either Conversation object or UUID string to avoid N+1 queries
+        if isinstance(conversation_or_uuid, Conversation):
+            conversation = conversation_or_uuid
+            conversation_uuid = str(conversation.uuid)
+        else:
+            try:
+                conversation = Conversation.objects.get(uuid=conversation_or_uuid)
+                conversation_uuid = str(conversation.uuid)
+            except Conversation.DoesNotExist:
+                logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
+                return (None, None, None)
 
         messages = None
         if conversation.has_chats_room:
@@ -76,7 +83,7 @@ class ClassificationService:
             logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
             return (conversation, None, resolution)
 
-        classification = self._classify_topics(conversation, messages)
+        classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
         return (conversation, classification, resolution)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
@@ -110,13 +117,22 @@ class ClassificationService:
             return str(ResolutionEntities.UNCLASSIFIED)  # Default to Unclassified on error
 
     def _classify_topics(
-        self, conversation: Conversation, messages: List[Dict[str, Any]]
+        self,
+        conversation: Conversation,
+        messages: List[Dict[str, Any]],
+        topics_payload: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[ConversationClassification]:
         """
         Invoke topics lambda and save result.
+
+        Args:
+            conversation: Conversation object
+            messages: List of messages
+            topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
         """
-        # Retrieve topics for this project to send as context
-        topics_payload = self._get_topics_payload(conversation.project)
+        # Retrieve topics for this project to send as context (or use cache)
+        if topics_payload is None:
+            topics_payload = self._get_topics_payload(conversation.project)
         if not topics_payload:
             logger.info(
                 f"[ClassificationService] No topics configured for project {conversation.project.uuid}, "
@@ -187,16 +203,20 @@ class ClassificationService:
     def _get_topics_payload(self, project) -> List[Dict[str, Any]]:
         """
         Serialize topics and subtopics for the Lambda context.
+        Uses prefetch_related to avoid N+1 queries.
         """
-        topics = Topic.objects.filter(project=project, is_active=True)
+        topics = Topic.objects.filter(project=project, is_active=True).prefetch_related("subtopics")
         if not topics.exists():
             logger.warning(f"[ClassificationService] No active topics found for project {project.uuid}")
 
         payload = []
         for topic in topics:
-            subtopics = []
-            for sub in topic.subtopics.filter(is_active=True):
-                subtopics.append({"subtopic_uuid": str(sub.uuid), "name": sub.name, "description": sub.description})
+            # subtopics is already cached due to prefetch_related
+            subtopics = [
+                {"subtopic_uuid": str(sub.uuid), "name": sub.name, "description": sub.description}
+                for sub in topic.subtopics.all()
+                if sub.is_active
+            ]
             payload.append(
                 {
                     "topic_uuid": str(topic.uuid),

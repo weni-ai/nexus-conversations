@@ -1,7 +1,7 @@
 # Celery tasks for conversation processing
 import logging
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pendulum
 import sentry_sdk
@@ -787,6 +787,233 @@ def _is_conversation_already_processed(
         return False
 
 
+def _bulk_update_conversation_end_dates(conversation_batch: list[Conversation], project_uuid: str) -> None:
+    """
+    Bulk update end_date for all conversations in the batch.
+
+    Args:
+        conversation_batch: List of Conversation objects to update
+        project_uuid: Project UUID (for logging)
+    """
+    Conversation.objects.bulk_update(conversation_batch, ["end_date"], batch_size=50)
+    logger.debug(
+        f"[CloseDailyConversationsTask] Bulk updated end_date for {len(conversation_batch)} conversations. "
+        f"Project: {project_uuid}"
+    )
+
+
+def _get_cached_topics_for_batch(
+    conversation_batch: list[Conversation],
+    service: ClassificationService,
+    topics_cache: dict,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Get cached topics payload for the batch's project.
+
+    Args:
+        conversation_batch: List of Conversation objects (assumed from same project)
+        service: ClassificationService instance
+        topics_cache: Cache dictionary for topics payload
+
+    Returns:
+        Cached topics payload or None if batch is empty
+    """
+    if not conversation_batch:
+        return None
+
+    first_conversation = conversation_batch[0]
+    project_uuid_key = str(first_conversation.project.uuid)
+
+    if project_uuid_key not in topics_cache:
+        topics_cache[project_uuid_key] = service._get_topics_payload(first_conversation.project)
+
+    return topics_cache[project_uuid_key]
+
+
+def _calculate_target_date(end_date_utc: pendulum.DateTime, project_timezone: Optional[str]) -> str:
+    """
+    Calculate target date string from UTC end date and project timezone.
+
+    Args:
+        end_date_utc: End date in UTC
+        project_timezone: Optional project timezone
+
+    Returns:
+        Date string in YYYY-MM-DD format
+    """
+    if project_timezone:
+        try:
+            return end_date_utc.in_timezone(project_timezone).to_date_string()
+        except Exception:
+            return str(end_date_utc.date())
+    return str(end_date_utc.date())
+
+
+def _handle_conversation_without_messages(
+    conversation: Conversation,
+    conversation_uuid: str,
+    project_uuid: str,
+    end_date_utc: pendulum.DateTime,
+    project_timezone: Optional[str],
+) -> None:
+    """
+    Handle conversation that has no messages by marking as UNRESOLVED and sending to Sentry.
+
+    Args:
+        conversation: Conversation object without messages
+        conversation_uuid: Conversation UUID string
+        project_uuid: Project UUID string
+        end_date_utc: End date in UTC
+        project_timezone: Optional project timezone
+    """
+    conversation.resolution = str(ResolutionEntities.UNRESOLVED)
+    target_date = _calculate_target_date(end_date_utc, project_timezone)
+
+    sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
+    sentry_sdk.set_tag("project_uuid", project_uuid)
+    sentry_sdk.set_tag("error_type", "no_messages")
+    sentry_sdk.set_context(
+        "conversation_no_messages",
+        {
+            "conversation_uuid": conversation_uuid,
+            "project_uuid": project_uuid,
+            "target_date": target_date,
+            "end_date_utc": str(end_date_utc),
+            "has_chats_room": conversation.has_chats_room,
+        },
+    )
+    sentry_sdk.capture_message(
+        f"Conversation {conversation_uuid} has no messages - marked as UNRESOLVED. "
+        f"Project: {project_uuid}, Date: {target_date}",
+        level="warning",
+    )
+
+    logger.warning(
+        f"[CloseDailyConversationsTask] Conversation {conversation_uuid} has no messages - "
+        f"marked as UNRESOLVED. Project: {project_uuid}, Date: {target_date}"
+    )
+
+
+def _classify_single_conversation(
+    conversation: Conversation,
+    service: ClassificationService,
+    cached_topics: Optional[List[Dict[str, Any]]],
+    project_uuid: str,
+    end_date_utc: pendulum.DateTime,
+    project_timezone: Optional[str],
+) -> tuple[Optional[Conversation], bool]:
+    """
+    Classify a single conversation and return result.
+
+    Args:
+        conversation: Conversation object to classify
+        service: ClassificationService instance
+        cached_topics: Cached topics payload
+        project_uuid: Project UUID (for logging)
+        end_date_utc: End date in UTC
+        project_timezone: Optional project timezone
+
+    Returns:
+        Tuple of (conversation_object, should_migrate_messages)
+        Returns (None, False) if classification failed
+    """
+    conversation_uuid = str(conversation.uuid)
+
+    try:
+        conv, classification, resolution = service.classify_conversation(
+            conversation, save_resolution=False, topics_payload=cached_topics
+        )
+
+        if conv and resolution:
+            conv.resolution = resolution
+            should_migrate = classification is not None
+            return (conv, should_migrate)
+
+        # Check if conversation has no messages
+        messages = service._get_conversation_messages(conversation)
+        if not messages:
+            _handle_conversation_without_messages(
+                conversation, conversation_uuid, project_uuid, end_date_utc, project_timezone
+            )
+            return (conversation, False)
+
+        # Classification failed but has messages
+        logger.warning(
+            f"[CloseDailyConversationsTask] Failed to classify conversation {conversation_uuid}. "
+            f"Project: {project_uuid}, Has messages: True, Has conv: {conv is not None}, "
+            f"Has resolution: {resolution is not None}"
+        )
+        return (None, False)
+
+    except Exception as e:
+        sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
+        sentry_sdk.set_tag("project_uuid", project_uuid)
+        sentry_sdk.capture_exception(e)
+        logger.error(
+            f"[CloseDailyConversationsTask] Error classifying conversation {conversation_uuid}. "
+            f"Project: {project_uuid}, Error: {str(e)}",
+            exc_info=True,
+        )
+        return (None, False)
+
+
+def _bulk_update_conversation_resolutions(
+    conversations_to_update: list[Conversation],
+    project_uuid: str,
+    batch_size: int,
+) -> None:
+    """
+    Bulk update resolution for conversations with transaction atomicity.
+
+    Args:
+        conversations_to_update: List of Conversation objects to update
+        project_uuid: Project UUID (for logging)
+        batch_size: Original batch size (for logging)
+    """
+    from django.db import transaction
+
+    if not conversations_to_update:
+        return
+
+    try:
+        with transaction.atomic():
+            Conversation.objects.bulk_update(conversations_to_update, ["resolution"], batch_size=50)
+        logger.info(
+            f"[CloseDailyConversationsTask] Bulk updated resolution for "
+            f"{len(conversations_to_update)} conversations. "
+            f"Project: {project_uuid}, Updated: {len(conversations_to_update)}, "
+            f"Batch size: {batch_size}"
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        conversation_uuids_sample = [str(c.uuid) for c in conversations_to_update[:10]]
+        logger.error(
+            f"[CloseDailyConversationsTask] Error bulk updating resolution - "
+            f"conversations will remain with end_date but IN_PROGRESS. "
+            f"Project: {project_uuid}, Batch size: {len(conversations_to_update)}, "
+            f"Error: {str(e)}, Sample UUIDs: {conversation_uuids_sample}",
+            exc_info=True,
+        )
+
+
+def _queue_message_migrations(conversations_to_migrate: list[Conversation], project_uuid: str) -> None:
+    """
+    Queue message migration tasks asynchronously for conversations.
+
+    Args:
+        conversations_to_migrate: List of Conversation objects to migrate
+        project_uuid: Project UUID (for logging)
+    """
+    for conv in conversations_to_migrate:
+        try:
+            migrate_messages_task.delay(str(conv.uuid))
+        except Exception as e:
+            logger.warning(
+                f"[CloseDailyConversationsTask] Failed to queue message migration for conversation {conv.uuid}. "
+                f"Project: {project_uuid}, Error: {str(e)}"
+            )
+
+
 def _process_conversation_batch(
     conversation_batch: list[Conversation],
     project_uuid: str,
@@ -804,147 +1031,44 @@ def _process_conversation_batch(
         end_date_utc: End date in UTC (pendulum.DateTime)
         classification_service: Optional ClassificationService (for testing)
         topics_cache: Cache of topics_payload by project_uuid (avoids N+1 queries)
+        project_timezone: Optional project timezone
 
     Returns:
         Number of conversations closed successfully
     """
-    from django.db import transaction
-
     conversations_closed = 0
     service = classification_service or ClassificationService()
     conversations_to_update_resolution = []
     conversations_to_migrate = []
 
-    # Cache topics_payload per project (avoids N+1 queries)
+    # Initialize topics cache if not provided
     if topics_cache is None:
         topics_cache = {}
 
     try:
         # 1. Bulk update end_date
-        Conversation.objects.bulk_update(conversation_batch, ["end_date"], batch_size=50)
-
-        logger.debug(
-            f"[CloseDailyConversationsTask] Bulk updated end_date for {len(conversation_batch)} conversations. "
-            f"Project: {project_uuid}"
-        )
+        _bulk_update_conversation_end_dates(conversation_batch, project_uuid)
 
         # 2. Pre-load topics_payload once per project (avoids N+1 queries)
-        # We assume all conversations in the batch are from the same project
-        if conversation_batch:
-            first_conversation = conversation_batch[0]
-            project_uuid_key = str(first_conversation.project.uuid)
-            if project_uuid_key not in topics_cache:
-                topics_cache[project_uuid_key] = service._get_topics_payload(first_conversation.project)
-            cached_topics = topics_cache[project_uuid_key]
-        else:
-            cached_topics = None
+        cached_topics = _get_cached_topics_for_batch(conversation_batch, service, topics_cache)
 
-        # 3. Classify all (without saving individually)
-        # Pass Conversation object directly to avoid N+1 query
-        # Pass cached topics_payload to avoid N+1 queries
+        # 3. Classify all conversations
         for conversation in conversation_batch:
-            conversation_uuid = str(conversation.uuid)
-            try:
-                conv, classification, resolution = service.classify_conversation(
-                    conversation, save_resolution=False, topics_payload=cached_topics
-                )
+            conv, should_migrate = _classify_single_conversation(
+                conversation, service, cached_topics, project_uuid, end_date_utc, project_timezone
+            )
 
-                if conv and resolution:
-                    conv.resolution = resolution
-                    conversations_to_update_resolution.append(conv)
-
-                    if classification:
-                        conversations_to_migrate.append(conv)
-                    conversations_closed += 1
-                else:
-                    messages = service._get_conversation_messages(conversation)
-                    if not messages:
-                        conversation.resolution = str(ResolutionEntities.UNRESOLVED)
-                        conversations_to_update_resolution.append(conversation)
-                        conversations_closed += 1
-
-                        if project_timezone:
-                            try:
-                                target_date = end_date_utc.in_timezone(project_timezone).to_date_string()
-                            except Exception:
-                                target_date = str(end_date_utc.date())
-                        else:
-                            target_date = str(end_date_utc.date())
-
-                        sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
-                        sentry_sdk.set_tag("project_uuid", project_uuid)
-                        sentry_sdk.set_tag("error_type", "no_messages")
-                        sentry_sdk.set_context(
-                            "conversation_no_messages",
-                            {
-                                "conversation_uuid": conversation_uuid,
-                                "project_uuid": project_uuid,
-                                "target_date": target_date,
-                                "end_date_utc": str(end_date_utc),
-                                "has_chats_room": conversation.has_chats_room,
-                            },
-                        )
-                        sentry_sdk.capture_message(
-                            f"Conversation {conversation_uuid} has no messages - marked as UNRESOLVED. "
-                            f"Project: {project_uuid}, Date: {target_date}",
-                            level="warning",
-                        )
-
-                        logger.warning(
-                            f"[CloseDailyConversationsTask] Conversation {conversation_uuid} has no messages - "
-                            f"marked as UNRESOLVED. Project: {project_uuid}, Date: {target_date}"
-                        )
-                    else:
-                        logger.warning(
-                            f"[CloseDailyConversationsTask] Failed to classify conversation {conversation_uuid}. "
-                            f"Project: {project_uuid}, Has messages: True, Has conv: {conv is not None}, "
-                            f"Has resolution: {resolution is not None}"
-                        )
-            except Exception as e:
-                sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
-                sentry_sdk.set_tag("project_uuid", project_uuid)
-                sentry_sdk.capture_exception(e)
-                logger.error(
-                    f"[CloseDailyConversationsTask] Error classifying conversation {conversation_uuid}. "
-                    f"Project: {project_uuid}, Error: {str(e)}",
-                    exc_info=True,
-                )
-                continue
+            if conv:
+                conversations_to_update_resolution.append(conv)
+                if should_migrate:
+                    conversations_to_migrate.append(conv)
+                conversations_closed += 1
 
         # 4. Bulk update resolution (with transaction for atomicity)
-        if conversations_to_update_resolution:
-            try:
-                with transaction.atomic():
-                    Conversation.objects.bulk_update(conversations_to_update_resolution, ["resolution"], batch_size=50)
-                logger.info(
-                    f"[CloseDailyConversationsTask] Bulk updated resolution for "
-                    f"{len(conversations_to_update_resolution)} conversations. "
-                    f"Project: {project_uuid}, Updated: {len(conversations_to_update_resolution)}, "
-                    f"Batch size: {len(conversation_batch)}"
-                )
-            except Exception as e:
-                sentry_sdk.capture_exception(e)
-                conversation_uuids_sample = [str(c.uuid) for c in conversations_to_update_resolution[:10]]
-                logger.error(
-                    f"[CloseDailyConversationsTask] Error bulk updating resolution - conversations will remain with end_date but IN_PROGRESS. "
-                    f"Project: {project_uuid}, Batch size: {len(conversations_to_update_resolution)}, "
-                    f"Error: {str(e)}, Sample UUIDs: {conversation_uuids_sample}",
-                    exc_info=True,
-                )
-                # Don't increment conversations_closed if update failed
-                # These conversations will be retried on next run since they have end_date but resolution=IN_PROGRESS
+        _bulk_update_conversation_resolutions(conversations_to_update_resolution, project_uuid, len(conversation_batch))
 
-        # 5. Migrate messages asynchronously to avoid blocking processing
-        # This avoids overloading the database with synchronous migration queries
-        for conv in conversations_to_migrate:
-            try:
-                migrate_messages_task.delay(str(conv.uuid))
-            except Exception as e:
-                # Log error but don't break the batch
-                logger.warning(
-                    f"[CloseDailyConversationsTask] Failed to queue message migration for conversation {conv.uuid}. "
-                    f"Project: {project_uuid}, Error: {str(e)}"
-                )
+        # 5. Queue message migrations asynchronously
+        _queue_message_migrations(conversations_to_migrate, project_uuid)
 
     except Exception as e:
         sentry_sdk.capture_exception(e)

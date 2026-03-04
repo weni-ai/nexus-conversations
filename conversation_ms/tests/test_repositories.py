@@ -2,15 +2,16 @@
 Tests for conversation_ms repositories.
 """
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
-from conversation_ms.repositories.message_repository import MessageRepository
-from conversation_ms.repositories.conversation_repository import ConversationRepository
-from conversation_ms.models import Project, Conversation
+import pendulum
+import pytest
+
 from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
-from datetime import datetime
+from conversation_ms.models import Conversation
+from conversation_ms.repositories.conversation_repository import ConversationRepository
+from conversation_ms.repositories.message_repository import MessageRepository
 
 
 @pytest.mark.django_db
@@ -28,7 +29,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -54,7 +55,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -75,7 +76,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -101,7 +102,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -154,7 +155,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -172,7 +173,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -253,7 +254,7 @@ class TestConversationRepository:
     def test_get_conversation_returns_most_recent(self, project):
         """Test getting the most recent conversation."""
         channel_uuid = uuid4()
-        old_conversation = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             channel_uuid=channel_uuid,
@@ -289,4 +290,3 @@ class TestConversationRepository:
                     contact_urn="whatsapp:+5511999999999",
                     channel_uuid=str(uuid4()),
                 )
-

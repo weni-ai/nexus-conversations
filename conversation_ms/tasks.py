@@ -865,7 +865,7 @@ def _handle_conversation_without_messages(
     project_timezone: Optional[str],
 ) -> None:
     """
-    Handle conversation that has no messages by marking as UNRESOLVED and sending to Sentry.
+    Handle conversation that has no messages by marking as UNCLASSIFIED and sending to Sentry.
 
     Args:
         conversation: Conversation object without messages
@@ -874,7 +874,7 @@ def _handle_conversation_without_messages(
         end_date_utc: End date in UTC
         project_timezone: Optional project timezone
     """
-    conversation.resolution = str(ResolutionEntities.UNRESOLVED)
+    conversation.resolution = str(ResolutionEntities.UNCLASSIFIED)
     target_date = _calculate_target_date(end_date_utc, project_timezone)
 
     sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
@@ -891,14 +891,14 @@ def _handle_conversation_without_messages(
         },
     )
     sentry_sdk.capture_message(
-        f"Conversation {conversation_uuid} has no messages - marked as UNRESOLVED. "
+        f"Conversation {conversation_uuid} has no messages - marked as UNCLASSIFIED. "
         f"Project: {project_uuid}, Date: {target_date}",
         level="warning",
     )
 
     logger.warning(
         f"[CloseDailyConversationsTask] Conversation {conversation_uuid} has no messages - "
-        f"marked as UNRESOLVED. Project: {project_uuid}, Date: {target_date}"
+        f"marked as UNCLASSIFIED. Project: {project_uuid}, Date: {target_date}"
     )
 
 

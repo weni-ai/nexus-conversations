@@ -929,18 +929,15 @@ def _classify_single_conversation(
             should_migrate = classification is not None
             return (conv, should_migrate)
 
-        # Check if conversation has no messages
-        messages = service._get_conversation_messages(conversation)
-        if not messages:
+        if conv and not resolution:
             _handle_conversation_without_messages(
                 conversation, conversation_uuid, project_uuid, end_date_utc, project_timezone
             )
             return (conversation, False)
 
-        # Classification failed but has messages
         logger.warning(
             f"[CloseDailyConversationsTask] Failed to classify conversation {conversation_uuid}. "
-            f"Project: {project_uuid}, Has messages: True, Has conv: {conv is not None}, "
+            f"Project: {project_uuid}, Has conv: {conv is not None}, "
             f"Has resolution: {resolution is not None}"
         )
         return (None, False)

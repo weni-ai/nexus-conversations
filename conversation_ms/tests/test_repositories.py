@@ -2,10 +2,10 @@
 Tests for conversation_ms repositories.
 """
 
-from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
 
+import pendulum
 import pytest
 
 from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
@@ -29,7 +29,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -55,7 +55,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -76,7 +76,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -102,7 +102,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -155,7 +155,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Hello", "source": "incoming", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()
@@ -173,7 +173,7 @@ class TestMessageRepository:
             contact_urn=conversation.contact_urn,
             channel_uuid=str(conversation.channel_uuid),
             message={"text": "Response", "source": "outgoing", "id": str(uuid4())},
-            timestamp=datetime.utcnow(),
+            timestamp=pendulum.now("UTC"),
         )
 
         repository = MessageRepository()

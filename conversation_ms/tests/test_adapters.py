@@ -5,6 +5,7 @@ Tests for conversation_ms adapters.
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pendulum
 import pytest
 
 from conversation_ms.adapters.conversation import update_conversation_data
@@ -61,6 +62,37 @@ class TestMainConversationService:
         )
 
         assert conversation.uuid == existing_conversation.uuid
+
+    def test_ensure_conversation_exists_backfills_start_date_when_null(self, project):
+        """Test that existing conversation with start_date=None gets backfilled from message timestamp."""
+        channel_uuid = uuid4()
+        existing = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Test Contact",
+            channel_uuid=channel_uuid,
+            resolution="2",  # IN_PROGRESS
+            start_date=None,
+            end_date=None,
+        )
+
+        service = MainConversationService()
+        msg_created_at = "2026-02-20T14:30:00Z"
+        conversation = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Test Contact",
+            channel_uuid=str(channel_uuid),
+            msg_created_at=msg_created_at,
+        )
+
+        assert conversation.uuid == existing.uuid
+        existing.refresh_from_db()
+        assert existing.start_date is not None
+        assert existing.end_date is not None
+        expected_start = pendulum.parse(msg_created_at)
+        assert pendulum.instance(existing.start_date) == expected_start
+        assert pendulum.instance(existing.end_date) == expected_start.add(days=1)
 
     def test_ensure_conversation_exists_creates_project(self):
         """Test creating project if it doesn't exist."""

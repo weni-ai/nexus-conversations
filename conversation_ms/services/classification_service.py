@@ -2,9 +2,11 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+import pendulum
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
+from conversation_ms.adapters.data_lake import DataLakeEventDTO, send_data_lake_event
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
@@ -74,6 +76,17 @@ class ClassificationService:
         else:
             # Just set the resolution on the object without saving (for bulk update)
             conversation.resolution = resolution
+
+        # Send resolution to data lake if feature flag is enabled
+        project_uuid = str(conversation.project.uuid)
+        if project_uuid in getattr(settings, "DATALAKE_FEATURE_FLAG", []):
+            self._send_resolution_to_datalake(
+                resolution=resolution,
+                has_chats_room=conversation.has_chats_room,
+                project_uuid=project_uuid,
+                contact_urn=conversation.contact_urn,
+                conversation=conversation,
+            )
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
@@ -288,38 +301,84 @@ class ClassificationService:
         channel_uuid: str = None,
         conversation: object = None,
     ):
-        # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room"
+        """
+        Determine conversation resolution and send to data lake.
+
+        If has_chats_room is True, skips lambda call and sets resolution to "Has Chat Room".
+        Otherwise, invokes lambda to get resolution, defaulting to "Unclassified" if empty/None.
+        """
         if has_chats_room:
             resolution = ResolutionEntities.HAS_CHAT_ROOM
-            # TODO: Add datalake event
-            return resolution
+        else:
+            resolution = self._get_lambda_resolution(messages, project_uuid, contact_urn)
 
-        # Original logic for when has_chats_room is False
-        lambda_conversation = messages
-        payload_conversation = {"conversation": lambda_conversation}
+        if project_uuid in settings.DATALAKE_FEATURE_FLAG:
+            self._send_resolution_to_datalake(
+                resolution=resolution,
+                has_chats_room=has_chats_room,
+                project_uuid=project_uuid,
+                contact_urn=contact_urn,
+                conversation=conversation,
+            )
+
+        logger.info(
+            f"Resolution determined for conversation {conversation.uuid if conversation else 'unknown'}: "
+            f"{ResolutionEntities.resolution_mapping(resolution)}"
+        )
+
+        return resolution
+
+    def _get_lambda_resolution(self, messages, project_uuid: str, contact_urn: str) -> str:
+        """
+        Invoke lambda to get conversation resolution.
+        Returns UNCLASSIFIED if lambda returns None/empty.
+        """
+        payload_conversation = {"conversation": messages}
         conversation_resolution = self._invoke_lambda(
             lambda_name=str(settings.CONVERSATION_RESOLUTION_NAME), payload=payload_conversation
         )
         resolution = conversation_resolution.get("result")
 
-        # Ensure resolution is not None - use "unclassified" if lambda returns empty/None
         if not resolution:
             logger.warning(
                 f"Lambda returned None/empty resolution. Using 'unclassified'. "
                 f"Project: {project_uuid}, Contact: {contact_urn}"
             )
-            # TODO: Add sentry error
-            resolution = ResolutionEntities.UNCLASSIFIED  # Use unclassified resolution for empty/None values
-
-        _event_data = {
-            "event_name": "weni_nexus_data",
-            "key": "conversation_classification",
-            "value_type": "string",
-            "value": resolution,
-            "metadata": {
-                "human_support": has_chats_room,
-            },
-        }
-        # TODO: Add datalake event
+            resolution = ResolutionEntities.UNCLASSIFIED
 
         return resolution
+
+    def _send_resolution_to_datalake(
+        self,
+        resolution: str,
+        has_chats_room: bool,
+        project_uuid: str,
+        contact_urn: str,
+        conversation: object = None,
+    ) -> None:
+        """
+        Create and send resolution event to data lake.
+        """
+        if not conversation:
+            logger.warning("Cannot send to data lake: conversation object is None")
+            return
+
+        resolution_value = ResolutionEntities.resolution_mapping(resolution)
+
+        event_dto = DataLakeEventDTO(
+            event_name="weni_conversations_data_TEST",
+            date=pendulum.now().to_iso8601_string(),
+            project=project_uuid,
+            contact_urn=contact_urn,
+            key="conversation_classification_TEST",
+            value_type="string",
+            value=resolution_value,
+            metadata={
+                "human_support": has_chats_room,
+                "conversation_start_date": pendulum.instance(conversation.start_date).to_iso8601_string(),
+                "conversation_end_date": pendulum.instance(conversation.end_date).to_iso8601_string(),
+                "conversation_uuid": str(conversation.uuid),
+            },
+        )
+        validated_event = event_dto.dict()
+        send_data_lake_event.delay(validated_event)

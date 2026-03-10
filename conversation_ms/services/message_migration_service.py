@@ -2,8 +2,8 @@ import logging
 
 import sentry_sdk
 
-from conversation_ms.repositories.message_repository import MessageRepository
 from conversation_ms.models import ConversationMessages
+from conversation_ms.repositories.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
 

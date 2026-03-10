@@ -1,8 +1,8 @@
 from conversation_ms.services.resolution_counter import (
     ChannelResolutionCount,
-    ResolutionCounterBackend,
     DatabaseResolutionCounter,
     PreCalculatedResolutionCounter,
+    ResolutionCounterBackend,
     get_resolution_counter,
 )
 

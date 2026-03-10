@@ -17,7 +17,6 @@ from conversation_ms.tests.factories import (
 
 
 class TestDatabaseResolutionCounter(TestCase):
-
     def setUp(self):
         self.project = ProjectFactory()
         self.channel_uuid = uuid4()
@@ -151,7 +150,6 @@ class TestDatabaseResolutionCounter(TestCase):
 
 
 class TestPreCalculatedResolutionCounter(TestCase):
-
     def test_get_channel_counts_returns_pre_calculated(self):
         channel_uuid = str(uuid4())
         pre_calc = {
@@ -208,15 +206,12 @@ class TestPreCalculatedResolutionCounter(TestCase):
 
 
 class TestGetResolutionCounter(TestCase):
-
     def test_returns_database_counter_by_default(self):
         counter = get_resolution_counter()
         self.assertIsInstance(counter, DatabaseResolutionCounter)
 
     def test_returns_pre_calculated_counter_when_provided(self):
-        pre_calc = {
-            "ch1": ChannelResolutionCount(channel_uuid="ch1", resolved=10)
-        }
+        pre_calc = {"ch1": ChannelResolutionCount(channel_uuid="ch1", resolved=10)}
 
         counter = get_resolution_counter(pre_calculated=pre_calc)
 
@@ -228,7 +223,6 @@ class TestGetResolutionCounter(TestCase):
 
 
 class TestChannelResolutionCount(TestCase):
-
     def test_default_values(self):
         count = ChannelResolutionCount(channel_uuid="test")
 

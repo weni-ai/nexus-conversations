@@ -1,11 +1,13 @@
-import factory
 from uuid import uuid4
+
+import factory
 
 from conversation_ms.models import Conversation, Project
 
 
 class Resolution:
     """Resolution choices matching Conversation.RESOLUTION_CHOICES."""
+
     RESOLVED = "0"
     UNRESOLVED = "1"
     IN_PROGRESS = "2"

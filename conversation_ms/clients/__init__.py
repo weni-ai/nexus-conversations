@@ -1,7 +1,7 @@
 from conversation_ms.clients.billing import BillingClient
 from conversation_ms.clients.dtos import (
-    ResolutionCountDTO,
     ChannelConversationDTO,
+    ResolutionCountDTO,
     SendConversationsRequestDTO,
 )
 

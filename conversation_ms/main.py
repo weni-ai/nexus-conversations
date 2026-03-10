@@ -14,8 +14,6 @@ if str(project_root) not in sys.path:
 import django  # noqa: E402
 import environ  # noqa: E402
 
-from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer  # noqa: E402
-
 env_file = project_root / ".env"
 if env_file.exists():
     environ.Env.read_env(env_file=str(env_file))
@@ -26,7 +24,9 @@ django.setup()
 
 # Import after django.setup() to avoid AppRegistryNotReady
 
-from django.conf import settings
+from django.conf import settings  # noqa: E402
+
+from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

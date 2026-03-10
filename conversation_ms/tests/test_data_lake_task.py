@@ -2,9 +2,10 @@
 Tests for Data Lake Celery task.
 """
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
 
 from conversation_ms.adapters.data_lake import send_data_lake_event
 
@@ -51,4 +52,3 @@ class TestSendDataLakeEvent:
 
             with pytest.raises(Exception, match="Data Lake connection error"):
                 send_data_lake_event(event_data)
-

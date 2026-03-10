@@ -1,12 +1,13 @@
 # DTOs for billing client
-from dataclasses import dataclass, field, asdict
-from typing import List
+from dataclasses import asdict, dataclass, field
 from datetime import date
+from typing import List
 
 
 @dataclass
 class ResolutionCountDTO:
     """Counts of conversations by resolution status."""
+
     resolved: int = 0
     unresolved: int = 0
     has_chats_rooms: int = 0
@@ -16,6 +17,7 @@ class ResolutionCountDTO:
 @dataclass
 class ChannelConversationDTO:
     """Conversation data for a single channel."""
+
     channel_uuid: str
     date: date
     resolution_count: ResolutionCountDTO = field(default_factory=ResolutionCountDTO)
@@ -32,6 +34,7 @@ class ChannelConversationDTO:
 @dataclass
 class SendConversationsRequestDTO:
     """Request body for sending conversations to billing API."""
+
     conversations: List[ChannelConversationDTO] = field(default_factory=list)
 
     def to_payload(self) -> List[dict]:

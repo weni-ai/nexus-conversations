@@ -21,4 +21,3 @@ class SentryConfig(AppConfig):
             environment=settings.ENVIRONMENT,
             before_send=partial(filter_events, events_to_filter=settings.FILTER_SENTRY_EVENTS),
         )
-

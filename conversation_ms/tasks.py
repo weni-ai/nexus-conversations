@@ -70,7 +70,7 @@ def migrate_messages_task(self, conversation_uuid: str):
         )
         sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
         sentry_sdk.capture_exception(e)
-        raise self.retry(exc=e) from e
+        raise self.retry(exc=e)
 
 
 @celery_app.task(
@@ -136,7 +136,7 @@ def classify_conversation_task(self, conversation_uuid: str):
 
         # Custom backoff: 1st retry immediate (0s), then +20s each time (20s, 40s, 60s...)
         countdown = self.request.retries * 20
-        raise self.retry(exc=e, countdown=countdown) from e
+        raise self.retry(exc=e, countdown=countdown)
 
 
 @celery_app.task(
@@ -214,7 +214,7 @@ def send_billing_conversations(
 
     except Exception as exc:
         logger.exception(f"Error sending billing conversations for project {project_uuid}")
-        raise self.retry(exc=exc) from exc
+        raise self.retry(exc=exc)
 
 
 def _parse_pre_calculated(
@@ -762,7 +762,7 @@ def close_daily_conversations_task(
 
     except Exception as exc:
         logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
-        raise self.retry(exc=exc) from exc
+        raise self.retry(exc=exc)
 
 
 def _is_conversation_already_processed(

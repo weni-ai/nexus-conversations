@@ -58,7 +58,8 @@ select = [
     "DJ",       # flake8-django
 ]
 ignore = [
-    "DJ001"     # django-nullable-model-string-field
+    "DJ001",    # django-nullable-model-string-field
+    "B904",     # require raise ... from exc — we omit for Celery retry (Retry is control-flow, not causal)
 ]
 
 [tool.ruff.lint.mccabe]

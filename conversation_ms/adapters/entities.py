@@ -12,16 +12,16 @@ class ResolutionEntities:
     HAS_CHAT_ROOM = "4"
 
     @staticmethod
-    def resolution_mapping(resolution_status: str) -> tuple:
+    def resolution_mapping(resolution_status: str) -> str:
         resolution_choices = {
-            ResolutionEntities.RESOLVED: (ResolutionEntities.RESOLVED, "Resolved"),
-            ResolutionEntities.UNRESOLVED: (ResolutionEntities.UNRESOLVED, "Unresolved"),
-            ResolutionEntities.IN_PROGRESS: (ResolutionEntities.IN_PROGRESS, "In Progress"),
-            ResolutionEntities.UNCLASSIFIED: (ResolutionEntities.UNCLASSIFIED, "Unclassified"),
-            ResolutionEntities.HAS_CHAT_ROOM: (ResolutionEntities.HAS_CHAT_ROOM, "Has Chat Room"),
+            ResolutionEntities.RESOLVED: "resolved",
+            ResolutionEntities.UNRESOLVED: "unresolved",
+            ResolutionEntities.IN_PROGRESS: "in progress",
+            ResolutionEntities.UNCLASSIFIED: "unclassified",
+            ResolutionEntities.HAS_CHAT_ROOM: "Has Chat Room",
         }
 
-        return resolution_choices.get(resolution_status, (ResolutionEntities.UNCLASSIFIED, "Unclassified"))
+        return resolution_choices.get(resolution_status, "unclassified")
 
     @staticmethod
     def convert_resolution_string_to_int(resolution_string: str) -> str:

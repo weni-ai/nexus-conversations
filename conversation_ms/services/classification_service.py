@@ -333,7 +333,6 @@ class ClassificationService:
                 f"Lambda returned None/empty resolution. Using 'unclassified'. "
                 f"Project: {project_uuid}, Contact: {contact_urn}"
             )
-            # TODO: Add sentry error
             resolution = ResolutionEntities.UNCLASSIFIED
 
         return resolution

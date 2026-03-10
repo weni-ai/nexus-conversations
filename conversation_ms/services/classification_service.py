@@ -77,6 +77,17 @@ class ClassificationService:
             # Just set the resolution on the object without saving (for bulk update)
             conversation.resolution = resolution
 
+        # Send resolution to data lake if feature flag is enabled
+        project_uuid = str(conversation.project.uuid)
+        if project_uuid in getattr(settings, "DATALAKE_FEATURE_FLAG", []):
+            self._send_resolution_to_datalake(
+                resolution=resolution,
+                has_chats_room=conversation.has_chats_room,
+                project_uuid=project_uuid,
+                contact_urn=conversation.contact_urn,
+                conversation=conversation,
+            )
+
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
             messages = self._get_conversation_messages(conversation)

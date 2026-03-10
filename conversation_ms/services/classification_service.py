@@ -312,7 +312,7 @@ class ClassificationService:
 
         logger.info(
             f"Resolution determined for conversation {conversation.uuid if conversation else 'unknown'}: "
-            f"{ResolutionEntities.resolution_mapping(resolution)[1]}"
+            f"{ResolutionEntities.resolution_mapping(resolution)}"
         )
 
         return resolution
@@ -353,10 +353,7 @@ class ClassificationService:
             logger.warning("Cannot send to data lake: conversation object is None")
             return
 
-        resolution_value = ResolutionEntities.resolution_mapping(resolution)[1]
-
-        if resolution != "4":
-            resolution_value = resolution_value.lower()
+        resolution_value = ResolutionEntities.resolution_mapping(resolution)
 
         event_dto = DataLakeEventDTO(
             event_name="weni_conversations_data_TEST",

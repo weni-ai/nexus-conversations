@@ -10,16 +10,16 @@ class TestResolutionEntities:
 
     def test_resolution_mapping_all_statuses(self):
         """Test resolution_mapping for all statuses."""
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.RESOLVED) == ("0", "Resolved")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNRESOLVED) == ("1", "Unresolved")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.IN_PROGRESS) == ("2", "In Progress")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNCLASSIFIED) == ("3", "Unclassified")
-        assert ResolutionEntities.resolution_mapping(ResolutionEntities.HAS_CHAT_ROOM) == ("4", "Has Chat Room")
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.RESOLVED) == "resolved"
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNRESOLVED) == "unresolved"
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.IN_PROGRESS) == "in progress"
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.UNCLASSIFIED) == "unclassified"
+        assert ResolutionEntities.resolution_mapping(ResolutionEntities.HAS_CHAT_ROOM) == "Has Chat Room"
 
     def test_resolution_mapping_invalid_status(self):
         """Test resolution_mapping with invalid status."""
         result = ResolutionEntities.resolution_mapping(999)
-        assert result == (ResolutionEntities.UNCLASSIFIED, "Unclassified")
+        assert result == "unclassified"
 
     def test_convert_resolution_string_to_int_all_strings(self):
         """Test convert_resolution_string_to_int for all strings."""

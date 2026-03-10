@@ -241,3 +241,5 @@ PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
 
 AWS_REGION = env.str("AWS_REGION", default="sa-east-1")
 LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")
+
+DATALAKE_FEATURE_FLAG = env.list("DATALAKE_FEATURE_FLAG", default=[])

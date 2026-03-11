@@ -366,11 +366,11 @@ class ClassificationService:
         resolution_value = ResolutionEntities.resolution_mapping(resolution)
 
         event_dto = DataLakeEventDTO(
-            event_name="weni_conversations_data_TEST",
+            event_name="weni_nexus_data",
             date=pendulum.now().to_iso8601_string(),
             project=project_uuid,
             contact_urn=contact_urn,
-            key="conversation_classification_TEST",
+            key="conversation_classification",
             value_type="string",
             value=resolution_value,
             metadata={

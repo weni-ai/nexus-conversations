@@ -79,14 +79,13 @@ class ClassificationService:
 
         # Send resolution to data lake if feature flag is enabled
         project_uuid = str(conversation.project.uuid)
-        if project_uuid in getattr(settings, "DATALAKE_FEATURE_FLAG", []):
-            self._send_resolution_to_datalake(
-                resolution=resolution,
-                has_chats_room=conversation.has_chats_room,
-                project_uuid=project_uuid,
-                contact_urn=conversation.contact_urn,
-                conversation=conversation,
-            )
+        self._send_resolution_to_datalake(
+            resolution=resolution,
+            has_chats_room=conversation.has_chats_room,
+            project_uuid=project_uuid,
+            contact_urn=conversation.contact_urn,
+            conversation=conversation,
+        )
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
@@ -312,14 +311,13 @@ class ClassificationService:
         else:
             resolution = self._get_lambda_resolution(messages, project_uuid, contact_urn)
 
-        if project_uuid in settings.DATALAKE_FEATURE_FLAG:
-            self._send_resolution_to_datalake(
-                resolution=resolution,
-                has_chats_room=has_chats_room,
-                project_uuid=project_uuid,
-                contact_urn=contact_urn,
-                conversation=conversation,
-            )
+        self._send_resolution_to_datalake(
+            resolution=resolution,
+            has_chats_room=has_chats_room,
+            project_uuid=project_uuid,
+            contact_urn=contact_urn,
+            conversation=conversation,
+        )
 
         logger.info(
             f"Resolution determined for conversation {conversation.uuid if conversation else 'unknown'}: "
@@ -366,11 +364,11 @@ class ClassificationService:
         resolution_value = ResolutionEntities.resolution_mapping(resolution)
 
         event_dto = DataLakeEventDTO(
-            event_name="weni_conversations_data_TEST",
+            event_name="weni_nexus_data",
             date=pendulum.now().to_iso8601_string(),
             project=project_uuid,
             contact_urn=contact_urn,
-            key="conversation_classification_TEST",
+            key="conversation_classification",
             value_type="string",
             value=resolution_value,
             metadata={

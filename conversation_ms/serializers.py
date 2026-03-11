@@ -80,16 +80,16 @@ class ConversationSerializer(serializers.ModelSerializer):
     def _get_from_postgres(self, obj):
         try:
             msgs = obj.messages_data.messages
-            # Normalize Postgres messages
+            # Normalize Postgres messages (use message_id/uuid so traces API can find files for resolved conversations)
             normalized = []
             for msg in msgs or []:
-                msg_uuid = msg.get("uuid") or str(uuid.uuid4())
+                msg_uuid = msg.get("message_id") or msg.get("uuid") or str(uuid.uuid4())
                 source = self._normalize_source(msg.get("source"))
 
                 normalized.append(
                     {
                         "uuid": msg_uuid,
-                        "id": msg.get("id") or msg_uuid,
+                        "id": msg.get("id") or msg.get("message_id") or msg_uuid,
                         "text": msg.get("text"),
                         "source": source,
                         "created_at": msg.get("created_at"),

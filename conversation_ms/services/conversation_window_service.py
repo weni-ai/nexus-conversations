@@ -12,17 +12,12 @@ import sentry_sdk
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.events import ConversationWindowEvent
 from conversation_ms.models import Conversation, Project
-from conversation_ms.services.message_migration_service import MessageMigrationService
-from conversation_ms.tasks import classify_conversation_task
 
 logger = logging.getLogger(__name__)
 
 
 class ConversationWindowService:
     """Service for processing conversation window events."""
-
-    def __init__(self):
-        self.migration_service = MessageMigrationService()
 
     def process_conversation_window(self, event_data: dict):
         """
@@ -31,9 +26,11 @@ class ConversationWindowService:
         This method:
         1. Parses the event data
         2. Gets or creates Project
-        3. Updates or creates Conversation
-        4. If has_chats_room=True, sets resolution to HAS_CHAT_ROOM (4)
-        5. Migrates messages if conversation is being closed
+        3. Updates or creates Conversation with ticket_uuid, has_chats_room, dates, resolution, etc.
+
+        Resolution is set from the event (e.g. HAS_CHAT_ROOM when ticket_uuid is present).
+        The actual close (message migration, classification) is done only by
+        close_daily_conversations_task, not by this handler.
         """
         try:
             event = ConversationWindowEvent.from_sqs_event(event_data)
@@ -69,16 +66,12 @@ class ConversationWindowService:
                 .first()
             )
 
-            # Determine resolution based on has_chats_room
+            # Resolution can be set from ticket_uuid (e.g. HAS_CHAT_ROOM); actual close
+            # (migration, classification) is done only by close_daily_conversations_task.
             if event.has_chats_room:
                 resolution = ResolutionEntities.HAS_CHAT_ROOM  # "4"
             else:
-                # Keep existing resolution if conversation exists, otherwise IN_PROGRESS
                 resolution = conversation.resolution if conversation else ResolutionEntities.IN_PROGRESS
-
-            # Check if conversation is being closed (resolution changed from IN_PROGRESS to something else)
-            was_in_progress = conversation and str(conversation.resolution) == ResolutionEntities.IN_PROGRESS
-            will_be_closed = str(resolution) != ResolutionEntities.IN_PROGRESS
 
             if conversation:
                 # Update existing conversation
@@ -114,31 +107,8 @@ class ConversationWindowService:
                 logger.info(
                     f"[ConversationWindowService] Created new conversation "
                     f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid} "
-                    f"resolution={resolution} has_chats_room={event.has_chats_room}"
+                    f"has_chats_room={event.has_chats_room}"
                 )
-
-            # Migrate messages if conversation is being closed
-            if was_in_progress and will_be_closed:
-                try:
-                    self.migration_service.migrate_conversation_messages_to_postgres(conversation)
-                    logger.info(
-                        f"[ConversationWindowService] Message migration completed "
-                        f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid}"
-                    )
-
-                    # Trigger classification
-                    classify_conversation_task.delay(str(conversation.uuid))
-                    logger.info(
-                        f"[ConversationWindowService] Classification task triggered "
-                        f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid}"
-                    )
-
-                except Exception as e:
-                    logger.error(
-                        f"[ConversationWindowService] Error during message migration or classification trigger "
-                        f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid} error={e}",
-                        exc_info=True,
-                    )
 
             logger.info(
                 f"[ConversationWindowService] Conversation window event processed successfully "

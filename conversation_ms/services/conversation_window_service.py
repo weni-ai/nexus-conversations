@@ -66,13 +66,6 @@ class ConversationWindowService:
                 .first()
             )
 
-            # Resolution can be set from ticket_uuid (e.g. HAS_CHAT_ROOM); actual close
-            # (migration, classification) is done only by close_daily_conversations_task.
-            if event.has_chats_room:
-                resolution = ResolutionEntities.HAS_CHAT_ROOM  # "4"
-            else:
-                resolution = conversation.resolution if conversation else ResolutionEntities.IN_PROGRESS
-
             if conversation:
                 # Update existing conversation
                 conversation.external_id = event.external_id or conversation.external_id
@@ -81,13 +74,12 @@ class ConversationWindowService:
                 conversation.end_date = event.end_date or conversation.end_date
                 conversation.contact_name = event.contact_name or conversation.contact_name
                 conversation.ticket_uuid = event.ticket_uuid or conversation.ticket_uuid
-                conversation.resolution = resolution
                 conversation.save()
 
                 logger.info(
                     f"[ConversationWindowService] Updated conversation "
                     f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid} "
-                    f"resolution={resolution} has_chats_room={event.has_chats_room}"
+                    f"has_chats_room={event.has_chats_room}"
                 )
             else:
                 # Create new conversation
@@ -100,7 +92,7 @@ class ConversationWindowService:
                     start_date=event.start_date,
                     end_date=event.end_date,
                     has_chats_room=event.has_chats_room,
-                    resolution=resolution,
+                    resolution=ResolutionEntities.IN_PROGRESS,
                     ticket_uuid=event.ticket_uuid,
                 )
 

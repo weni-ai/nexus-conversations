@@ -49,7 +49,7 @@ class TestConsumerEventRouting:
             "data": {
                 "project_uuid": str(uuid4()),
                 "contact_urn": "whatsapp:+5511999999999",
-                "has_chats_room": True,
+                "ticket_uuid": str(uuid4()),
             },
         }
 

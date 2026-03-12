@@ -30,7 +30,6 @@ class TestConversationWindowService:
                 "external_id": "ext-123",
                 "start": "2024-01-01T12:00:00Z",
                 "end": "2024-01-01T13:00:00Z",
-                "has_chats_room": False,
                 "name": "Test Contact",
             },
         }
@@ -66,7 +65,7 @@ class TestConversationWindowService:
                 "external_id": "ext-updated",
                 "start": "2024-01-01T14:00:00Z",
                 "end": "2024-01-01T15:00:00Z",
-                "has_chats_room": True,
+                "ticket_uuid": str(uuid4()),
                 "name": "Updated Contact",
             },
         }
@@ -82,7 +81,7 @@ class TestConversationWindowService:
         assert conversation.resolution == str(ResolutionEntities.HAS_CHAT_ROOM)
 
     def test_process_conversation_window_has_chats_room_sets_resolution(self, conversation, mock_sentry):
-        """Test that has_chats_room=True sets resolution to HAS_CHAT_ROOM."""
+        """Test that ticket_uuid (has_chats_room=True) sets resolution to HAS_CHAT_ROOM."""
         project_uuid = conversation.project.uuid
         channel_uuid = conversation.channel_uuid
         event_data = {
@@ -91,7 +90,7 @@ class TestConversationWindowService:
                 "project_uuid": str(project_uuid),
                 "contact_urn": conversation.contact_urn,
                 "channel_uuid": str(channel_uuid),
-                "has_chats_room": True,
+                "ticket_uuid": str(uuid4()),
             },
         }
 
@@ -116,7 +115,7 @@ class TestConversationWindowService:
                 "project_uuid": str(project_uuid),
                 "contact_urn": conversation.contact_urn,
                 "channel_uuid": str(channel_uuid),
-                "has_chats_room": True,  # This will close the conversation
+                "ticket_uuid": str(uuid4()),  # This will close the conversation (has_chats_room=True)
             },
         }
 
@@ -141,7 +140,7 @@ class TestConversationWindowService:
                 "project_uuid": str(project_uuid),
                 "contact_urn": conversation.contact_urn,
                 "channel_uuid": str(channel_uuid),
-                "has_chats_room": False,  # This keeps it IN_PROGRESS
+                # No ticket_uuid keeps it IN_PROGRESS (has_chats_room=False)
             },
         }
 
@@ -170,7 +169,7 @@ class TestConversationWindowService:
         assert Conversation.objects.count() == 0
 
     def test_process_conversation_window_preserves_existing_resolution(self, conversation, mock_sentry):
-        """Test that existing resolution is preserved if has_chats_room=False."""
+        """Test that existing resolution is preserved when no ticket_uuid (has_chats_room=False)."""
         # Set conversation to RESOLVED
         conversation.resolution = ResolutionEntities.RESOLVED
         conversation.save()
@@ -183,7 +182,6 @@ class TestConversationWindowService:
                 "project_uuid": str(project_uuid),
                 "contact_urn": conversation.contact_urn,
                 "channel_uuid": str(channel_uuid),
-                "has_chats_room": False,
             },
         }
 

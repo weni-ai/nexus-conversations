@@ -70,7 +70,7 @@ def sample_sqs_sent_event():
 
 @pytest.fixture
 def sample_sqs_conversation_window_event():
-    """Sample SQS event for conversation.window."""
+    """Sample SQS event for conversation.window (ticket_uuid implies has_chats_room=True)."""
     return {
         "correlation_id": str(uuid4()),
         "data": {
@@ -80,7 +80,7 @@ def sample_sqs_conversation_window_event():
             "external_id": "ext-123",
             "start": "2024-01-01T12:00:00Z",
             "end": "2024-01-01T13:00:00Z",
-            "has_chats_room": True,
+            "ticket_uuid": str(uuid4()),
             "name": "Test Contact",
         },
     }

@@ -38,13 +38,16 @@ class MessageMigrationService:
 
             formatted_messages = []
             for msg in messages:
-                formatted_messages.append(
-                    {
-                        "text": msg.get("text", ""),
-                        "source": msg.get("source", ""),
-                        "created_at": msg.get("created_at", ""),
-                    }
-                )
+                message_id = msg.get("message_id")
+                formatted_message = {
+                    "text": msg.get("text", ""),
+                    "source": msg.get("source", ""),
+                    "created_at": msg.get("created_at", ""),
+                }
+                if message_id:
+                    formatted_message["message_id"] = str(message_id)
+                    formatted_message["uuid"] = str(message_id)
+                formatted_messages.append(formatted_message)
 
             conversation_messages, created = ConversationMessages.objects.update_or_create(
                 conversation=conversation,

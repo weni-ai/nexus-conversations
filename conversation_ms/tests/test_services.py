@@ -532,3 +532,54 @@ class TestMessageMigrationService:
             service = MessageMigrationService()
             with pytest.raises(Exception, match="DynamoDB error"):
                 service.migrate_conversation_messages_to_postgres(conversation)
+
+    def test_migrate_persists_message_id_and_uuid_when_present(self, conversation, mock_sentry):
+        """When Dynamo message has message_id, both message_id and uuid are stored in Postgres as strings."""
+        msg_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        mock_messages = [
+            {
+                "text": "Hello",
+                "source": "incoming",
+                "created_at": "2024-01-01T12:00:00",
+                "message_id": msg_id,
+            },
+            {"text": "Hi", "source": "outgoing", "created_at": "2024-01-01T12:01:00"},
+        ]
+
+        with patch("conversation_ms.services.message_migration_service.MessageRepository") as mock_repo:
+            mock_repo.return_value.get_messages_from_dynamo.return_value = mock_messages
+            mock_repo.return_value.delete_messages_from_dynamo.return_value = 2
+
+            service = MessageMigrationService()
+            service.migrate_conversation_messages_to_postgres(conversation)
+
+        conv_msgs = ConversationMessages.objects.get(conversation=conversation)
+        assert len(conv_msgs.messages) == 2
+        first = conv_msgs.messages[0]
+        assert first["message_id"] == msg_id
+        assert first["uuid"] == msg_id
+        assert isinstance(first["message_id"], str)
+        assert isinstance(first["uuid"], str)
+        second = conv_msgs.messages[1]
+        assert "message_id" not in second
+        assert "uuid" not in second
+
+    def test_migrate_omits_message_id_uuid_when_missing(self, conversation, mock_sentry):
+        """When Dynamo message has no message_id, those keys are absent in Postgres (no trace lookup)."""
+        mock_messages = [
+            {"text": "No id", "source": "incoming", "created_at": "2024-01-01T12:00:00"},
+        ]
+
+        with patch("conversation_ms.services.message_migration_service.MessageRepository") as mock_repo:
+            mock_repo.return_value.get_messages_from_dynamo.return_value = mock_messages
+            mock_repo.return_value.delete_messages_from_dynamo.return_value = 1
+
+            service = MessageMigrationService()
+            service.migrate_conversation_messages_to_postgres(conversation)
+
+        conv_msgs = ConversationMessages.objects.get(conversation=conversation)
+        assert len(conv_msgs.messages) == 1
+        msg = conv_msgs.messages[0]
+        assert msg["text"] == "No id"
+        assert "message_id" not in msg
+        assert "uuid" not in msg

@@ -187,7 +187,8 @@ class TestConversationWindowEvent:
     """Tests for ConversationWindowEvent DTO."""
 
     def test_from_sqs_event_complete(self):
-        """Test parsing complete SQS event."""
+        """Test parsing complete SQS event. has_chats_room is derived from ticket_uuid."""
+        ticket_uuid = str(uuid4())
         event_data = {
             "correlation_id": str(uuid4()),
             "data": {
@@ -197,7 +198,7 @@ class TestConversationWindowEvent:
                 "external_id": "ext-123",
                 "start": "2024-01-01T12:00:00Z",
                 "end": "2024-01-01T13:00:00Z",
-                "has_chats_room": True,
+                "ticket_uuid": ticket_uuid,
                 "name": "Test Contact",
             },
         }
@@ -207,6 +208,7 @@ class TestConversationWindowEvent:
         assert event.contact_urn == event_data["data"]["contact_urn"]
         assert event.channel_uuid == event_data["data"]["channel_uuid"]
         assert event.external_id == "ext-123"
+        assert event.ticket_uuid == ticket_uuid
         assert event.has_chats_room is True
         assert event.contact_name == "Test Contact"
         assert isinstance(event.start_date, datetime)
@@ -239,7 +241,6 @@ class TestConversationWindowEvent:
             "data": {
                 "project_uuid": str(uuid4()),
                 "contact_urn": "whatsapp:+5511999999999",
-                "has_chats_room": False,
             },
         }
         event = ConversationWindowEvent.from_sqs_event(event_data)
@@ -247,13 +248,12 @@ class TestConversationWindowEvent:
         assert event.has_chats_room is False
 
     def test_from_sqs_event_has_chats_room_false(self):
-        """Test parsing event with has_chats_room=False."""
+        """Test that absence of ticket_uuid yields has_chats_room=False."""
         event_data = {
             "correlation_id": str(uuid4()),
             "data": {
                 "project_uuid": str(uuid4()),
                 "contact_urn": "whatsapp:+5511999999999",
-                "has_chats_room": False,
             },
         }
         event = ConversationWindowEvent.from_sqs_event(event_data)

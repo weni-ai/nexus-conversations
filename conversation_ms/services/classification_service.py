@@ -126,7 +126,8 @@ class ClassificationService:
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error getting resolution for {conversation.uuid}: {e}")
-            return str(ResolutionEntities.UNCLASSIFIED)  # Default to Unclassified on error
+            # Default to Unclassified on error
+            return str(ResolutionEntities.UNCLASSIFIED)
 
     def _classify_topics(
         self,

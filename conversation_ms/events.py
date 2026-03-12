@@ -147,7 +147,7 @@ class ConversationWindowEvent:
             external_id=data.get("external_id") or data.get("id"),
             start_date=start_date,
             end_date=end_date,
-            has_chats_room=bool(data.get("has_chats_room", False)),
+            has_chats_room=bool(data.get("ticket_uuid")),
             contact_name=data.get("name") or data.get("contact_name"),
             ticket_uuid=data.get("ticket_uuid"),
         )

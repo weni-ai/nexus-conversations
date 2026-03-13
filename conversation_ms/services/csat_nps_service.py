@@ -12,7 +12,7 @@ class CSATNPSService:
         try:
             csat_value = event_data.get("value")
             if not csat_value:
-                logger.warning("[CSATNPSService] CSAT event missing value", extra={"event_data": event_data})
+                logger.warning(f"[CSATNPSService] CSAT event missing value event_data={event_data}")
                 return
 
             if conversation and conversation.channel_uuid:
@@ -53,11 +53,8 @@ class CSATNPSService:
             # send_data_lake_event.delay(validated_event)
             #
             # logger.info(
-            #     "[CSATNPSService] CSAT event sent to datalake",
-            #     extra={
-            #         "conversation_uuid": str(conversation.uuid) if conversation else None,
-            #         "csat_value": csat_value,
-            #     },
+            #     f"[CSATNPSService] CSAT event sent to datalake "
+            #     f"conversation_uuid={str(conversation.uuid) if conversation else None} csat_value={csat_value}",
             # )
 
         except Exception as e:
@@ -73,8 +70,7 @@ class CSATNPSService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[CSATNPSService] Error processing CSAT event",
-                extra={"event_data": event_data, "error": str(e)},
+                f"[CSATNPSService] Error processing CSAT event event_data={event_data} error={e!s}",
                 exc_info=True,
             )
             raise

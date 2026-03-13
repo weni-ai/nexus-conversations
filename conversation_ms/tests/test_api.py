@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -138,3 +139,83 @@ class TestConversationEndpoint:
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data["results"]) == 1
         assert response.data["results"][0]["start_date"] == "2026-02-05T12:00:00Z"
+
+    def test_retrieve_conversation_postgres_message_id_precedence(self, api_client, project, auth_headers):
+        """Postgres messages: message_id takes precedence over uuid for trace lookups."""
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        msg_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        other_uuid = "ffffffff-0000-1111-2222-333333333333"
+        messages_data = [
+            {
+                "text": "Hello",
+                "source": "incoming",
+                "message_id": msg_id,
+                "uuid": other_uuid,
+                "created_at": "2024-01-01T12:00:00",
+            },
+        ]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data["messages"]["results"]
+        assert len(results) == 1
+        assert results[0]["uuid"] == msg_id
+        assert results[0]["id"] == msg_id
+
+    def test_retrieve_conversation_postgres_uuid_only(self, api_client, project, auth_headers):
+        """Postgres messages with only uuid (no message_id): response uses uuid for id/uuid."""
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        only_uuid = "11111111-2222-3333-4444-555555555555"
+        messages_data = [
+            {
+                "text": "Hi",
+                "source": "outgoing",
+                "uuid": only_uuid,
+                "created_at": "2024-01-01T12:01:00",
+            },
+        ]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data["messages"]["results"]
+        assert len(results) == 1
+        assert results[0]["uuid"] == only_uuid
+        assert results[0]["id"] == only_uuid
+
+    def test_retrieve_conversation_postgres_missing_ids_sentry_fallback(self, api_client, project, auth_headers):
+        """Postgres message with neither message_id nor uuid: Sentry error, fallback uuid so data not lost."""
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        messages_data = [
+            {"text": "No id", "source": "incoming", "created_at": "2024-01-01T12:00:00"},
+        ]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        with patch("conversation_ms.serializers.sentry_sdk.capture_message") as mock_capture, patch(
+            "conversation_ms.serializers.sentry_sdk.set_context"
+        ) as mock_context:
+            response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data["messages"]["results"]
+        assert len(results) == 1
+        assert results[0]["text"] == "No id"
+        assert results[0]["uuid"] is not None
+        assert results[0]["id"] is not None
+        mock_capture.assert_called_once()
+        mock_context.assert_called_once()

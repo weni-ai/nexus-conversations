@@ -579,11 +579,8 @@ def _process_single_project(
         #     target_date=previous_day.isoformat(),
         # )
         # logger.info(
-        #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, date {previous_day}",
-        #     extra={
-        #         "project_uuid": project_uuid,
-        #         "target_date": previous_day.isoformat(),
-        #     },
+        #     f"[CloseDailyConversationsTask] Triggered billing task for project {project_uuid}, "
+        #     f"date {previous_day} project_uuid={project_uuid} target_date={previous_day.isoformat()}",
         # )
 
         return conversations_closed, True

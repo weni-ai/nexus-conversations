@@ -19,8 +19,7 @@ class MessageMigrationService:
         """
         try:
             logger.info(
-                "[MessageMigrationService] Starting migration for conversation",
-                extra={"conversation_uuid": str(conversation.uuid)},
+                f"[MessageMigrationService] Starting migration for conversation conversation_uuid={conversation.uuid}",
             )
 
             messages = self.message_repository.get_messages_from_dynamo(
@@ -31,8 +30,7 @@ class MessageMigrationService:
 
             if not messages:
                 logger.info(
-                    "[MessageMigrationService] No messages to migrate",
-                    extra={"conversation_uuid": str(conversation.uuid)},
+                    f"[MessageMigrationService] No messages to migrate conversation_uuid={conversation.uuid}",
                 )
                 return
 
@@ -62,13 +60,8 @@ class MessageMigrationService:
             )
 
             logger.info(
-                "[MessageMigrationService] Migration completed",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "messages_count": len(formatted_messages),
-                    "was_created": created,
-                    "dynamo_deleted_count": deleted_count,
-                },
+                f"[MessageMigrationService] Migration completed conversation_uuid={conversation.uuid} "
+                f"messages_count={len(formatted_messages)} was_created={created} dynamo_deleted_count={deleted_count}",
             )
 
         except Exception as e:
@@ -83,11 +76,7 @@ class MessageMigrationService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[MessageMigrationService] Error migrating messages",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "error": str(e),
-                },
+                f"[MessageMigrationService] Error migrating messages conversation_uuid={conversation.uuid} error={e!s}",
                 exc_info=True,
             )
             raise

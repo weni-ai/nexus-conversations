@@ -12,17 +12,12 @@ import sentry_sdk
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.events import ConversationWindowEvent
 from conversation_ms.models import Conversation, Project
-from conversation_ms.services.message_migration_service import MessageMigrationService
-from conversation_ms.tasks import classify_conversation_task
 
 logger = logging.getLogger(__name__)
 
 
 class ConversationWindowService:
     """Service for processing conversation window events."""
-
-    def __init__(self):
-        self.migration_service = MessageMigrationService()
 
     def process_conversation_window(self, event_data: dict):
         """
@@ -31,32 +26,22 @@ class ConversationWindowService:
         This method:
         1. Parses the event data
         2. Gets or creates Project
-        3. Updates or creates Conversation
-        4. If has_chats_room=True, sets resolution to HAS_CHAT_ROOM (4)
-        5. Migrates messages if conversation is being closed
+        3. Updates or creates Conversation with ticket_uuid, has_chats_room, dates, resolution, etc.
         """
         try:
             event = ConversationWindowEvent.from_sqs_event(event_data)
 
             logger.info(
-                "[ConversationWindowService] Processing conversation.window event",
-                extra={
-                    "correlation_id": event.correlation_id,
-                    "project_uuid": event.project_uuid,
-                    "contact_urn": event.contact_urn,
-                    "has_chats_room": event.has_chats_room,
-                    "ticket_uuid": event.ticket_uuid,
-                },
+                f"[ConversationWindowService] Processing conversation.window event "
+                f"correlation_id={event.correlation_id} project_uuid={event.project_uuid} "
+                f"contact_urn={event.contact_urn} has_chats_room={event.has_chats_room} ticket_uuid={event.ticket_uuid}"
             )
 
             if not event.channel_uuid:
                 logger.warning(
-                    "[ConversationWindowService] channel_uuid is missing, cannot process event",
-                    extra={
-                        "correlation_id": event.correlation_id,
-                        "project_uuid": event.project_uuid,
-                        "contact_urn": event.contact_urn,
-                    },
+                    f"[ConversationWindowService] channel_uuid is missing, cannot process event "
+                    f"correlation_id={event.correlation_id} project_uuid={event.project_uuid} "
+                    f"contact_urn={event.contact_urn}"
                 )
                 return
 
@@ -77,17 +62,6 @@ class ConversationWindowService:
                 .first()
             )
 
-            # Determine resolution based on has_chats_room
-            if event.has_chats_room:
-                resolution = ResolutionEntities.HAS_CHAT_ROOM  # "4"
-            else:
-                # Keep existing resolution if conversation exists, otherwise IN_PROGRESS
-                resolution = conversation.resolution if conversation else ResolutionEntities.IN_PROGRESS
-
-            # Check if conversation is being closed (resolution changed from IN_PROGRESS to something else)
-            was_in_progress = conversation and str(conversation.resolution) == ResolutionEntities.IN_PROGRESS
-            will_be_closed = str(resolution) != ResolutionEntities.IN_PROGRESS
-
             if conversation:
                 # Update existing conversation
                 conversation.external_id = event.external_id or conversation.external_id
@@ -96,17 +70,12 @@ class ConversationWindowService:
                 conversation.end_date = event.end_date or conversation.end_date
                 conversation.contact_name = event.contact_name or conversation.contact_name
                 conversation.ticket_uuid = event.ticket_uuid or conversation.ticket_uuid
-                conversation.resolution = resolution
                 conversation.save()
 
                 logger.info(
-                    "[ConversationWindowService] Updated conversation",
-                    extra={
-                        "correlation_id": event.correlation_id,
-                        "conversation_uuid": str(conversation.uuid),
-                        "resolution": resolution,
-                        "has_chats_room": event.has_chats_room,
-                    },
+                    f"[ConversationWindowService] Updated conversation "
+                    f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid} "
+                    f"has_chats_room={event.has_chats_room}"
                 )
             else:
                 # Create new conversation
@@ -119,59 +88,19 @@ class ConversationWindowService:
                     start_date=event.start_date,
                     end_date=event.end_date,
                     has_chats_room=event.has_chats_room,
-                    resolution=resolution,
+                    resolution=str(ResolutionEntities.IN_PROGRESS),
                     ticket_uuid=event.ticket_uuid,
                 )
 
                 logger.info(
-                    "[ConversationWindowService] Created new conversation",
-                    extra={
-                        "correlation_id": event.correlation_id,
-                        "conversation_uuid": str(conversation.uuid),
-                        "resolution": resolution,
-                        "has_chats_room": event.has_chats_room,
-                    },
+                    f"[ConversationWindowService] Created new conversation "
+                    f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid} "
+                    f"has_chats_room={event.has_chats_room}"
                 )
 
-            # Migrate messages if conversation is being closed
-            if was_in_progress and will_be_closed:
-                try:
-                    self.migration_service.migrate_conversation_messages_to_postgres(conversation)
-                    logger.info(
-                        "[ConversationWindowService] Message migration completed",
-                        extra={
-                            "correlation_id": event.correlation_id,
-                            "conversation_uuid": str(conversation.uuid),
-                        },
-                    )
-
-                    # Trigger classification
-                    classify_conversation_task.delay(str(conversation.uuid))
-                    logger.info(
-                        "[ConversationWindowService] Classification task triggered",
-                        extra={
-                            "correlation_id": event.correlation_id,
-                            "conversation_uuid": str(conversation.uuid),
-                        },
-                    )
-
-                except Exception as e:
-                    logger.error(
-                        "[ConversationWindowService] Error during message migration or classification trigger",
-                        extra={
-                            "correlation_id": event.correlation_id,
-                            "conversation_uuid": str(conversation.uuid),
-                            "error": str(e),
-                        },
-                        exc_info=True,
-                    )
-
             logger.info(
-                "[ConversationWindowService] Conversation window event processed successfully",
-                extra={
-                    "correlation_id": event.correlation_id,
-                    "conversation_uuid": str(conversation.uuid),
-                },
+                f"[ConversationWindowService] Conversation window event processed successfully "
+                f"correlation_id={event.correlation_id} conversation_uuid={conversation.uuid}"
             )
 
         except Exception as e:
@@ -187,8 +116,8 @@ class ConversationWindowService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[ConversationWindowService] Error processing conversation.window event",
-                extra={"event_data": event_data, "error": str(e)},
+                f"[ConversationWindowService] Error processing conversation.window event "
+                f"event_data={event_data} error={e}",
                 exc_info=True,
             )
             raise

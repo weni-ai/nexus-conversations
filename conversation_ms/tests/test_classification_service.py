@@ -16,8 +16,9 @@ def classification_service():
 
 
 @pytest.mark.django_db
+@patch("conversation_ms.services.classification_service.send_data_lake_event")
 @patch("conversation_ms.services.classification_service.settings")
-def test_classify_conversation_success(mock_settings, classification_service):
+def test_classify_conversation_success(mock_settings, mock_send_data_lake_event, classification_service):
     # Setup settings
     mock_settings.CONVERSATION_RESOLUTION_NAME = "resolution-lambda"
     mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "topic-lambda"
@@ -79,8 +80,9 @@ def test_classify_conversation_not_found(classification_service):
 
 
 @pytest.mark.django_db
+@patch("conversation_ms.services.classification_service.send_data_lake_event")
 @patch("conversation_ms.services.classification_service.settings")
-def test_classify_conversation_has_chats_room(mock_settings, classification_service):
+def test_classify_conversation_has_chats_room(mock_settings, mock_send_data_lake_event, classification_service):
     # Setup settings
     mock_settings.CONVERSATION_TOPIC_CLASSIFIER_NAME = "topic-lambda"
 

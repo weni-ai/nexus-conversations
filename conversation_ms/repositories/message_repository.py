@@ -22,14 +22,10 @@ class MessageRepository:
             message_text = message_data.get("text", "")
 
             logger.info(
-                "[MessageRepository] Saving received message",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "message_id": message_id,
-                    "correlation_id": event.correlation_id,
-                    "text_preview": message_text[:100] if message_text else None,
-                    "in_progress": self._is_conversation_in_progress(conversation),
-                },
+                f"[MessageRepository] Saving received message conversation_uuid={conversation.uuid} "
+                f"message_id={message_id} correlation_id={event.correlation_id} "
+                f"text_preview={(message_text[:100] if message_text else None)!r} "
+                f"in_progress={self._is_conversation_in_progress(conversation)}",
             )
 
             if self._is_conversation_in_progress(conversation):
@@ -53,13 +49,12 @@ class MessageRepository:
                 )
 
                 logger.debug(
-                    "[MessageRepository] Message saved to DynamoDB",
-                    extra={"conversation_uuid": str(conversation.uuid)},
+                    f"[MessageRepository] Message saved to DynamoDB conversation_uuid={conversation.uuid}",
                 )
             else:
                 logger.debug(
-                    "[MessageRepository] Conversation not in progress, skipping DynamoDB save",
-                    extra={"conversation_uuid": str(conversation.uuid), "resolution": conversation.resolution},
+                    f"[MessageRepository] Conversation not in progress, skipping DynamoDB save "
+                    f"conversation_uuid={conversation.uuid} resolution={conversation.resolution}",
                 )
 
         except Exception as e:
@@ -75,12 +70,8 @@ class MessageRepository:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[MessageRepository] Error saving received message",
-                extra={
-                    "event": event,
-                    "conversation_uuid": str(conversation.uuid) if conversation else None,
-                    "error": str(e),
-                },
+                f"[MessageRepository] Error saving received message "
+                f"conversation_uuid={conversation.uuid if conversation else None} error={e!s}",
                 exc_info=True,
             )
             raise
@@ -92,14 +83,10 @@ class MessageRepository:
             message_text = message_data.get("text", "")
 
             logger.info(
-                "[MessageRepository] Saving sent message",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "message_id": message_id,
-                    "correlation_id": event.correlation_id,
-                    "text_preview": message_text[:100] if message_text else None,
-                    "in_progress": self._is_conversation_in_progress(conversation),
-                },
+                f"[MessageRepository] Saving sent message conversation_uuid={conversation.uuid} "
+                f"message_id={message_id} correlation_id={event.correlation_id} "
+                f"text_preview={(message_text[:100] if message_text else None)!r} "
+                f"in_progress={self._is_conversation_in_progress(conversation)}",
             )
 
             if self._is_conversation_in_progress(conversation):
@@ -123,13 +110,12 @@ class MessageRepository:
                 )
 
                 logger.debug(
-                    "[MessageRepository] Message saved to DynamoDB",
-                    extra={"conversation_uuid": str(conversation.uuid)},
+                    f"[MessageRepository] Message saved to DynamoDB conversation_uuid={conversation.uuid}",
                 )
             else:
                 logger.debug(
-                    "[MessageRepository] Conversation not in progress, skipping DynamoDB save",
-                    extra={"conversation_uuid": str(conversation.uuid), "resolution": conversation.resolution},
+                    f"[MessageRepository] Conversation not in progress, skipping DynamoDB save "
+                    f"conversation_uuid={conversation.uuid} resolution={conversation.resolution}",
                 )
 
         except Exception as e:
@@ -145,12 +131,8 @@ class MessageRepository:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[MessageRepository] Error saving sent message",
-                extra={
-                    "event": event,
-                    "conversation_uuid": str(conversation.uuid) if conversation else None,
-                    "error": str(e),
-                },
+                f"[MessageRepository] Error saving sent message "
+                f"conversation_uuid={conversation.uuid if conversation else None} error={e!s}",
                 exc_info=True,
             )
             raise
@@ -166,13 +148,8 @@ class MessageRepository:
             return response.get("items", [])
         except Exception as e:
             logger.error(
-                "[MessageRepository] Error getting messages from DynamoDB",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "channel_uuid": channel_uuid,
-                    "error": str(e),
-                },
+                f"[MessageRepository] Error getting messages from DynamoDB "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} channel_uuid={channel_uuid} error={e!s}",
                 exc_info=True,
             )
             raise
@@ -185,22 +162,14 @@ class MessageRepository:
                 channel_uuid=channel_uuid,
             )
             logger.info(
-                "[MessageRepository] Deleted messages from DynamoDB",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "deleted_count": count,
-                },
+                f"[MessageRepository] Deleted messages from DynamoDB "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} deleted_count={count}",
             )
             return count
         except Exception as e:
             logger.error(
-                "[MessageRepository] Error deleting messages from DynamoDB",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "error": str(e),
-                },
+                f"[MessageRepository] Error deleting messages from DynamoDB "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} error={e!s}",
                 exc_info=True,
             )
             return 0

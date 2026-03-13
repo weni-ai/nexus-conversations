@@ -25,8 +25,8 @@ def update_conversation_data(to_update: dict, project_uuid: str, contact_urn: st
     )
     if not conversation:
         logger.warning(
-            "[update_conversation_data] Conversation not found",
-            extra={"project_uuid": project_uuid, "contact_urn": contact_urn, "channel_uuid": channel_uuid},
+            f"[update_conversation_data] Conversation not found "
+            f"project_uuid={project_uuid} contact_urn={contact_urn} channel_uuid={channel_uuid}",
         )
         return
 
@@ -39,12 +39,9 @@ def update_conversation_data(to_update: dict, project_uuid: str, contact_urn: st
     current_resolution = conversation.resolution
     if original_resolution == ResolutionEntities.IN_PROGRESS and current_resolution != ResolutionEntities.IN_PROGRESS:
         logger.info(
-            "[update_conversation_data] Conversation closed, triggering message migration",
-            extra={
-                "conversation_uuid": str(conversation.uuid),
-                "original_resolution": original_resolution,
-                "current_resolution": current_resolution,
-            },
+            f"[update_conversation_data] Conversation closed, triggering message migration "
+            f"conversation_uuid={conversation.uuid} original_resolution={original_resolution} "
+            f"current_resolution={current_resolution}",
         )
 
         try:
@@ -53,28 +50,23 @@ def update_conversation_data(to_update: dict, project_uuid: str, contact_urn: st
             migration_service = MessageMigrationService()
             migration_service.migrate_conversation_messages_to_postgres(conversation)
             logger.info(
-                "[update_conversation_data] Message migration completed",
-                extra={"conversation_uuid": str(conversation.uuid)},
+                f"[update_conversation_data] Message migration completed conversation_uuid={conversation.uuid}",
             )
 
             # Trigger classification
             classify_conversation_task.delay(str(conversation.uuid))
             logger.info(
-                "[update_conversation_data] Classification task triggered",
-                extra={"conversation_uuid": str(conversation.uuid)},
+                f"[update_conversation_data] Classification task triggered conversation_uuid={conversation.uuid}",
             )
 
         except Exception as e:
             logger.error(
-                "[update_conversation_data] Error during message migration or classification trigger",
-                extra={
-                    "conversation_uuid": str(conversation.uuid),
-                    "error": str(e),
-                },
+                f"[update_conversation_data] Error during message migration or classification trigger "
+                f"conversation_uuid={conversation.uuid} error={e!s}",
                 exc_info=True,
             )
 
     logger.debug(
-        "[update_conversation_data] Conversation updated",
-        extra={"conversation_uuid": str(conversation.uuid), "updated_fields": list(to_update.keys())},
+        f"[update_conversation_data] Conversation updated conversation_uuid={conversation.uuid} "
+        f"updated_fields={list(to_update.keys())}",
     )

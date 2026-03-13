@@ -33,13 +33,9 @@ class ConversationService:
                 level="warning",
             )
             logger.warning(
-                "[ConversationService] Conversation not created: msg_created_at is None or empty",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "contact_name": contact_name,
-                    "channel_uuid": channel_uuid,
-                },
+                f"[ConversationService] Conversation not created: msg_created_at is None or empty "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} contact_name={contact_name} "
+                f"channel_uuid={channel_uuid}",
             )
             return None
 
@@ -56,12 +52,8 @@ class ConversationService:
                 level="warning",
             )
             logger.warning(
-                "[ConversationService] Conversation not created: channel_uuid is None",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "contact_name": contact_name,
-                },
+                f"[ConversationService] Conversation not created: channel_uuid is None "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} contact_name={contact_name}",
             )
             return None
 
@@ -79,12 +71,8 @@ class ConversationService:
 
             if conversation:
                 logger.debug(
-                    "[ConversationService] Conversation ensured",
-                    extra={
-                        "conversation_uuid": str(conversation.uuid),
-                        "project_uuid": project_uuid,
-                        "contact_urn": contact_urn,
-                    },
+                    f"[ConversationService] Conversation ensured conversation_uuid={conversation.uuid} "
+                    f"project_uuid={project_uuid} contact_urn={contact_urn}",
                 )
 
             return conversation
@@ -105,13 +93,8 @@ class ConversationService:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[ConversationService] Error ensuring conversation exists",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "channel_uuid": channel_uuid,
-                    "error": str(e),
-                },
+                f"[ConversationService] Error ensuring conversation exists "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} channel_uuid={channel_uuid} error={e!s}",
                 exc_info=True,
             )
             raise

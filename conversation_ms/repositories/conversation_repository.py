@@ -38,13 +38,8 @@ class ConversationRepository:
             )
             sentry_sdk.capture_exception(e)
             logger.error(
-                "[ConversationRepository] Error getting conversation",
-                extra={
-                    "project_uuid": project_uuid,
-                    "contact_urn": contact_urn,
-                    "channel_uuid": channel_uuid,
-                    "error": str(e),
-                },
+                f"[ConversationRepository] Error getting conversation "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} channel_uuid={channel_uuid} error={e!s}",
                 exc_info=True,
             )
             raise

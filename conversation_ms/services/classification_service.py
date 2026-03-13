@@ -6,7 +6,7 @@ import pendulum
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
-from conversation_ms.adapters.data_lake import DataLakeEventDTO
+from conversation_ms.adapters.data_lake import DataLakeEventDTO, send_data_lake_event
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
@@ -78,14 +78,14 @@ class ClassificationService:
             conversation.resolution = resolution
 
         # Send resolution to data lake if feature flag is enabled
-        # project_uuid = str(conversation.project.uuid)
-        # self._send_resolution_to_datalake(
-        #     resolution=resolution,
-        #     has_chats_room=conversation.has_chats_room,
-        #     project_uuid=project_uuid,
-        #     contact_urn=conversation.contact_urn,
-        #     conversation=conversation,
-        # )
+        project_uuid = str(conversation.project.uuid)
+        self._send_resolution_to_datalake(
+            resolution=resolution,
+            has_chats_room=conversation.has_chats_room,
+            project_uuid=project_uuid,
+            contact_urn=conversation.contact_urn,
+            conversation=conversation,
+        )
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
@@ -312,13 +312,13 @@ class ClassificationService:
         else:
             resolution = self._get_lambda_resolution(messages, project_uuid, contact_urn)
 
-        # self._send_resolution_to_datalake(
-        #     resolution=resolution,
-        #     has_chats_room=has_chats_room,
-        #     project_uuid=project_uuid,
-        #     contact_urn=contact_urn,
-        #     conversation=conversation,
-        # )
+        self._send_resolution_to_datalake(
+            resolution=resolution,
+            has_chats_room=has_chats_room,
+            project_uuid=project_uuid,
+            contact_urn=contact_urn,
+            conversation=conversation,
+        )
 
         logger.info(
             f"Resolution determined for conversation {conversation.uuid if conversation else 'unknown'}: "
@@ -379,5 +379,5 @@ class ClassificationService:
                 "conversation_uuid": str(conversation.uuid),
             },
         )
-        _validated_event = event_dto.dict()
-        # send_data_lake_event.delay(validated_event)
+        validated_event = event_dto.dict()
+        send_data_lake_event.delay(validated_event)

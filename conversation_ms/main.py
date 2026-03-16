@@ -120,7 +120,7 @@ def main():
             consumer = signal_handler.consumer
             consumer.stop_consuming()
     except Exception as e:
-        logger.error("[main] Fatal error", extra={"error": str(e)}, exc_info=True)
+        logger.error(f"[main] Fatal error error={e!s}", exc_info=True)
         sys.exit(1)
 
 

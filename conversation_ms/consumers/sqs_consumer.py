@@ -69,13 +69,8 @@ class ConversationSQSConsumer:
             raise
 
         logger.info(
-            "[ConversationSQSConsumer] Initialized",
-            extra={
-                "consumer_id": self.consumer_id,
-                "queue_url": self.queue_url,
-                "region": self.region,
-                "processing_delay": self.processing_delay,
-            },
+            f"[ConversationSQSConsumer] Initialized consumer_id={self.consumer_id} "
+            f"queue_url={self.queue_url} region={self.region} processing_delay={self.processing_delay}",
         )
         sys.stdout.flush()
 
@@ -156,11 +151,8 @@ class ConversationSQSConsumer:
             except Exception as e:
                 self.error_count += 1
                 logger.error(
-                    "[ConversationSQSConsumer] Error processing message",
-                    extra={
-                        "message_id": message.get("MessageId"),
-                        "error": str(e),
-                    },
+                    f"[ConversationSQSConsumer] Error processing message "
+                    f"message_id={message.get('MessageId')} error={e!s}",
                     exc_info=True,
                 )
 
@@ -189,8 +181,7 @@ class ConversationSQSConsumer:
 
         except Exception as e:
             logger.error(
-                "[ConversationSQSConsumer] Error deleting messages in batch",
-                extra={"error": str(e)},
+                f"[ConversationSQSConsumer] Error deleting messages in batch error={e!s}",
                 exc_info=True,
             )
             # Fallback: deletar uma por uma
@@ -202,8 +193,7 @@ class ConversationSQSConsumer:
                     )
                 except Exception as e2:
                     logger.error(
-                        "[ConversationSQSConsumer] Error deleting message",
-                        extra={"error": str(e2), "message_id": msg.get("Id")},
+                        f"[ConversationSQSConsumer] Error deleting message error={e2!s} message_id={msg.get('Id')}",
                     )
 
     def _handle_client_error(self, e):
@@ -212,8 +202,7 @@ class ConversationSQSConsumer:
         error_message = e.response.get("Error", {}).get("Message", str(e))
 
         logger.error(
-            "[ConversationSQSConsumer] SQS receive error",
-            extra={"error_code": error_code, "error_message": error_message},
+            f"[ConversationSQSConsumer] SQS receive error error_code={error_code} error_message={error_message}",
             exc_info=True,
         )
 
@@ -222,8 +211,7 @@ class ConversationSQSConsumer:
     def _handle_unexpected_error(self, e):
         """Handle unexpected error."""
         logger.error(
-            "[ConversationSQSConsumer] Unexpected error",
-            extra={"error": str(e)},
+            f"[ConversationSQSConsumer] Unexpected error error={e!s}",
             exc_info=True,
         )
         time.sleep(5)
@@ -252,11 +240,9 @@ class ConversationSQSConsumer:
         body = message.get("Body", "")
         attributes = message.get("MessageAttributes", {})
 
-        # Log apenas a cada 100 mensagens para não poluir
-        if self.processed_count % 100 != 0:
+        if self.processed_count % 100 == 0:
             logger.debug(
-                "[ConversationSQSConsumer] Processing message",
-                extra={"message_id": message_id},
+                f"[ConversationSQSConsumer] Processing message message_id={message_id}",
             )
 
         try:
@@ -282,8 +268,7 @@ class ConversationSQSConsumer:
 
         except json.JSONDecodeError as e:
             logger.error(
-                "[ConversationSQSConsumer] Invalid JSON in message body",
-                extra={"message_id": message_id, "error": str(e)},
+                f"[ConversationSQSConsumer] Invalid JSON in message body message_id={message_id} error={e!s}",
             )
             # Poison pill: deletar mensagem inválida para não travar a fila
             self.sqs_client.delete_message(QueueUrl=self.queue_url, ReceiptHandle=receipt_handle)
@@ -291,8 +276,7 @@ class ConversationSQSConsumer:
 
         except Exception as e:
             logger.error(
-                "[ConversationSQSConsumer] Error processing message",
-                extra={"message_id": message_id, "error": str(e)},
+                f"[ConversationSQSConsumer] Error processing message message_id={message_id} error={e!s}",
                 exc_info=True,
             )
             raise
@@ -320,13 +304,9 @@ class ConversationSQSConsumer:
             handler(event_data)
         else:
             logger.warning(
-                "[ConversationSQSConsumer] Unknown event type",
-                extra={
-                    "event_type": event_type,
-                    "message_id": event_data.get("MessageId"),
-                    "correlation_id": event_data.get("correlation_id"),
-                    "available_handlers": list(event_handlers.keys()),
-                },
+                f"[ConversationSQSConsumer] Unknown event type event_type={event_type} "
+                f"message_id={event_data.get('MessageId')} correlation_id={event_data.get('correlation_id')} "
+                f"available_handlers={list(event_handlers.keys())}",
             )
 
     def _handle_message_received(self, event_data: Dict):
@@ -339,12 +319,10 @@ class ConversationSQSConsumer:
         from conversation_ms.services.message_service import MessageService
 
         logger.info(
-            "[ConversationSQSConsumer] Handling message.received event",
-            extra={
-                "correlation_id": event_data.get("correlation_id"),
-                "project_uuid": event_data.get("data", {}).get("project_uuid"),
-                "contact_urn": event_data.get("data", {}).get("contact_urn"),
-            },
+            f"[ConversationSQSConsumer] Handling message.received event "
+            f"correlation_id={event_data.get('correlation_id')} "
+            f"project_uuid={event_data.get('data', {}).get('project_uuid')} "
+            f"contact_urn={event_data.get('data', {}).get('contact_urn')}",
         )
 
         # Processar mensagem usando MessageService
@@ -361,12 +339,10 @@ class ConversationSQSConsumer:
         from conversation_ms.services.message_service import MessageService
 
         logger.info(
-            "[ConversationSQSConsumer] Handling message.sent event",
-            extra={
-                "correlation_id": event_data.get("correlation_id"),
-                "project_uuid": event_data.get("data", {}).get("project_uuid"),
-                "contact_urn": event_data.get("data", {}).get("contact_urn"),
-            },
+            f"[ConversationSQSConsumer] Handling message.sent event "
+            f"correlation_id={event_data.get('correlation_id')} "
+            f"project_uuid={event_data.get('data', {}).get('project_uuid')} "
+            f"contact_urn={event_data.get('data', {}).get('contact_urn')}",
         )
 
         # Processar mensagem usando MessageService
@@ -386,13 +362,11 @@ class ConversationSQSConsumer:
         from conversation_ms.services.conversation_window_service import ConversationWindowService
 
         logger.info(
-            "[ConversationSQSConsumer] Handling conversation.window event",
-            extra={
-                "correlation_id": event_data.get("correlation_id"),
-                "project_uuid": event_data.get("data", {}).get("project_uuid"),
-                "contact_urn": event_data.get("data", {}).get("contact_urn"),
-                "has_chats_room": event_data.get("data", {}).get("has_chats_room"),
-            },
+            f"[ConversationSQSConsumer] Handling conversation.window event "
+            f"correlation_id={event_data.get('correlation_id')} "
+            f"project_uuid={event_data.get('data', {}).get('project_uuid')} "
+            f"contact_urn={event_data.get('data', {}).get('contact_urn')} "
+            f"has_chats_room={event_data.get('data', {}).get('has_chats_room')}",
         )
 
         # Process conversation window event

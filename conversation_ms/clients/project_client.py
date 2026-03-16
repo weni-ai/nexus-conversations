@@ -58,8 +58,7 @@ class ProjectClient:
         except requests.RequestException as e:
             sentry_sdk.capture_exception(e)
             logger.error(
-                f"[ProjectClient] Error fetching projects page {page}",
-                extra={"page": page, "page_size": page_size, "error": str(e)},
+                f"[ProjectClient] Error fetching projects page={page} page_size={page_size} error={e!s}",
                 exc_info=True,
             )
             raise

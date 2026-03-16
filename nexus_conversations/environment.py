@@ -23,4 +23,8 @@ env = environ.Env(
     # Data Lake SDK (for CSAT/NPS)
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
+    PROJECT_COUNT_THRESHOLD=(int, 100),
+    AMAZON_MQ_PROJECT_COUNT_ENABLED=(bool, False),
+    AMAZON_MQ_BROKER_URL=(str, ""),
+    AMAZON_MQ_PROJECT_COUNT_EXCHANGE=(str, ""),
 )

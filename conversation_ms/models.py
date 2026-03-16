@@ -119,6 +119,18 @@ class Conversation(models.Model):
         return f"Conversation - {self.uuid} - {self.contact_name}"
 
 
+class ProjectCount(models.Model):
+    project = models.OneToOneField(Project, on_delete=models.CASCADE, related_name="project_count", primary_key=True)
+    conversation_count = models.IntegerField(default=0)
+    threshold_notified = models.BooleanField(
+        default=False,
+        help_text="True after a message was sent to AmazonMQ for blocking trial at threshold.",
+    )
+
+    def __str__(self):
+        return f"ProjectCount - {self.project_id} - {self.conversation_count}"
+
+
 class ConversationClassification(models.Model):
     """
     Model to store conversation classification results.

@@ -167,6 +167,12 @@ CELERY_ACCEPT_CONTENT = ["application/json"]
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
 
+# ProjectCount / AmazonMQ (trial block when conversation threshold reached)
+PROJECT_COUNT_THRESHOLD = env.int("PROJECT_COUNT_THRESHOLD", default=100)
+AMAZON_MQ_PROJECT_COUNT_ENABLED = env.bool("AMAZON_MQ_PROJECT_COUNT_ENABLED", default=False)
+AMAZON_MQ_BROKER_URL = env.str("AMAZON_MQ_BROKER_URL", default="")
+AMAZON_MQ_PROJECT_COUNT_EXCHANGE = env.str("AMAZON_MQ_PROJECT_COUNT_EXCHANGE", default="")
+
 # SQS Configuration for Conversation MS
 SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")
 SQS_ROOMS_QUEUE_URL = env.str("SQS_ROOMS_QUEUE_URL", default="")

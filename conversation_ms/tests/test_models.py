@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from conversation_ms.models import Conversation, ConversationMessages, Project
+from conversation_ms.models import Conversation, ConversationMessages, Project, ProjectCount
 
 
 @pytest.mark.django_db
@@ -30,6 +30,25 @@ class TestProject:
         """Test creating a project without name."""
         project = Project.objects.create(uuid=uuid4())
         assert project.name is None or project.name == ""
+
+
+@pytest.mark.django_db
+class TestProjectCount:
+    """Tests for ProjectCount model."""
+
+    def test_create_project_count(self, project):
+        """Test creating a ProjectCount for a project."""
+        pc = ProjectCount.objects.create(project=project, conversation_count=10)
+        assert pc.project_id == project.uuid
+        assert pc.conversation_count == 10
+        assert pc.threshold_notified is False
+
+    def test_project_count_str(self, project):
+        """Test ProjectCount string representation."""
+        ProjectCount.objects.create(project=project, conversation_count=5)
+        pc = ProjectCount.objects.get(project=project)
+        assert "ProjectCount" in str(pc)
+        assert "5" in str(pc)
 
 
 @pytest.mark.django_db

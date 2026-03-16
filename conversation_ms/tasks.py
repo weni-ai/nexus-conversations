@@ -7,11 +7,14 @@ import pendulum
 import sentry_sdk
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import F
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
+from conversation_ms.clients.amazon_mq import publish_project_count_threshold_reached
 from conversation_ms.clients.project_client import ProjectClient
-from conversation_ms.models import Conversation, Project
+from conversation_ms.models import Conversation, Project, ProjectCount
+from conversation_ms.services import project_count_buffer
 from conversation_ms.services.classification_service import (
     ClassificationService,
 )
@@ -1209,3 +1212,63 @@ def reclassify_unclassified_conversations():
 
     logger.info(f"[ReclassifyTask] Triggered classification for {count} conversations")
     return count
+
+
+def _apply_project_count_flush(project_uuid: str, delta: int) -> Optional[int]:
+    """
+    Apply buffer delta to ProjectCount in DB. Returns new total conversation_count, or None if project not found.
+    """
+    try:
+        project = Project.objects.get(uuid=project_uuid)
+    except Project.DoesNotExist:
+        logger.warning(f"[ProjectCount] project not found project_uuid={project_uuid}")
+        return None
+    pc, _ = ProjectCount.objects.get_or_create(project=project, defaults={"conversation_count": 0})
+    ProjectCount.objects.filter(project=project).update(conversation_count=F("conversation_count") + delta)
+    pc.refresh_from_db()
+    return pc.conversation_count
+
+
+def _maybe_publish_threshold(project_uuid: str, new_total: int) -> None:
+    threshold = getattr(settings, "PROJECT_COUNT_THRESHOLD", None)
+    if threshold is None or new_total < threshold:
+        return
+    try:
+        pc = ProjectCount.objects.get(project_id=project_uuid)
+        if pc.threshold_notified:
+            return
+        if publish_project_count_threshold_reached(project_uuid, new_total):
+            ProjectCount.objects.filter(project_id=project_uuid).update(threshold_notified=True)
+    except ProjectCount.DoesNotExist:
+        pass
+
+
+@celery_app.task(name="conversation_ms.tasks.flush_project_count_for_project")
+def flush_project_count_for_project(project_uuid: str):
+    """
+    Flush Redis buffer for one project (triggered by signal when buffer >= threshold).
+    Atomically GETDEL buffer, update ProjectCount in DB, publish to AmazonMQ if total >= threshold.
+    Idempotent: multiple tasks may run; only the one that gets the value from GETDEL updates; others get 0.
+    """
+    delta = project_count_buffer.flush_key(project_uuid)
+    if delta == 0:
+        return
+    new_total = _apply_project_count_flush(project_uuid, delta)
+    if new_total is not None:
+        _maybe_publish_threshold(project_uuid, new_total)
+
+
+@celery_app.task(name="conversation_ms.tasks.flush_project_count_buffers")
+def flush_project_count_buffers():
+    """
+    Periodic task: SCAN all project_count buffer keys, GETDEL each, update ProjectCount, notify if threshold.
+    Keeps DB in sync and acts as fallback if signal-triggered flush missed.
+    """
+    count = 0
+    for project_uuid, delta in project_count_buffer.flush_all():
+        new_total = _apply_project_count_flush(project_uuid, delta)
+        if new_total is not None:
+            _maybe_publish_threshold(project_uuid, new_total)
+            count += 1
+    if count:
+        logger.debug("[ProjectCount] flush_project_count_buffers updated %s projects", count)

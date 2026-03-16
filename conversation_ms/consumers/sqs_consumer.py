@@ -240,8 +240,7 @@ class ConversationSQSConsumer:
         body = message.get("Body", "")
         attributes = message.get("MessageAttributes", {})
 
-        # Log apenas a cada 100 mensagens para não poluir
-        if self.processed_count % 100 != 0:
+        if self.processed_count % 100 == 0:
             logger.debug(
                 f"[ConversationSQSConsumer] Processing message message_id={message_id}",
             )

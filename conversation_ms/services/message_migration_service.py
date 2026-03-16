@@ -19,7 +19,7 @@ class MessageMigrationService:
         """
         try:
             logger.info(
-                f"[MessageMigrationService] Starting migration for conversation conversation_uuid={conversation.uuid}",
+                f"[MessageMigrationService] Starting migration for conversation_uuid={conversation.uuid}",
             )
 
             messages = self.message_repository.get_messages_from_dynamo(

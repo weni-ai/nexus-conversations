@@ -12,7 +12,11 @@ class CSATNPSService:
         try:
             csat_value = event_data.get("value")
             if not csat_value:
-                logger.warning(f"[CSATNPSService] CSAT event missing value event_data={event_data}")
+                logger.warning(
+                    f"[CSATNPSService] CSAT event missing value "
+                    f"project_uuid={project_uuid} contact_urn={contact_urn} "
+                    f"event_keys={list(event_data.keys()) if isinstance(event_data, dict) else None}",
+                )
                 return
 
             if conversation and conversation.channel_uuid:
@@ -69,8 +73,11 @@ class CSATNPSService:
                 },
             )
             sentry_sdk.capture_exception(e)
+            safe_event_preview = str(event_data)[:200] if event_data is not None else None
             logger.error(
-                f"[CSATNPSService] Error processing CSAT event event_data={event_data} error={e!s}",
+                f"[CSATNPSService] Error processing CSAT event "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} "
+                f"event_preview={safe_event_preview!r} error={e!s}",
                 exc_info=True,
             )
             raise
@@ -79,7 +86,11 @@ class CSATNPSService:
         try:
             nps_value = event_data.get("value")
             if not nps_value:
-                logger.warning("[CSATNPSService] NPS event missing value event_data=%s", event_data)
+                logger.warning(
+                    f"[CSATNPSService] NPS event missing value "
+                    f"project_uuid={project_uuid} contact_urn={contact_urn} "
+                    f"event_keys={list(event_data.keys()) if isinstance(event_data, dict) else None}",
+                )
                 return
 
             if conversation and conversation.channel_uuid:
@@ -137,10 +148,11 @@ class CSATNPSService:
                 },
             )
             sentry_sdk.capture_exception(e)
+            safe_event_preview = str(event_data)[:200] if event_data is not None else None
             logger.error(
-                "[CSATNPSService] Error processing NPS event event_data=%s error=%s",
-                event_data,
-                str(e),
+                f"[CSATNPSService] Error processing NPS event "
+                f"project_uuid={project_uuid} contact_urn={contact_urn} "
+                f"event_preview={safe_event_preview!r} error={e!s}",
                 exc_info=True,
             )
             raise

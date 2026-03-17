@@ -52,6 +52,8 @@ INSTALLED_APPS = [
     "django_filters",
     "nexus_conversations.sentry",
     "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
+    "weni.eda.django.eda_app",
+    "weni.pika_eda.django.pika_eda_app",
 ]
 
 MIDDLEWARE = [
@@ -167,11 +169,24 @@ CELERY_ACCEPT_CONTENT = ["application/json"]
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
 
-# ProjectCount / AmazonMQ (trial block when conversation threshold reached)
+# ProjectCount / Amazon MQ
 PROJECT_COUNT_THRESHOLD = env.int("PROJECT_COUNT_THRESHOLD", default=100)
-AMAZON_MQ_PROJECT_COUNT_ENABLED = env.bool("AMAZON_MQ_PROJECT_COUNT_ENABLED", default=False)
-AMAZON_MQ_BROKER_URL = env.str("AMAZON_MQ_BROKER_URL", default="")
-AMAZON_MQ_PROJECT_COUNT_EXCHANGE = env.str("AMAZON_MQ_PROJECT_COUNT_EXCHANGE", default="")
+USE_EDA = env.bool("USE_EDA", default=False)
+EDA_BROKER_HOST = env.str("EDA_BROKER_HOST", default="")
+EDA_BROKER_PORT = env.int("EDA_BROKER_PORT", default=5671)  # 5671 AMQPS, 5672 AMQP without TLS
+EDA_BROKER_USER = env.str("EDA_BROKER_USER", default="")
+EDA_BROKER_PASSWORD = env.str("EDA_BROKER_PASSWORD", default="")
+EDA_VIRTUAL_HOST = env.str("EDA_VIRTUAL_HOST", default="/")
+EDA_PROJECT_COUNT_EXCHANGE = env.str("EDA_PROJECT_COUNT_EXCHANGE", default="")
+# Optional: for future consumers / SSL with Pika (Amazon MQ)
+PIKA_EDA_BROKER_HOST = env.str("PIKA_EDA_BROKER_HOST", default="")
+PIKA_EDA_BROKER_PORT = env.int("PIKA_EDA_BROKER_PORT", default=5671)
+PIKA_EDA_BROKER_USER = env.str("PIKA_EDA_BROKER_USER", default="")
+PIKA_EDA_BROKER_PASSWORD = env.str("PIKA_EDA_BROKER_PASSWORD", default="")
+PIKA_EDA_VIRTUAL_HOST = env.str("PIKA_EDA_VIRTUAL_HOST", default="/")
+PIKA_EDA_SSL_ENABLED = env.bool("PIKA_EDA_SSL_ENABLED", default=True)
+PIKA_EDA_HEARTBEAT = env.int("PIKA_EDA_HEARTBEAT", default=600)
+PIKA_EDA_BLOCKED_CONNECTION_TIMEOUT = env.int("PIKA_EDA_BLOCKED_CONNECTION_TIMEOUT", default=300)
 
 # SQS Configuration for Conversation MS
 SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")

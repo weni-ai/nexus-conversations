@@ -1,6 +1,8 @@
 """
 Redis buffer for per-project conversation counts.
-Uses INCR/DECR for high throughput; flush uses GETDEL (atomic read-and-delete).
+Uses INCR for creates; decrement is atomic with floor at 0 so bulk deletes after a flush
+do not drive the buffer negative (those rows were already applied to ProjectCount).
+Flush uses GETDEL (atomic read-and-delete).
 """
 
 import logging
@@ -36,12 +38,33 @@ def increment(project_uuid: str) -> None:
         raise
 
 
+def _decrement_clamped_lua(client, key: str):
+    """
+    Atomically decrement buffer by 1, never below 0, and remove corrupt/non-positive keys.
+    Needed because deletes fire for rows that were never represented in the buffer after flush
+    (e.g. bulk delete after buffer was synced to DB).
+    """
+    script = """
+    local v = redis.call('GET', KEYS[1])
+    if v == false then
+        return 0
+    end
+    v = tonumber(v)
+    if v <= 0 then
+        redis.call('DEL', KEYS[1])
+        return 0
+    end
+    return redis.call('DECR', KEYS[1])
+    """
+    return client.eval(script, 1, key)
+
+
 def decrement(project_uuid: str) -> None:
-    """Decrement buffer count for project (conversation deleted)."""
+    """Decrement buffer count for project (conversation deleted). Floors at 0 (see module doc)."""
     try:
         client = _get_redis()
         key = _buffer_key(project_uuid)
-        client.decr(key)
+        _decrement_clamped_lua(client, key)
     except Exception as e:
         logger.exception(
             "[ProjectCountBuffer] decrement failed project_uuid=%s error=%s",

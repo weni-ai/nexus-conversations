@@ -25,14 +25,28 @@ def publish_project_count_threshold_reached(project_uuid: str, conversation_coun
     Uses weni-eda stack and EDA_BROKER_* (Amazon MQ) when USE_EDA is True.
     Returns True if published successfully, False if disabled or error.
     """
+    logger.info(
+        "[AmazonMQ] publish_project_count_threshold_reached enter project_uuid=%s conversation_count=%s",
+        project_uuid,
+        conversation_count,
+    )
     if not _is_eda_configured():
-        logger.debug(
-            "[AmazonMQ] EDA disabled or not configured, skip publish project_uuid=%s",
+        logger.info(
+            "[AmazonMQ] skip_publish EDA_not_configured project_uuid=%s use_eda=%s host_configured=%s exchange_configured=%s",
             project_uuid,
+            getattr(settings, "USE_EDA", False),
+            bool((getattr(settings, "EDA_BROKER_HOST", "") or "").strip()),
+            bool((getattr(settings, "EDA_PROJECT_COUNT_EXCHANGE", "") or "").strip()),
         )
         return False
 
     exchange_name = getattr(settings, "EDA_PROJECT_COUNT_EXCHANGE", "")
+    logger.info(
+        "[AmazonMQ] publishing exchange=%s routing_key=empty project_uuid=%s conversation_count=%s",
+        exchange_name,
+        project_uuid,
+        conversation_count,
+    )
     publisher = AmazonMQEDAPublisher(exchange_name=exchange_name, routing_key="")
 
     payload = {
@@ -48,4 +62,9 @@ def publish_project_count_threshold_reached(project_uuid: str, conversation_coun
             conversation_count,
         )
         return True
+    logger.info(
+        "[AmazonMQ] publish_returned_false project_uuid=%s conversation_count=%s (see exception log above if any)",
+        project_uuid,
+        conversation_count,
+    )
     return False

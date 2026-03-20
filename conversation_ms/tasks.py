@@ -1231,16 +1231,50 @@ def _apply_project_count_flush(project_uuid: str, delta: int) -> Optional[int]:
 
 def _maybe_publish_threshold(project_uuid: str, new_total: int) -> None:
     threshold = getattr(settings, "PROJECT_COUNT_THRESHOLD", None)
-    if threshold is None or new_total < threshold:
+    if threshold is None:
+        logger.info(
+            "[ProjectCount] threshold_notify_skipped reason=no_threshold_setting project_uuid=%s new_total=%s",
+            project_uuid,
+            new_total,
+        )
+        return
+    if new_total < threshold:
+        logger.info(
+            "[ProjectCount] threshold_notify_skipped reason=below_threshold project_uuid=%s new_total=%s threshold=%s",
+            project_uuid,
+            new_total,
+            threshold,
+        )
         return
     try:
         pc = ProjectCount.objects.get(project_id=project_uuid)
         if pc.threshold_notified:
+            logger.info(
+                "[ProjectCount] threshold_notify_skipped reason=already_notified project_uuid=%s new_total=%s",
+                project_uuid,
+                new_total,
+            )
             return
+        logger.info(
+            "[ProjectCount] threshold_notify_attempt project_uuid=%s new_total=%s threshold=%s",
+            project_uuid,
+            new_total,
+            threshold,
+        )
         if publish_project_count_threshold_reached(project_uuid, new_total):
             ProjectCount.objects.filter(project_id=project_uuid).update(threshold_notified=True)
+        else:
+            logger.info(
+                "[ProjectCount] threshold_notify_publish_failed project_uuid=%s new_total=%s",
+                project_uuid,
+                new_total,
+            )
     except ProjectCount.DoesNotExist:
-        pass
+        logger.info(
+            "[ProjectCount] threshold_notify_skipped reason=no_project_count_row project_uuid=%s new_total=%s",
+            project_uuid,
+            new_total,
+        )
 
 
 @celery_app.task(name="conversation_ms.tasks.flush_project_count_for_project")
@@ -1250,11 +1284,26 @@ def flush_project_count_for_project(project_uuid: str):
     Atomically GETDEL buffer, update ProjectCount in DB, publish to AmazonMQ if total >= threshold.
     Idempotent: multiple tasks may run; only the one that gets the value from GETDEL updates; others get 0.
     """
+    logger.info("[ProjectCount] flush_for_project_start project_uuid=%s", project_uuid)
     delta = project_count_buffer.flush_key(project_uuid)
     if delta == 0:
+        logger.info(
+            "[ProjectCount] flush_for_project_noop reason=delta_zero project_uuid=%s",
+            project_uuid,
+        )
         return
+    logger.info(
+        "[ProjectCount] flush_for_project_delta project_uuid=%s delta=%s",
+        project_uuid,
+        delta,
+    )
     new_total = _apply_project_count_flush(project_uuid, delta)
     if new_total is not None:
+        logger.info(
+            "[ProjectCount] before_maybe_publish_threshold context=signal_flush project_uuid=%s new_total=%s",
+            project_uuid,
+            new_total,
+        )
         _maybe_publish_threshold(project_uuid, new_total)
 
 
@@ -1268,7 +1317,13 @@ def flush_project_count_buffers():
     for project_uuid, delta in project_count_buffer.flush_all():
         new_total = _apply_project_count_flush(project_uuid, delta)
         if new_total is not None:
+            logger.info(
+                "[ProjectCount] flush_buffers_project context=periodic project_uuid=%s delta=%s new_total=%s",
+                project_uuid,
+                delta,
+                new_total,
+            )
             _maybe_publish_threshold(project_uuid, new_total)
             count += 1
     if count:
-        logger.debug("[ProjectCount] flush_project_count_buffers updated %s projects", count)
+        logger.info("[ProjectCount] flush_project_count_buffers_done updated_projects=%s", count)

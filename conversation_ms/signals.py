@@ -24,7 +24,16 @@ def conversation_post_save(sender, instance: Conversation, created: bool, **kwar
         project_count_buffer.increment(project_uuid)
 
         threshold = getattr(settings, "PROJECT_COUNT_THRESHOLD", None)
-        if threshold is not None and project_count_buffer.get(project_uuid) >= threshold:
+        buffer_val = project_count_buffer.get(project_uuid)
+        enqueue_flush = threshold is not None and buffer_val >= threshold
+        logger.info(
+            "[ProjectCount] conversation_created project_uuid=%s buffer=%s threshold=%s enqueue_flush=%s",
+            project_uuid,
+            buffer_val,
+            threshold,
+            enqueue_flush,
+        )
+        if enqueue_flush:
             flush_project_count_for_project.delay(project_uuid)
     except Exception as e:
         logger.exception(

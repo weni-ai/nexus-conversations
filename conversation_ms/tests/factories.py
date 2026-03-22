@@ -21,6 +21,7 @@ class ProjectFactory(factory.django.DjangoModelFactory):
 
     uuid = factory.LazyFunction(uuid4)
     name = factory.Faker("company")
+    timezone = None
 
 
 class ConversationFactory(factory.django.DjangoModelFactory):

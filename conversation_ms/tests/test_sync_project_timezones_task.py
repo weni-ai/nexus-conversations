@@ -127,16 +127,40 @@ class TestSyncProjectTimezonesTask:
         assert p1.timezone == "UTC"
         assert p2.timezone == "America/New_York"
 
-    def test_success_enqueues_close_daily(self, mock_project_client):
-        """After sync, close_daily is enqueued (async) so it runs with updated timezones."""
+    def test_success_enqueues_close_daily(self, mock_project_client, _in_memory_tasks_cache_lock):
+        """After sync, close_daily is enqueued only after the sync lock is released."""
         project = ProjectFactory(timezone=None)
         mock_project_client.get_projects_paginated.return_value = {
             "results": [{"uuid": str(project.uuid), "timezone": "UTC"}],
             "next": None,
         }
-        with patch("conversation_ms.tasks.close_daily_conversations_task.delay") as mock_delay:
+
+        def delay_side_effect(*_a, **_kw):
+            assert (
+                _SYNC_PROJECT_TIMEZONES_LOCK_KEY not in _in_memory_tasks_cache_lock
+            ), "close_daily must not be enqueued while sync lock is held"
+
+        with patch(
+            "conversation_ms.tasks.close_daily_conversations_task.delay",
+            side_effect=delay_side_effect,
+        ) as mock_delay:
             sync_project_timezones_task(project_client=mock_project_client)
             mock_delay.assert_called_once_with()
+
+    def test_skips_malformed_uuid_row_continues_sync(self, mock_project_client):
+        project = ProjectFactory(timezone=None)
+        mock_project_client.get_projects_paginated.return_value = {
+            "results": [
+                {"uuid": "not-a-valid-uuid", "timezone": "UTC"},
+                {"uuid": str(project.uuid), "timezone": "Africa/Nairobi"},
+            ],
+            "next": None,
+        }
+        result = sync_project_timezones_task(project_client=mock_project_client)
+        assert result["status"] == "success"
+        assert result["invalid_timezone_skipped"] == 1
+        project.refresh_from_db()
+        assert project.timezone == "Africa/Nairobi"
 
     def test_skips_when_lock_already_held(self, mock_project_client, _in_memory_tasks_cache_lock):
         _in_memory_tasks_cache_lock[_SYNC_PROJECT_TIMEZONES_LOCK_KEY] = 1

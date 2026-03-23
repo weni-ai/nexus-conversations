@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("conversation_ms", "0005_alter_conversation_csat"),
+        ("conversation_ms", "0007_populate_projectcount"),
     ]
 
     operations = [

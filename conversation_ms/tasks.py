@@ -2,6 +2,7 @@
 import logging
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 import pendulum
 import sentry_sdk
@@ -725,7 +726,9 @@ def close_daily_conversations_task(
         batch: list = []
         batch_index = 0
 
-        for project in Project.objects.all().order_by("uuid").iterator(chunk_size=_CLOSE_DAILY_PROJECT_CHUNK):
+        for project in (
+            Project.objects.only("uuid", "timezone").order_by("uuid").iterator(chunk_size=_CLOSE_DAILY_PROJECT_CHUNK)
+        ):
             projects_scanned += 1
             batch.append({"uuid": str(project.uuid), "timezone": project.timezone or None})
             if len(batch) >= _CLOSE_DAILY_PROJECT_CHUNK:
@@ -770,13 +773,19 @@ def _sync_timezones_for_api_results(results: list) -> tuple[int, int]:
     Apply timezone values from one API page to existing Project rows.
 
     Returns:
-        (rows_updated, skipped_invalid_tz)
+        (rows_updated, skipped_invalid) — invalid counts malformed UUIDs and bad timezone strings.
     """
     rows_updated = 0
     skipped_invalid = 0
     for item in results:
-        uuid = item.get("uuid")
-        if not uuid:
+        raw_uuid = item.get("uuid")
+        if not raw_uuid:
+            continue
+        try:
+            project_uuid = UUID(str(raw_uuid))
+        except (ValueError, TypeError, AttributeError):
+            logger.warning("[SyncProjectTimezones] Invalid project uuid from API, skipping row " f"uuid={raw_uuid!r}")
+            skipped_invalid += 1
             continue
         raw_tz = item.get("timezone")
         if raw_tz:
@@ -786,13 +795,13 @@ def _sync_timezones_for_api_results(results: list) -> tuple[int, int]:
             except Exception:
                 logger.warning(
                     "[SyncProjectTimezones] Invalid timezone from API, skipping update "
-                    f"project_uuid={uuid} timezone={raw_tz!r}"
+                    f"project_uuid={project_uuid} timezone={raw_tz!r}"
                 )
                 skipped_invalid += 1
                 continue
         else:
             tz_to_store = None
-        rows_updated += Project.objects.filter(uuid=uuid).update(timezone=tz_to_store)
+        rows_updated += Project.objects.filter(uuid=project_uuid).update(timezone=tz_to_store)
     return rows_updated, skipped_invalid
 
 
@@ -869,7 +878,13 @@ def sync_project_timezones_task(self, project_client: Optional[ProjectClient] = 
                 page += 1
 
             except Exception as e:
-                TaskLogger.log("page_fetch_error", page=page, error=e)
+                sentry_sdk.capture_exception(e)
+                logger.error(
+                    "[SyncProjectTimezones] Error fetching projects API page page=%s error=%s",
+                    page,
+                    e,
+                    exc_info=True,
+                )
                 raise
 
         logger.info(
@@ -883,6 +898,9 @@ def sync_project_timezones_task(self, project_client: Optional[ProjectClient] = 
             "invalid_timezone_skipped": total_skipped_invalid,
             "pages_processed": pages_processed,
         }
+        # Release lock before enqueue: otherwise a worker may run close_daily while the lock
+        # is still held (finally runs only after return from this block).
+        cache.delete(_SYNC_PROJECT_TIMEZONES_LOCK_KEY)
         close_daily_conversations_task.delay()
         logger.info("[SyncProjectTimezones] Enqueued close_daily_conversations_task")
         return result

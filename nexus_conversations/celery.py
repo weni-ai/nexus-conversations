@@ -25,14 +25,20 @@ app.conf.result_serializer = "json"
 app.conf.accept_content = ["application/json"]
 
 # Beat schedule
+# Hour 0: sync only; it enqueues close_daily when done. Hours 1–23: close only.
+# While sync holds a cache lock, scheduled close_daily skips (sync may run >1h).
 app.conf.beat_schedule = {
     "close_daily_conversations": {
         "task": "conversation_ms.tasks.close_daily_conversations_task",
-        "schedule": schedules.crontab(minute="0"),
+        "schedule": schedules.crontab(minute=0, hour=list(range(1, 24))),
+    },
+    "sync_project_timezones": {
+        "task": "conversation_ms.tasks.sync_project_timezones_task",
+        "schedule": schedules.crontab(hour=0, minute=0),
     },
     "reclassify_unclassified_conversations": {
         "task": "conversation_ms.tasks.reclassify_unclassified_conversations",
-        "schedule": schedules.crontab(minute="0"),
+        "schedule": schedules.crontab(minute=0),
     },
     "flush_project_count_buffers": {
         "task": "conversation_ms.tasks.flush_project_count_buffers",

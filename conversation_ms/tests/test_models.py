@@ -31,6 +31,12 @@ class TestProject:
         project = Project.objects.create(uuid=uuid4())
         assert project.name is None or project.name == ""
 
+    def test_project_timezone_optional(self):
+        """Timezone is optional until synced from the projects API."""
+        project = Project.objects.create(uuid=uuid4(), name="TZ Project", timezone="America/Sao_Paulo")
+        project.refresh_from_db()
+        assert project.timezone == "America/Sao_Paulo"
+
 
 @pytest.mark.django_db
 class TestProjectCount:

@@ -21,6 +21,11 @@ class Project(models.Model):
 
     uuid = models.UUIDField(primary_key=True, default=uuid4)
     name = models.CharField(max_length=255, null=True, blank=True)
+    timezone = models.CharField(
+        max_length=63,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

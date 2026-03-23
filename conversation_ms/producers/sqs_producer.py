@@ -25,6 +25,27 @@ def _normalize_sqs_deduplication_id(value: str) -> str:
     return safe or str(uuid.uuid4())
 
 
+_REQUIRED_FIFO_DATA_KEYS = ("project_uuid", "contact_urn", "channel_uuid")
+
+
+def _validate_billing_fifo_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure payload has ``data`` with fields required for FIFO grouping and message attributes.
+    Raises ValueError with a clear message if not.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("payload must contain a 'data' dict")
+    missing = [k for k in _REQUIRED_FIFO_DATA_KEYS if k not in data or data[k] in (None, "")]
+    if missing:
+        raise ValueError(
+            "payload['data'] missing or empty required keys for FIFO billing message: " + ", ".join(missing)
+        )
+    return data
+
+
 class BillingSQSProducer:
     """Send payloads to the billing SQS FIFO queue (shared region with other SQS: ``SQS_CONVERSATION_REGION``)."""
 
@@ -47,7 +68,7 @@ class BillingSQSProducer:
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
 
-        data = payload["data"]
+        data = _validate_billing_fifo_payload(payload)
         project_uuid = data["project_uuid"]
         contact_urn = data["contact_urn"]
         channel_uuid = data["channel_uuid"]
@@ -74,11 +95,12 @@ class BillingSQSProducer:
             logger.debug("Sent billing SQS message: %s", event_type)
         except Exception as e:
             logger.error("Failed to send message to billing SQS: %s", e, exc_info=True)
-            sentry_sdk.set_tag("project_uuid", project_uuid)
-            sentry_sdk.set_tag("contact_urn", contact_urn)
-            sentry_sdk.set_tag("channel_uuid", channel_uuid)
-            sentry_sdk.set_context("payload", payload)
-            sentry_sdk.capture_exception(e)
+            with sentry_sdk.push_scope() as scope:
+                scope.set_tag("project_uuid", project_uuid)
+                scope.set_tag("contact_urn", contact_urn)
+                scope.set_tag("channel_uuid", channel_uuid)
+                scope.set_context("payload", payload)
+                sentry_sdk.capture_exception(e)
             raise
 
     def send_events(self, events: List[Dict[str, Any]]) -> None:

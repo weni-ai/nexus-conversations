@@ -2,6 +2,7 @@
 import logging
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 import pendulum
 import sentry_sdk
@@ -24,6 +25,13 @@ from conversation_ms.utils.date_helpers import ProjectDay
 from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
+
+# Chunk size for ORM iterator + in-memory batches (same order of magnitude as projects API page size).
+_CLOSE_DAILY_PROJECT_CHUNK = 100
+
+# While timezone sync runs, automatic close_daily skips (sync can exceed 1h; avoids partial TZ in DB).
+_SYNC_PROJECT_TIMEZONES_LOCK_KEY = "conversation_ms:sync_project_timezones_active"
+_SYNC_PROJECT_TIMEZONES_LOCK_TTL_SECONDS = 7200
 
 
 def _migrate_messages_to_postgres(conversation: Conversation):
@@ -448,11 +456,11 @@ class TaskLogger:
         logger.info(f"{TaskLogger.PREFIX} Closed {conversations_closed} conversations for project {project_uuid}")
 
     @staticmethod
-    def _log_last_page(page: int, pages_processed: int):
-        """Log when reaching last page."""
+    def _log_last_batch(batch_index: int, projects_scanned: int):
+        """Log when finishing iteration over local projects."""
         logger.info(
-            f"{TaskLogger.PREFIX} Reached last page ({page}), no more pages to process. "
-            f"Pages processed: {pages_processed}"
+            f"{TaskLogger.PREFIX} Finished scanning local projects after batch {batch_index}. "
+            f"Projects scanned: {projects_scanned}"
         )
 
     @staticmethod
@@ -465,10 +473,10 @@ class TaskLogger:
         )
 
     @staticmethod
-    def _log_task_completed(pages_processed: int, projects_processed: int, conversations_closed: int):
+    def _log_task_completed(projects_scanned: int, projects_processed: int, conversations_closed: int):
         """Log task completion."""
         logger.info(
-            f"{TaskLogger.PREFIX} Task completed. Pages processed: {pages_processed}, "
+            f"{TaskLogger.PREFIX} Task completed. Projects scanned: {projects_scanned}, "
             f"Projects processed: {projects_processed}, Conversations closed: {conversations_closed}"
         )
 
@@ -481,7 +489,7 @@ class TaskLogger:
         "day_not_ended": _log_day_not_ended,
         "processing_project": _log_processing_project,
         "project_completed": _log_project_completed,
-        "last_page": _log_last_page,
+        "last_batch": _log_last_batch,
         "page_fetch_error": _log_page_fetch_error,
         "task_completed": _log_task_completed,
     }
@@ -519,7 +527,6 @@ def _process_single_project(
     force_close: bool,
     start_date: Optional[str],
     end_date: Optional[str],
-    project_client: Optional[ProjectClient] = None,
     classification_service: Optional[ClassificationService] = None,
 ) -> tuple[int, bool]:
     """
@@ -596,7 +603,6 @@ def _process_projects_page(
     force_close: bool,
     start_date: Optional[str],
     end_date: Optional[str],
-    project_client: Optional[ProjectClient] = None,
     classification_service: Optional[ClassificationService] = None,
 ) -> tuple[int, int]:
     """
@@ -610,7 +616,7 @@ def _process_projects_page(
 
     for project_data in projects_data:
         conversations_closed, success = _process_single_project(
-            project_data, fallback_timezone, force_close, start_date, end_date, project_client, classification_service
+            project_data, fallback_timezone, force_close, start_date, end_date, classification_service
         )
         total_conversations_closed += conversations_closed
         if success:
@@ -675,10 +681,12 @@ def close_daily_conversations_task(
     force_close: bool = False,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    project_client: Optional[ProjectClient] = None,
 ):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
+
+    Uses each project's stored ``timezone`` (updated by ``sync_project_timezones_task``).
+    Missing or invalid timezone falls back to FALLBACK_TIMEZONE.
 
     For each project:
     1. Checks if the day has ended (23:59) in the project's timezone (or fallback)
@@ -689,28 +697,171 @@ def close_daily_conversations_task(
        - Updates conversation with resolution
        - Migrates messages to PostgreSQL
 
-    Processes in batches to avoid OOMKilled errors.
-
     Args:
         force_close: Force processing even if day hasn't ended
         start_date: Optional start date (YYYY-MM-DD or ISO timestamp)
         end_date: Optional end date (YYYY-MM-DD or ISO timestamp)
-        project_client: Optional ProjectClient instance (for testing)
     """
     TaskLogger.log("task_start")
 
+    if not force_close and start_date is None and end_date is None and cache.get(_SYNC_PROJECT_TIMEZONES_LOCK_KEY):
+        logger.info("[CloseDailyConversationsTask] Skipping scheduled run: sync_project_timezones_task is in progress")
+        return {
+            "status": "skipped",
+            "reason": "sync_project_timezones_in_progress",
+            "projects_scanned": 0,
+            "projects_processed": 0,
+            "conversations_closed": 0,
+        }
+
     try:
         fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
-        project_client = project_client or ProjectClient()
 
         projects_processed = 0
         conversations_closed = 0
-        pages_processed = 0
-        consecutive_empty_pages = 0
-        max_consecutive_empty = 3
-        page = 1
-        page_size = project_client.page_size
+        projects_scanned = 0
+        batch: list = []
+        batch_index = 0
 
+        for project in (
+            Project.objects.only("uuid", "timezone").order_by("uuid").iterator(chunk_size=_CLOSE_DAILY_PROJECT_CHUNK)
+        ):
+            projects_scanned += 1
+            batch.append({"uuid": str(project.uuid), "timezone": project.timezone or None})
+            if len(batch) >= _CLOSE_DAILY_PROJECT_CHUNK:
+                batch_index += 1
+                page_conversations_closed, page_projects_processed = _process_projects_page(
+                    batch, fallback_timezone, force_close, start_date, end_date
+                )
+                conversations_closed += page_conversations_closed
+                projects_processed += page_projects_processed
+                batch = []
+
+        if batch:
+            batch_index += 1
+            page_conversations_closed, page_projects_processed = _process_projects_page(
+                batch, fallback_timezone, force_close, start_date, end_date
+            )
+            conversations_closed += page_conversations_closed
+            projects_processed += page_projects_processed
+
+        TaskLogger.log("last_batch", batch_index=batch_index, projects_scanned=projects_scanned)
+        TaskLogger.log(
+            "task_completed",
+            projects_scanned=projects_scanned,
+            projects_processed=projects_processed,
+            conversations_closed=conversations_closed,
+        )
+
+        return {
+            "status": "success",
+            "projects_scanned": projects_scanned,
+            "projects_processed": projects_processed,
+            "conversations_closed": conversations_closed,
+        }
+
+    except Exception as exc:
+        logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
+        raise self.retry(exc=exc)
+
+
+def _sync_timezones_for_api_results(results: list) -> tuple[int, int]:
+    """
+    Apply timezone values from one API page to existing Project rows.
+
+    Uses one query to load matching projects and ``bulk_update`` per page (fewer DB round trips
+    than one ``UPDATE`` per row).
+
+    Returns:
+        (rows_updated, skipped_invalid) — invalid counts malformed UUIDs and bad timezone strings.
+        ``rows_updated`` is the number of local Project rows updated (API duplicates in the same
+        page count once).
+    """
+    skipped_invalid = 0
+    uuid_to_tz: Dict[UUID, Optional[str]] = {}
+
+    for item in results:
+        raw_uuid = item.get("uuid")
+        if not raw_uuid:
+            continue
+        try:
+            project_uuid = UUID(str(raw_uuid))
+        except (ValueError, TypeError, AttributeError):
+            logger.warning("[SyncProjectTimezones] Invalid project uuid from API, skipping row " f"uuid={raw_uuid!r}")
+            skipped_invalid += 1
+            continue
+        raw_tz = item.get("timezone")
+        if raw_tz:
+            try:
+                pendulum.now(raw_tz)
+                tz_to_store = raw_tz
+            except Exception:
+                logger.warning(
+                    "[SyncProjectTimezones] Invalid timezone from API, skipping update "
+                    f"project_uuid={project_uuid} timezone={raw_tz!r}"
+                )
+                skipped_invalid += 1
+                continue
+        else:
+            tz_to_store = None
+        uuid_to_tz[project_uuid] = tz_to_store
+
+    if not uuid_to_tz:
+        return 0, skipped_invalid
+
+    projects = list(Project.objects.filter(uuid__in=uuid_to_tz.keys()))
+    for p in projects:
+        p.timezone = uuid_to_tz[p.uuid]
+
+    if projects:
+        Project.objects.bulk_update(projects, ["timezone"])
+
+    return len(projects), skipped_invalid
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.sync_project_timezones_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=300,
+)
+def sync_project_timezones_task(self, project_client: Optional[ProjectClient] = None):
+    """
+    Paginate the projects API and update timezone on Project rows that exist in this DB.
+
+    Invalid timezone strings from the API are skipped (existing DB value kept).
+
+    On success, enqueues ``close_daily_conversations_task`` so the hourly close runs with
+    fresh timezones right after sync (see Beat: close is skipped at hour 0 to avoid racing).
+
+    Sets a cache lock for the whole run so scheduled ``close_daily_conversations_task`` does
+    not run in parallel when this job exceeds one hour.
+    """
+    logger.info("[SyncProjectTimezones] Starting timezone sync from projects API")
+    if not cache.add(
+        _SYNC_PROJECT_TIMEZONES_LOCK_KEY,
+        1,
+        timeout=_SYNC_PROJECT_TIMEZONES_LOCK_TTL_SECONDS,
+    ):
+        logger.warning("[SyncProjectTimezones] Another sync is already in progress, skipping")
+        return {
+            "status": "skipped",
+            "reason": "sync_already_running",
+            "project_rows_updated": 0,
+            "invalid_timezone_skipped": 0,
+            "pages_processed": 0,
+        }
+
+    project_client = project_client or ProjectClient()
+    total_rows_updated = 0
+    total_skipped_invalid = 0
+    pages_processed = 0
+    consecutive_empty_pages = 0
+    max_consecutive_empty = 3
+    page = 1
+    page_size = project_client.page_size
+
+    try:
         while True:
             try:
                 response = project_client.get_projects_paginated(page=page, page_size=page_size)
@@ -728,38 +879,51 @@ def close_daily_conversations_task(
                     page += 1
                     continue
 
-                page_conversations_closed, page_projects_processed = _process_projects_page(
-                    projects_data, fallback_timezone, force_close, start_date, end_date, project_client
-                )
-                conversations_closed += page_conversations_closed
-                projects_processed += page_projects_processed
+                updated, skipped = _sync_timezones_for_api_results(projects_data)
+                total_rows_updated += updated
+                total_skipped_invalid += skipped
 
                 if not next_page:
-                    TaskLogger.log("last_page", page=page, pages_processed=pages_processed)
+                    logger.info(
+                        f"[SyncProjectTimezones] Last API page reached page={page} pages_processed={pages_processed}"
+                    )
                     break
 
                 page += 1
 
             except Exception as e:
-                TaskLogger.log("page_fetch_error", page=page, error=e)
-                break
+                sentry_sdk.capture_exception(e)
+                logger.error(
+                    "[SyncProjectTimezones] Error fetching projects API page page=%s error=%s",
+                    page,
+                    e,
+                    exc_info=True,
+                )
+                raise
 
-        TaskLogger.log(
-            "task_completed",
-            pages_processed=pages_processed,
-            projects_processed=projects_processed,
-            conversations_closed=conversations_closed,
+        logger.info(
+            "[SyncProjectTimezones] Completed "
+            f"project_rows_touched={total_rows_updated} invalid_tz_skipped={total_skipped_invalid} "
+            f"pages_processed={pages_processed}"
         )
-
-        return {
+        result = {
             "status": "success",
-            "projects_processed": projects_processed,
-            "conversations_closed": conversations_closed,
+            "project_rows_updated": total_rows_updated,
+            "invalid_timezone_skipped": total_skipped_invalid,
+            "pages_processed": pages_processed,
         }
+        # Release lock before enqueue: otherwise a worker may run close_daily while the lock
+        # is still held (finally runs only after return from this block).
+        cache.delete(_SYNC_PROJECT_TIMEZONES_LOCK_KEY)
+        close_daily_conversations_task.delay()
+        logger.info("[SyncProjectTimezones] Enqueued close_daily_conversations_task")
+        return result
 
     except Exception as exc:
-        logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
+        logger.exception("[SyncProjectTimezones] Fatal error")
         raise self.retry(exc=exc)
+    finally:
+        cache.delete(_SYNC_PROJECT_TIMEZONES_LOCK_KEY)
 
 
 def _is_conversation_already_processed(

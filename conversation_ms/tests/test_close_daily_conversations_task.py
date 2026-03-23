@@ -20,15 +20,6 @@ from conversation_ms.utils.date_helpers import ProjectDay
 
 
 @pytest.fixture
-def mock_project_client():
-    """Mock ProjectClient."""
-    client = Mock()
-    client.page_size = 100
-    client.get_projects_paginated = Mock()
-    return client
-
-
-@pytest.fixture
 def mock_classification_service():
     """Mock ClassificationService."""
     service = Mock()
@@ -64,133 +55,78 @@ class TestCloseDailyConversationsTask:
     """Tests for close_daily_conversations_task."""
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_close_daily_conversations_task_automatic(self, mock_cache, mock_project_client_class):
+    def test_close_daily_conversations_task_automatic(self, mock_cache):
         """Test automatic task execution (cron) - processes projects whose day ended."""
-        # Setup
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.get.return_value = None  # sync lock not held (default Mock is truthy)
+        ProjectFactory(timezone="America/Sao_Paulo")
 
         mock_cache.add.return_value = True  # Day ended (cache.add returns True = not processed)
 
         with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
             mock_process.return_value = 1
 
-            # Execute
             result = close_daily_conversations_task()
 
-            # Assert
             assert result["status"] == "success"
+            assert result["projects_scanned"] == 1
             assert result["projects_processed"] >= 0
-            mock_client.get_projects_paginated.assert_called()
+            mock_process.assert_called_once()
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_close_daily_conversations_task_force_close(self, mock_cache, mock_project_client_class):
+    def test_close_daily_conversations_task_force_close(self, mock_cache):
         """Test force_close processes even if day hasn't ended."""
-        # Setup
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        ProjectFactory(timezone="America/Sao_Paulo")
 
         mock_cache.add.return_value = False  # Day not ended (already processed)
 
         with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
             mock_process.return_value = 2
 
-            # Execute with force_close
             result = close_daily_conversations_task(force_close=True)
 
-            # Assert
             assert result["status"] == "success"
-            mock_process.assert_called()
+            mock_process.assert_called_once()
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_close_daily_conversations_task_force_close_with_start_date(self, mock_cache, mock_project_client_class):
+    def test_close_daily_conversations_task_force_close_with_start_date(self, mock_cache):
         """Test force_close with specific start_date."""
-        # Setup
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
+        ProjectFactory(timezone="America/Sao_Paulo")
 
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.add.return_value = True
 
         with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
             mock_process.return_value = 1
 
-            # Execute
             result = close_daily_conversations_task(force_close=True, start_date="2024-01-15")
 
-            # Assert
             assert result["status"] == "success"
-            mock_process.assert_called()
+            mock_process.assert_called_once()
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_close_daily_conversations_task_force_close_with_date_range(self, mock_cache, mock_project_client_class):
+    def test_close_daily_conversations_task_force_close_with_date_range(self, mock_cache):
         """Test force_close with date range."""
-        # Setup
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
+        ProjectFactory(timezone="America/Sao_Paulo")
 
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.add.return_value = True
 
         with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
             mock_process.return_value = 3
 
-            # Execute
             result = close_daily_conversations_task(force_close=True, start_date="2024-01-15", end_date="2024-01-17")
 
-            # Assert
             assert result["status"] == "success"
-            mock_process.assert_called()
+            mock_process.assert_called_once()
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_project_with_valid_timezone(self, mock_cache, mock_project_client_class):
+    def test_project_with_valid_timezone(self, mock_cache):
         """Test project with valid timezone."""
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.get.return_value = None
+        ProjectFactory(timezone="America/Sao_Paulo")
 
         mock_cache.add.return_value = True
 
@@ -202,20 +138,11 @@ class TestCloseDailyConversationsTask:
             assert result["status"] == "success"
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_project_with_invalid_timezone(self, mock_cache, mock_project_client_class):
+    def test_project_with_invalid_timezone(self, mock_cache):
         """Test project with invalid timezone uses fallback."""
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "Invalid/Timezone"}
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.get.return_value = None
+        ProjectFactory(timezone="Invalid/Timezone")
 
         mock_cache.add.return_value = True
 
@@ -224,24 +151,14 @@ class TestCloseDailyConversationsTask:
 
             result = close_daily_conversations_task()
 
-            # Should use fallback timezone
             assert result["status"] == "success"
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_project_without_timezone(self, mock_cache, mock_project_client_class):
+    def test_project_without_timezone(self, mock_cache):
         """Test project without timezone uses fallback."""
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid)}  # No timezone
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [project_data],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.get.return_value = None
+        ProjectFactory(timezone=None)
 
         mock_cache.add.return_value = True
 
@@ -253,25 +170,12 @@ class TestCloseDailyConversationsTask:
             assert result["status"] == "success"
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
     @patch("conversation_ms.tasks.cache")
-    def test_different_timezones_same_utc_day(self, mock_cache, mock_project_client_class):
+    def test_different_timezones_same_utc_day(self, mock_cache):
         """Test projects in different timezones on the same UTC day."""
-        project1 = ProjectFactory()
-        project2 = ProjectFactory()
-
-        project_data = [
-            {"uuid": str(project1.uuid), "timezone": "America/Sao_Paulo"},
-            {"uuid": str(project2.uuid), "timezone": "America/New_York"},
-        ]
-
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": project_data,
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
+        mock_cache.get.return_value = None
+        ProjectFactory(timezone="America/Sao_Paulo")
+        ProjectFactory(timezone="America/New_York")
 
         mock_cache.add.return_value = True
 
@@ -291,7 +195,6 @@ class TestCloseDailyConversationsTask:
 
         mock_cache.add.return_value = True  # Day ended
 
-        # Create conversation
         yesterday = pendulum.now("America/Sao_Paulo").subtract(days=1)
         conversation = ConversationFactory(
             project=project,
@@ -370,75 +273,46 @@ class TestCloseDailyConversationsTask:
         assert is_processed is False
 
     @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
-    def test_multiple_pages_of_projects(self, mock_project_client_class):
-        """Test processing multiple pages of projects."""
-        project1 = ProjectFactory()
-        project2 = ProjectFactory()
+    @patch("conversation_ms.tasks.cache")
+    def test_multiple_projects_processed(self, mock_cache):
+        """Each local project is considered for close-daily processing."""
+        mock_cache.get.return_value = None
+        ProjectFactory(timezone="America/Sao_Paulo")
+        ProjectFactory(timezone="America/Sao_Paulo")
 
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.side_effect = [
-            {
-                "results": [{"uuid": str(project1.uuid), "timezone": "America/Sao_Paulo"}],
-                "next": "http://example.com/page2",
-            },
-            {
-                "results": [{"uuid": str(project2.uuid), "timezone": "America/Sao_Paulo"}],
-                "next": None,
-            },
-        ]
-        mock_project_client_class.return_value = mock_client
+        mock_cache.add.return_value = True
 
-        with patch("conversation_ms.tasks.cache") as mock_cache:
-            mock_cache.add.return_value = True
-
-            with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
-                mock_process.return_value = 0
-
-                result = close_daily_conversations_task()
-
-                assert result["status"] == "success"
-                assert mock_client.get_projects_paginated.call_count == 2
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
-    def test_empty_page_with_next_page(self, mock_project_client_class):
-        """Test detection of infinite loop with empty pages."""
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [],
-            "next": "http://example.com/page2",
-        }
-        mock_project_client_class.return_value = mock_client
-
-        with patch("conversation_ms.tasks.cache") as mock_cache:
-            mock_cache.add.return_value = True
-
-            result = close_daily_conversations_task()
-
-            # Should detect infinite loop after 3 consecutive empty pages
-            assert result["status"] == "success"
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
-    def test_empty_page_without_next_page(self, mock_project_client_class):
-        """Test stopping when no more pages."""
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [],
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
-
-        with patch("conversation_ms.tasks.cache") as mock_cache:
-            mock_cache.add.return_value = True
+        with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
+            mock_process.return_value = 0
 
             result = close_daily_conversations_task()
 
             assert result["status"] == "success"
+            assert result["projects_scanned"] == 2
+            assert mock_process.call_count == 2
+
+    @pytest.mark.django_db
+    @patch("conversation_ms.tasks.cache")
+    def test_no_projects_in_database(self, mock_cache):
+        """When there are no projects, the task completes without calling processing."""
+        mock_cache.get.return_value = None
+        mock_cache.add.return_value = True
+
+        with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
+            result = close_daily_conversations_task()
+
+            assert result["status"] == "success"
+            assert result["projects_scanned"] == 0
+            mock_process.assert_not_called()
+
+    @pytest.mark.django_db
+    @patch("conversation_ms.tasks.cache")
+    def test_skips_when_timezone_sync_in_progress(self, mock_cache):
+        """Scheduled close defers while sync_project_timezones_task holds the cache lock."""
+        mock_cache.get.return_value = True
+        result = close_daily_conversations_task()
+        assert result["status"] == "skipped"
+        assert result["reason"] == "sync_project_timezones_in_progress"
 
     @pytest.mark.django_db
     def test_project_not_found_in_db(self):
@@ -473,7 +347,6 @@ class TestCloseDailyConversationsTask:
 
         with patch("conversation_ms.tasks.ClassificationService") as mock_class_service:
             mock_service = Mock()
-            # First call succeeds, second fails
             mock_service.classify_conversation.side_effect = [
                 (conversation1, None, Resolution.RESOLVED),
                 Exception("Classification error"),
@@ -486,22 +359,7 @@ class TestCloseDailyConversationsTask:
                 project_day.get_end_date_utc(),
             )
 
-            # Should process at least one conversation
             assert conversations_closed >= 1
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
-    def test_project_client_error(self, mock_project_client_class):
-        """Test handling of ProjectClient errors."""
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.side_effect = Exception("API Error")
-        mock_project_client_class.return_value = mock_client
-
-        result = close_daily_conversations_task()
-
-        # Should handle error gracefully
-        assert result["status"] == "success"
 
     @pytest.mark.django_db
     def test_batch_processing(self):
@@ -509,7 +367,6 @@ class TestCloseDailyConversationsTask:
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
 
-        # Create batch of conversations
         conversations = ConversationFactory.create_batch(
             5,
             project=project,
@@ -541,7 +398,6 @@ class TestCloseDailyConversationsTask:
         project = ProjectFactory()
         project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
 
-        # First call: day not ended (cache.add returns False = already processed)
         mock_cache.add.return_value = False
 
         conversations_closed, success = _process_single_project(
@@ -564,7 +420,6 @@ class TestCloseDailyConversationsTask:
 
         mock_cache.add.return_value = True  # Day ended
 
-        # Simulate error in processing
         with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
             mock_process.side_effect = Exception("Processing error")
 
@@ -576,7 +431,6 @@ class TestCloseDailyConversationsTask:
                 end_date=None,
             )
 
-            # Cache should be deleted on error
             assert mock_cache.delete.called
             assert success is False
 
@@ -595,7 +449,6 @@ class TestCloseDailyConversationsTask:
 
         with patch("conversation_ms.tasks.ClassificationService") as mock_class_service:
             mock_service = Mock()
-            # has_chats_room should set resolution to HAS_CHAT_ROOM (4)
             mock_service.classify_conversation.return_value = (
                 conversation,
                 None,
@@ -625,7 +478,6 @@ class TestCloseDailyConversationsTask:
 
         with patch("conversation_ms.tasks.ClassificationService") as mock_class_service:
             mock_service = Mock()
-            # No messages found
             mock_service.classify_conversation.return_value = (conversation, None, None)
             mock_class_service.return_value = mock_service
 
@@ -635,27 +487,7 @@ class TestCloseDailyConversationsTask:
                 project_day.get_end_date_utc(),
             )
 
-            # Should handle gracefully
             assert conversations_closed >= 0
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.tasks.ProjectClient")
-    def test_missing_uuid_skips_project(self, mock_project_client_class):
-        """Test that projects without UUID are skipped."""
-        mock_client = Mock()
-        mock_client.page_size = 100
-        mock_client.get_projects_paginated.return_value = {
-            "results": [{"timezone": "America/Sao_Paulo"}],  # No UUID
-            "next": None,
-        }
-        mock_project_client_class.return_value = mock_client
-
-        with patch("conversation_ms.tasks.cache") as mock_cache:
-            mock_cache.add.return_value = True
-
-            result = close_daily_conversations_task()
-
-            assert result["status"] == "success"
 
     @pytest.mark.django_db
     def test_determine_date_range_with_force_close(self):

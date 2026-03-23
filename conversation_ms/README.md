@@ -123,7 +123,7 @@ MessageService.process_message_received/sent()
 - `SQS_CONVERSATION_QUEUE_URL`: SQS FIFO queue URL
 - `SQS_CONVERSATION_DLQ_URL`: Dead Letter Queue URL
 - `SQS_CONVERSATION_REGION`: AWS region (consumer, producer, and billing SQS client)
-- `SQS_BILLING_QUEUE_URL`: Outbound FIFO queue URL for billing (e.g. conversation-close payloads; wiring TBD)
+- `SQS_BILLING_QUEUE_URL`: Outbound FIFO queue for billing on **conversation close** (after resolution is saved). Message body JSON: `channel_uuid`, `start_date` (UTC `Z`), `contact_urn`, `resolution` (string code). Omitted when unset.
 - `DYNAMODB_MESSAGE_TABLE`: DynamoDB table name for messages
 - `DYNAMODB_REGION`: DynamoDB region
 

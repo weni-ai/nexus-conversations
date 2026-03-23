@@ -13,6 +13,10 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.models import Conversation, Project
+from conversation_ms.producers.sqs_producer import (
+    build_conversation_close_billing_payload,
+    get_billing_sqs_producer,
+)
 from conversation_ms.services.classification_service import (
     ClassificationService,
 )
@@ -1161,6 +1165,33 @@ def _bulk_update_conversation_resolutions(
         )
 
 
+def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: str) -> None:
+    """
+    Notify billing via SQS (FIFO) for each closed conversation. Best-effort: failures are logged only.
+    Skipped when ``SQS_BILLING_QUEUE_URL`` is unset or payload cannot be built.
+    """
+    if not getattr(settings, "SQS_BILLING_QUEUE_URL", ""):
+        return
+
+    producer = get_billing_sqs_producer()
+    for conv in conversations:
+        payload = build_conversation_close_billing_payload(conv)
+        if not payload:
+            logger.warning(
+                "[CloseDailyConversationsTask] Skip billing SQS (missing channel_uuid, contact_urn, or dates) "
+                f"conversation_uuid={conv.uuid} project_uuid={project_uuid}"
+            )
+            continue
+        try:
+            producer.send_conversation_close(payload, message_deduplication_id=str(conv.uuid))
+        except Exception as e:
+            logger.warning(
+                "[CloseDailyConversationsTask] Billing SQS send failed "
+                f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
+                exc_info=True,
+            )
+
+
 def _queue_message_migrations(conversations_to_migrate: list[Conversation], project_uuid: str) -> None:
     """
     Queue message migration tasks asynchronously for conversations.
@@ -1231,6 +1262,9 @@ def _process_conversation_batch(
 
         # 4. Bulk update resolution (with transaction for atomicity)
         _bulk_update_conversation_resolutions(conversations_to_update_resolution, project_uuid, len(conversation_batch))
+
+        # 4b. Billing SQS (conversation close payload)
+        _send_billing_close_to_sqs(conversations_to_update_resolution, project_uuid)
 
         # 5. Queue message migrations asynchronously
         _queue_message_migrations(conversations_to_migrate, project_uuid)

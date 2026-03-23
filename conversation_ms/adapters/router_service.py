@@ -74,14 +74,17 @@ class MainConversationService:
             try:
                 msg_utc = pendulum.parse(msg_created_at).in_timezone("UTC")
             except Exception as parse_err:
-                logger.warning(
-                    "[MainConversationService] Could not parse msg_created_at for routing, using naive parse "
+                logger.error(
+                    "[MainConversationService] Invalid msg_created_at for routing "
                     "project_uuid=%s msg_created_at=%s error=%s",
                     project_uuid,
                     msg_created_at,
                     parse_err,
+                    exc_info=True,
                 )
-                msg_utc = pendulum.parse(msg_created_at).in_timezone("UTC")
+                raise ValueError(
+                    f"Invalid msg_created_at for routing (project_uuid={project_uuid}): {msg_created_at!r}"
+                ) from parse_err
 
             base_in_progress = Conversation.objects.filter(
                 project=project,
@@ -90,12 +93,13 @@ class MainConversationService:
                 resolution=2,  # IN_PROGRESS
             ).order_by("-created_at")
 
-            open_window_pks = []
+            matched: Optional[Conversation] = None
             for conv in base_in_progress:
                 try:
                     effective_end = conversation_effective_service_end_utc(conv, tz_name)
                     if msg_utc <= effective_end:
-                        open_window_pks.append(conv.pk)
+                        matched = conv
+                        break
                 except Exception as window_err:
                     logger.warning(
                         "[MainConversationService] Could not compute service window for conversation, not reusing "
@@ -104,9 +108,7 @@ class MainConversationService:
                         window_err,
                     )
 
-            conversation_queryset = Conversation.objects.filter(pk__in=open_window_pks).order_by("-created_at")
-
-            if not conversation_queryset.exists():
+            if matched is None:
                 # Sentry when creating new conversation but contact_name is not received (we still create)
                 if not (contact_name or "").strip():
                     report_missing_required_sentry(
@@ -138,8 +140,7 @@ class MainConversationService:
                 )
                 return conversation
 
-            # Return the most recent IN_PROGRESS whose service window still contains the message
-            conversation = conversation_queryset.first()
+            conversation = matched
 
             # Backfill start_date/end_date when conversation was created by another path (e.g. Mailroom)
             if conversation.start_date is None and msg_created_at:

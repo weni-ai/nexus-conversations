@@ -681,6 +681,7 @@ def close_daily_conversations_task(
     force_close: bool = False,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    skip_sync_lock_check: bool = False,
 ):
     """
     Task to close all open conversations (resolution=2) for projects whose day has ended.
@@ -701,10 +702,18 @@ def close_daily_conversations_task(
         force_close: Force processing even if day hasn't ended
         start_date: Optional start date (YYYY-MM-DD or ISO timestamp)
         end_date: Optional end date (YYYY-MM-DD or ISO timestamp)
+        skip_sync_lock_check: If True, run even when sync_project_timezones_task holds the cache lock
+            (used when enqueueing from sync so ``delay()`` can be called before the lock is released).
     """
     TaskLogger.log("task_start")
 
-    if not force_close and start_date is None and end_date is None and cache.get(_SYNC_PROJECT_TIMEZONES_LOCK_KEY):
+    if (
+        not skip_sync_lock_check
+        and not force_close
+        and start_date is None
+        and end_date is None
+        and cache.get(_SYNC_PROJECT_TIMEZONES_LOCK_KEY)
+    ):
         logger.info("[CloseDailyConversationsTask] Skipping scheduled run: sync_project_timezones_task is in progress")
         return {
             "status": "skipped",
@@ -814,8 +823,9 @@ def sync_project_timezones_task(self, project_client: Optional[ProjectClient] = 
 
     Invalid timezone strings from the API are skipped (existing DB value kept).
 
-    On success, enqueues ``close_daily_conversations_task`` so the hourly close runs with
-    fresh timezones right after sync (see Beat: close is skipped at hour 0 to avoid racing).
+    On success, enqueues ``close_daily_conversations_task(skip_sync_lock_check=True)`` while the
+    lock is still held, then releases the lock in ``finally``. The chained run ignores the lock;
+    scheduled ``close_daily`` still skips while the lock is set (see Beat).
 
     Sets a cache lock for the whole run so scheduled ``close_daily_conversations_task`` does
     not run in parallel when this job exceeds one hour.
@@ -895,10 +905,7 @@ def sync_project_timezones_task(self, project_client: Optional[ProjectClient] = 
             "invalid_timezone_skipped": total_skipped_invalid,
             "pages_processed": pages_processed,
         }
-        # Release lock before enqueue: otherwise a worker may run close_daily while the lock
-        # is still held (finally runs only after return from this block).
-        cache.delete(_SYNC_PROJECT_TIMEZONES_LOCK_KEY)
-        close_daily_conversations_task.delay()
+        close_daily_conversations_task.delay(skip_sync_lock_check=True)
         logger.info("[SyncProjectTimezones] Enqueued close_daily_conversations_task")
         return result
 

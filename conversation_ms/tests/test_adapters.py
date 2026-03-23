@@ -587,6 +587,18 @@ class TestUpdateConversationData:
                     msg_created_at="2026-02-20T12:00:00Z",
                 )
 
+    def test_ensure_conversation_exists_invalid_msg_timestamp_raises(self, project):
+        """Unparseable msg_created_at fails fast instead of repeating a doomed parse."""
+        service = MainConversationService()
+        with pytest.raises(ValueError, match="Invalid msg_created_at"):
+            service.ensure_conversation_exists(
+                project_uuid=str(project.uuid),
+                contact_urn="whatsapp:+5511999999999",
+                contact_name="Test Contact",
+                channel_uuid=str(uuid4()),
+                msg_created_at="totally-not-a-date",
+            )
+
     def test_get_dynamodb_table_handles_exception(self, mock_sentry):
         """Test that exceptions in get_dynamodb_table are properly handled."""
         from conversation_ms.adapters.dynamo import get_dynamodb_table

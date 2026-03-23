@@ -128,24 +128,25 @@ class TestSyncProjectTimezonesTask:
         assert p2.timezone == "America/New_York"
 
     def test_success_enqueues_close_daily(self, mock_project_client, _in_memory_tasks_cache_lock):
-        """After sync, close_daily is enqueued only after the sync lock is released."""
+        """After sync, close_daily is enqueued with skip_sync_lock_check while the lock is still held."""
         project = ProjectFactory(timezone=None)
         mock_project_client.get_projects_paginated.return_value = {
             "results": [{"uuid": str(project.uuid), "timezone": "UTC"}],
             "next": None,
         }
 
-        def delay_side_effect(*_a, **_kw):
-            assert (
-                _SYNC_PROJECT_TIMEZONES_LOCK_KEY not in _in_memory_tasks_cache_lock
-            ), "close_daily must not be enqueued while sync lock is held"
+        def delay_side_effect(*_a, **kw):
+            assert kw.get("skip_sync_lock_check") is True
+            assert _SYNC_PROJECT_TIMEZONES_LOCK_KEY in _in_memory_tasks_cache_lock
 
         with patch(
             "conversation_ms.tasks.close_daily_conversations_task.delay",
             side_effect=delay_side_effect,
         ) as mock_delay:
             sync_project_timezones_task(project_client=mock_project_client)
-            mock_delay.assert_called_once_with()
+            mock_delay.assert_called_once_with(skip_sync_lock_check=True)
+
+        assert _SYNC_PROJECT_TIMEZONES_LOCK_KEY not in _in_memory_tasks_cache_lock
 
     def test_skips_malformed_uuid_row_continues_sync(self, mock_project_client):
         project = ProjectFactory(timezone=None)

@@ -6,9 +6,10 @@ encapsulating the complexity of timezone conversions.
 """
 
 from datetime import date
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import pendulum
+from django.conf import settings
 
 
 class ProjectDay:
@@ -136,3 +137,58 @@ class ProjectDay:
             f"timezone={self.project_timezone}, "
             f"utc_range=[{self.start_of_day_utc.isoformat()} to {self.end_of_day_utc.isoformat()}])"
         )
+
+
+def resolve_effective_project_timezone(stored_tz: Optional[str]) -> str:
+    """
+    IANA timezone for routing/conversation logic: Project.timezone if valid, else FALLBACK_TIMEZONE.
+    """
+    fallback = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
+    if stored_tz:
+        try:
+            pendulum.now(stored_tz)
+            return stored_tz
+        except Exception:
+            pass
+    return fallback
+
+
+def end_of_project_local_calendar_day_utc(moment: Any, tz_name: str) -> pendulum.DateTime:
+    """
+    UTC instant for the end of the calendar day in ``tz_name`` that contains ``moment``.
+
+    Same definition as ``ProjectDay(...).get_end_date_utc()`` / ``close_daily``'s ``end_utc``.
+    """
+    d = calendar_date_in_project_timezone(moment, tz_name)
+    return ProjectDay(d, tz_name).get_end_date_utc()
+
+
+def conversation_effective_service_end_utc(conversation: Any, tz_name: str) -> pendulum.DateTime:
+    """
+    Latest instant (UTC) for which an incoming message still belongs to this conversation's
+    service day in the project timezone.
+
+    Uses the end of that service day (``ProjectDay`` / ``close_daily``). If ``end_date`` is
+    stored, uses ``min(stored_end_utc, canonical_end)`` so legacy rows with
+    ``end_date = start + 1 day`` (nexus-ai style) still close at end of local day, not 24h later.
+    """
+    anchor = conversation.start_date or conversation.created_at
+    anchor_local_date = calendar_date_in_project_timezone(anchor, tz_name)
+    canonical_end = ProjectDay(anchor_local_date, tz_name).get_end_date_utc()
+    if conversation.end_date is None:
+        return canonical_end
+    stored_utc = pendulum.instance(conversation.end_date).in_timezone("UTC")
+    return min(stored_utc, canonical_end)
+
+
+def calendar_date_in_project_timezone(moment: Any, tz_name: str) -> date:
+    """
+    Calendar date (year-month-day) for a moment when viewed in the given IANA timezone.
+
+    moment: ISO8601 string, datetime, or pendulum DateTime.
+    """
+    if isinstance(moment, str):
+        dt = pendulum.parse(moment)
+    else:
+        dt = pendulum.instance(moment)
+    return dt.in_timezone(tz_name).date()

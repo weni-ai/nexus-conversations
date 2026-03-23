@@ -769,11 +769,17 @@ def _sync_timezones_for_api_results(results: list) -> tuple[int, int]:
     """
     Apply timezone values from one API page to existing Project rows.
 
+    Uses one query to load matching projects and ``bulk_update`` per page (fewer DB round trips
+    than one ``UPDATE`` per row).
+
     Returns:
         (rows_updated, skipped_invalid) — invalid counts malformed UUIDs and bad timezone strings.
+        ``rows_updated`` is the number of local Project rows updated (API duplicates in the same
+        page count once).
     """
-    rows_updated = 0
     skipped_invalid = 0
+    uuid_to_tz: Dict[UUID, Optional[str]] = {}
+
     for item in results:
         raw_uuid = item.get("uuid")
         if not raw_uuid:
@@ -798,8 +804,19 @@ def _sync_timezones_for_api_results(results: list) -> tuple[int, int]:
                 continue
         else:
             tz_to_store = None
-        rows_updated += Project.objects.filter(uuid=project_uuid).update(timezone=tz_to_store)
-    return rows_updated, skipped_invalid
+        uuid_to_tz[project_uuid] = tz_to_store
+
+    if not uuid_to_tz:
+        return 0, skipped_invalid
+
+    projects = list(Project.objects.filter(uuid__in=uuid_to_tz.keys()))
+    for p in projects:
+        p.timezone = uuid_to_tz[p.uuid]
+
+    if projects:
+        Project.objects.bulk_update(projects, ["timezone"])
+
+    return len(projects), skipped_invalid
 
 
 @celery_app.task(

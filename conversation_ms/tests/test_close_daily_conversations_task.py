@@ -441,6 +441,44 @@ class TestCloseDailyConversationsTask:
         assert args[0]["channel_uuid"] == str(conversation.channel_uuid)
 
     @pytest.mark.django_db
+    def test_batch_processing_skips_billing_sqs_when_resolution_bulk_update_fails(self, settings):
+        settings.SQS_BILLING_QUEUE_URL = "https://sqs.test/q.fifo"
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+        conversation = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+        mock_producer = Mock()
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.tasks.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.tasks.get_billing_sqs_producer", return_value=mock_producer):
+
+                def _bulk_update_side_effect(objs, fields, batch_size=50):
+                    if list(fields) == ["resolution"]:
+                        raise RuntimeError("bulk_update failed")
+
+                with patch(
+                    "conversation_ms.tasks.Conversation.objects.bulk_update",
+                    side_effect=_bulk_update_side_effect,
+                ):
+                    _process_conversation_batch(
+                        [conversation],
+                        str(project.uuid),
+                        project_day.get_end_date_utc(),
+                    )
+
+        mock_producer.send_conversation_close.assert_not_called()
+
+    @pytest.mark.django_db
     @patch("conversation_ms.tasks.cache")
     def test_cache_prevents_duplicate_processing(self, mock_cache):
         """Test that cache prevents duplicate processing."""

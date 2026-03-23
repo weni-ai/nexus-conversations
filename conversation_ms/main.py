@@ -96,7 +96,7 @@ def main():
         consumer = ConversationSQSConsumer(
             consumer_id=args.consumer_id,
             queue_url=queue_url,
-            region=settings.AWS_REGION,
+            region=settings.LAMBDA_AWS_REGION,
         )
         signal_handler.consumer = consumer
 

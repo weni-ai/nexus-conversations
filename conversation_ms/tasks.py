@@ -1306,7 +1306,6 @@ def _process_project_conversations(
                 f"Project: {project_uuid}"
             )
 
-            # end_date = end of day in project timezone (in UTC)
             conversation.end_date = end_utc
             conversation_batch.append(conversation)
 

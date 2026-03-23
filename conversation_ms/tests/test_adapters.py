@@ -13,6 +13,10 @@ from conversation_ms.adapters.data_lake import DataLakeEventDTO
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.router_service import MainConversationService
 from conversation_ms.models import Conversation, Project
+from conversation_ms.utils.date_helpers import (
+    end_of_project_local_calendar_day_utc,
+    resolve_effective_project_timezone,
+)
 
 
 @pytest.mark.django_db
@@ -40,16 +44,23 @@ class TestMainConversationService:
         assert conversation.resolution == "2"  # IN_PROGRESS
         assert conversation.start_date is not None
         assert conversation.end_date is not None
+        tz = resolve_effective_project_timezone(project.timezone)
+        expected_end = end_of_project_local_calendar_day_utc("2026-02-20T12:00:00Z", tz)
+        assert pendulum.instance(conversation.end_date).in_timezone("UTC") == expected_end
 
     def test_ensure_conversation_exists_returns_existing(self, project):
         """Test returning existing conversation in progress."""
         channel_uuid = uuid4()
+        msg_time = pendulum.parse("2026-02-20T12:00:00Z")
+        tz = resolve_effective_project_timezone(project.timezone)
         existing_conversation = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
             resolution="2",  # IN_PROGRESS
+            start_date=msg_time,
+            end_date=end_of_project_local_calendar_day_utc(msg_time, tz),
         )
 
         service = MainConversationService()
@@ -75,6 +86,10 @@ class TestMainConversationService:
             start_date=None,
             end_date=None,
         )
+        # Anchor day match uses created_at when start_date is null — align with message day
+        Conversation.objects.filter(pk=existing.pk).update(
+            created_at=pendulum.parse("2026-02-20T08:00:00Z"),
+        )
 
         service = MainConversationService()
         msg_created_at = "2026-02-20T14:30:00Z"
@@ -92,7 +107,10 @@ class TestMainConversationService:
         assert existing.end_date is not None
         expected_start = pendulum.parse(msg_created_at)
         assert pendulum.instance(existing.start_date) == expected_start
-        assert pendulum.instance(existing.end_date) == expected_start.add(days=1)
+        tz = resolve_effective_project_timezone(project.timezone)
+        assert pendulum.instance(existing.end_date).in_timezone("UTC") == end_of_project_local_calendar_day_utc(
+            msg_created_at, tz
+        )
 
     def test_ensure_conversation_exists_creates_project(self):
         """Test creating project if it doesn't exist."""
@@ -113,22 +131,28 @@ class TestMainConversationService:
         assert project is not None
 
     def test_ensure_conversation_exists_handles_multiple_conversations(self, project):
-        """Test handling multiple conversations in progress."""
+        """Multiple same-day IN_PROGRESS: reuse most recent; do not reclassify others."""
         channel_uuid = uuid4()
-        # Create multiple conversations in progress
+        day = pendulum.parse("2026-02-20T10:00:00Z")
+        tz = resolve_effective_project_timezone(project.timezone)
         old_conversation = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
             resolution="2",  # IN_PROGRESS
+            start_date=day,
+            end_date=end_of_project_local_calendar_day_utc(day, tz),
         )
+        later = day.add(hours=4)
         new_conversation = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
             contact_name="Test Contact",
             channel_uuid=channel_uuid,
             resolution="2",  # IN_PROGRESS
+            start_date=later,
+            end_date=end_of_project_local_calendar_day_utc(later, tz),
         )
 
         with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
@@ -142,49 +166,63 @@ class TestMainConversationService:
                 msg_created_at="2026-02-20T12:00:00Z",
             )
 
-            # Should return the most recent conversation
             assert conversation.uuid == new_conversation.uuid
-
-            # Old conversation should be marked as UNCLASSIFIED
             old_conversation.refresh_from_db()
-            assert str(old_conversation.resolution) == "3"  # UNCLASSIFIED
+            assert str(old_conversation.resolution) == "2"  # IN_PROGRESS unchanged
+            mock_migration.return_value.migrate_conversation_messages_to_postgres.assert_not_called()
 
-    def test_ensure_conversation_exists_handles_migration_error(self, project):
-        """Test that migration errors are handled gracefully when closing multiple conversations."""
+    def test_creates_new_in_progress_when_message_on_next_project_day(self, project):
+        """Previous-day IN_PROGRESS stays open; message on a new calendar day opens a new conversation."""
+        project.timezone = "America/Sao_Paulo"
+        project.save(update_fields=["timezone"])
         channel_uuid = uuid4()
-        # Create multiple conversations in progress
-        Conversation.objects.create(
+        june1_evening_sp = pendulum.parse("2026-06-02T02:00:00Z")  # June 1 23:00 -03
+        old = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
-            contact_name="Test Contact",
+            contact_name="Old",
             channel_uuid=channel_uuid,
-            resolution="2",  # IN_PROGRESS
+            resolution="2",
+            start_date=june1_evening_sp,
+            end_date=end_of_project_local_calendar_day_utc(june1_evening_sp, "America/Sao_Paulo"),
         )
-        new_conversation = Conversation.objects.create(
+        service = MainConversationService()
+        conv = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Next day",
+            channel_uuid=str(channel_uuid),
+            msg_created_at="2026-06-02T15:00:00Z",  # June 2 in São Paulo
+        )
+        assert conv.pk != old.pk
+        old.refresh_from_db()
+        assert str(old.resolution) == "2"
+        assert str(conv.resolution) == "2"
+
+    def test_same_project_day_reuses_despite_utc_date_roll(self, project):
+        """Same calendar day in project TZ reuses even when UTC date differs within that local day."""
+        project.timezone = "America/Sao_Paulo"
+        project.save(update_fields=["timezone"])
+        channel_uuid = uuid4()
+        start = pendulum.parse("2026-06-02T02:00:00Z")  # June 1 late evening SP
+        existing = Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+5511999999999",
-            contact_name="Test Contact",
+            contact_name="X",
             channel_uuid=channel_uuid,
-            resolution="2",  # IN_PROGRESS
+            resolution="2",
+            start_date=start,
+            end_date=end_of_project_local_calendar_day_utc(start, "America/Sao_Paulo"),
         )
-
-        with patch("conversation_ms.services.message_migration_service.MessageMigrationService") as mock_migration:
-            mock_migration.return_value.migrate_conversation_messages_to_postgres.side_effect = Exception(
-                "Migration error"
-            )
-
-            service = MainConversationService()
-            # Should not raise exception, just log error
-            conversation = service.ensure_conversation_exists(
-                project_uuid=str(project.uuid),
-                contact_urn="whatsapp:+5511999999999",
-                contact_name="Test Contact",
-                channel_uuid=str(channel_uuid),
-                msg_created_at="2026-02-20T12:00:00Z",
-            )
-
-            # Should still return the most recent conversation
-            assert conversation.uuid == new_conversation.uuid
+        service = MainConversationService()
+        conv = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="X",
+            channel_uuid=str(channel_uuid),
+            msg_created_at="2026-06-02T01:30:00Z",  # still June 1 in SP
+        )
+        assert conv.uuid == existing.uuid
 
     def test_ensure_conversation_exists_returns_none_without_channel_uuid(self, project):
         """Test returning None when channel_uuid is missing."""

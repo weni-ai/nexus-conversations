@@ -14,6 +14,11 @@ import sentry_sdk
 
 from conversation_ms.models import Conversation, Project
 from conversation_ms.sentry_reports import report_missing_required_sentry
+from conversation_ms.utils.date_helpers import (
+    conversation_effective_service_end_utc,
+    end_of_project_local_calendar_day_utc,
+    resolve_effective_project_timezone,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +45,11 @@ class MainConversationService:
 
         This method:
         1. Gets or creates the Project
-        2. Finds existing conversation in progress (resolution=2)
-        3. Creates new conversation if none exists
-        4. Handles multiple conversations by marking old ones as Unclassified
+        2. Among IN_PROGRESS (resolution=2) for this project/channel/contact, finds conversations where
+           the message instant is still on or before the effective service-day end (same rule as
+           ``close_daily``: end of calendar day in project timezone, see ``date_helpers``).
+        3. Creates a new IN_PROGRESS conversation if none match (older IN_PROGRESS stay unchanged)
+        4. If several match, returns the most recent by ``created_at``
 
         Returns the conversation object or None if channel_uuid is missing.
         """
@@ -63,13 +70,41 @@ class MainConversationService:
                 defaults={"name": None},  # Project name can be updated later if needed
             )
 
-            # Find existing conversation in progress
-            conversation_queryset = Conversation.objects.filter(
+            tz_name = resolve_effective_project_timezone(project.timezone)
+            try:
+                msg_utc = pendulum.parse(msg_created_at).in_timezone("UTC")
+            except Exception as parse_err:
+                logger.warning(
+                    "[MainConversationService] Could not parse msg_created_at for routing, using naive parse "
+                    "project_uuid=%s msg_created_at=%s error=%s",
+                    project_uuid,
+                    msg_created_at,
+                    parse_err,
+                )
+                msg_utc = pendulum.parse(msg_created_at).in_timezone("UTC")
+
+            base_in_progress = Conversation.objects.filter(
                 project=project,
                 channel_uuid=channel_uuid,
                 contact_urn=contact_urn,
                 resolution=2,  # IN_PROGRESS
-            )
+            ).order_by("-created_at")
+
+            open_window_pks = []
+            for conv in base_in_progress:
+                try:
+                    effective_end = conversation_effective_service_end_utc(conv, tz_name)
+                    if msg_utc <= effective_end:
+                        open_window_pks.append(conv.pk)
+                except Exception as window_err:
+                    logger.warning(
+                        "[MainConversationService] Could not compute service window for conversation, not reusing "
+                        "conversation_uuid=%s error=%s",
+                        conv.uuid,
+                        window_err,
+                    )
+
+            conversation_queryset = Conversation.objects.filter(pk__in=open_window_pks).order_by("-created_at")
 
             if not conversation_queryset.exists():
                 # Sentry when creating new conversation but contact_name is not received (we still create)
@@ -92,6 +127,7 @@ class MainConversationService:
                     contact_name=contact_name or "",
                     channel_uuid=channel_uuid,
                     msg_created_at=msg_created_at,
+                    tz_name=tz_name,
                 )
                 logger.info(
                     "[MainConversationService] Created new conversation "
@@ -102,49 +138,7 @@ class MainConversationService:
                 )
                 return conversation
 
-            # Handle multiple conversations in progress
-            in_progress_count = conversation_queryset.count()
-            if in_progress_count > 1:
-                conversation_queryset = conversation_queryset.order_by("-created_at")
-                conversations_to_close = conversation_queryset.exclude(uuid=conversation_queryset.first().uuid)
-                closed_count = conversations_to_close.count()
-
-                for conversation in conversations_to_close:
-                    original_resolution = str(conversation.resolution)
-                    conversation.resolution = 3  # UNCLASSIFIED
-                    conversation.save()
-
-                    if original_resolution == "2":  # IN_PROGRESS
-                        try:
-                            from conversation_ms.services.message_migration_service import MessageMigrationService
-
-                            migration_service = MessageMigrationService()
-                            migration_service.migrate_conversation_messages_to_postgres(conversation)
-                            logger.info(
-                                "[MainConversationService] Message migration completed for closed "
-                                "conversation conversation_uuid=%s",
-                                conversation.uuid,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                "[MainConversationService] Error during message migration "
-                                "conversation_uuid=%s error=%s",
-                                conversation.uuid,
-                                str(e),
-                                exc_info=True,
-                            )
-
-                logger.warning(
-                    "[MainConversationService] Multiple conversations found, marked old ones as Unclassified "
-                    "project_uuid=%s contact_urn=%s channel_uuid=%s count=%s closed_count=%s",
-                    project_uuid,
-                    contact_urn,
-                    channel_uuid,
-                    in_progress_count,
-                    closed_count,
-                )
-
-            # Return the most recent conversation in progress
+            # Return the most recent IN_PROGRESS whose service window still contains the message
             conversation = conversation_queryset.first()
 
             # Backfill start_date/end_date when conversation was created by another path (e.g. Mailroom)
@@ -152,7 +146,7 @@ class MainConversationService:
                 try:
                     msg_date = pendulum.parse(msg_created_at)
                     conversation.start_date = msg_date
-                    conversation.end_date = msg_date.add(days=1)
+                    conversation.end_date = end_of_project_local_calendar_day_utc(msg_created_at, tz_name)
                     conversation.save(update_fields=["start_date", "end_date"])
                     logger.info(
                         "[MainConversationService] Backfilled start_date/end_date from message timestamp "
@@ -213,16 +207,17 @@ class MainConversationService:
         contact_name: str,
         channel_uuid: str,
         msg_created_at: str,
+        tz_name: str,
     ) -> Conversation:
         """
         Create a new conversation with base structure.
 
-        Sets start_date to msg_created_at and end_date to start_date + 1 day,
-        following the pattern from nexus-ai.
+        ``start_date`` is the message timestamp; ``end_date`` is end of that calendar day in
+        ``tz_name`` (same instant as ``ProjectDay`` / ``close_daily_conversations_task``).
         """
         msg_date = pendulum.parse(msg_created_at)
         start_date = msg_date
-        end_date = start_date.add(days=1)
+        end_date = end_of_project_local_calendar_day_utc(msg_created_at, tz_name)
 
         conversation = Conversation.objects.create(
             project=project,

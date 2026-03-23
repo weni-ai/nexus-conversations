@@ -3,10 +3,19 @@ Tests for ProjectDay date helper.
 """
 
 from datetime import date
+from uuid import uuid4
 
 import pendulum
+import pytest
 
-from conversation_ms.utils.date_helpers import ProjectDay
+from conversation_ms.models import Conversation
+from conversation_ms.utils.date_helpers import (
+    ProjectDay,
+    calendar_date_in_project_timezone,
+    conversation_effective_service_end_utc,
+    end_of_project_local_calendar_day_utc,
+    resolve_effective_project_timezone,
+)
 
 
 class TestProjectDay:
@@ -239,3 +248,65 @@ class TestProjectDay:
         assert project_day.end_of_day_project_tz.timezone_name == "UTC"
         assert project_day.start_of_day_utc == project_day.start_of_day_project_tz
         assert project_day.end_of_day_utc == project_day.end_of_day_project_tz
+
+
+@pytest.mark.django_db
+class TestProjectTimezoneHelpers:
+    def test_calendar_date_in_project_timezone(self):
+        assert calendar_date_in_project_timezone("2026-06-02T02:00:00Z", "America/Sao_Paulo") == date(2026, 6, 1)
+
+    def test_resolve_effective_stored_valid(self):
+        assert resolve_effective_project_timezone("UTC") == "UTC"
+
+    def test_resolve_effective_invalid_uses_fallback(self, settings):
+        settings.FALLBACK_TIMEZONE = "UTC"
+        assert resolve_effective_project_timezone("Invalid/X") == "UTC"
+        assert resolve_effective_project_timezone(None) == "UTC"
+
+
+class TestEndOfDaySharedWithCloseDaily:
+    """end_of_project_local_calendar_day_utc must match ProjectDay / close_daily."""
+
+    def test_matches_project_day_get_end_date_utc(self):
+        tz = "America/Sao_Paulo"
+        moment = "2026-02-20T12:00:00Z"
+        d = calendar_date_in_project_timezone(moment, tz)
+        from_helper = end_of_project_local_calendar_day_utc(moment, tz)
+        from_project_day = ProjectDay(d, tz).get_end_date_utc()
+        assert from_helper == from_project_day
+
+
+@pytest.mark.django_db
+class TestConversationEffectiveServiceEnd:
+    def test_none_end_date_uses_canonical_only(self, project):
+        start = pendulum.parse("2026-02-20T10:00:00Z")
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="X",
+            channel_uuid=uuid4(),
+            resolution="2",
+            start_date=start,
+            end_date=None,
+        )
+        tz = "America/Sao_Paulo"
+        expected = ProjectDay(calendar_date_in_project_timezone(start, tz), tz).get_end_date_utc()
+        assert conversation_effective_service_end_utc(conv, tz) == expected
+
+    def test_legacy_long_end_date_caps_at_canonical(self, project):
+        """Stored end_date = start + 1 day (old nexus style): effective end is end of local day."""
+        start = pendulum.parse("2026-02-20T10:00:00Z")
+        stored_long = start.add(days=1)
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="X",
+            channel_uuid=uuid4(),
+            resolution="2",
+            start_date=start,
+            end_date=stored_long,
+        )
+        tz = "America/Sao_Paulo"
+        canonical = ProjectDay(calendar_date_in_project_timezone(start, tz), tz).get_end_date_utc()
+        assert conversation_effective_service_end_utc(conv, tz) == canonical
+        assert canonical < pendulum.instance(stored_long).in_timezone("UTC")

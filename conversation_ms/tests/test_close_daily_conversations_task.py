@@ -315,6 +315,21 @@ class TestCloseDailyConversationsTask:
         assert result["reason"] == "sync_project_timezones_in_progress"
 
     @pytest.mark.django_db
+    @patch("conversation_ms.tasks.cache")
+    def test_runs_when_sync_lock_held_if_skip_sync_lock_check(self, mock_cache):
+        """Chained close from sync uses skip_sync_lock_check so it does not skip itself."""
+        mock_cache.get.return_value = True
+        ProjectFactory(timezone="America/Sao_Paulo")
+        mock_cache.add.return_value = True
+
+        with patch("conversation_ms.tasks._process_project_conversations") as mock_process:
+            mock_process.return_value = 0
+            result = close_daily_conversations_task(skip_sync_lock_check=True)
+
+        assert result["status"] == "success"
+        mock_process.assert_called_once()
+
+    @pytest.mark.django_db
     def test_project_not_found_in_db(self):
         """Test handling when project doesn't exist in local database."""
         from uuid import uuid4

@@ -415,6 +415,90 @@ class TestCloseDailyConversationsTask:
             assert conversations_closed >= 0
 
     @pytest.mark.django_db
+    def test_batch_processing_sends_billing_sqs_when_queue_configured(self, settings):
+        settings.SQS_BILLING_QUEUE_URL = "https://sqs.test/q.fifo"
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+        conversation = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+        mock_producer = Mock()
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner.get_billing_sqs_producer", return_value=mock_producer):
+                with patch(
+                    "conversation_ms.close_daily.runner.MessageMigrationService"
+                ) as mock_migration_cls:
+                    mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                        "persisted": False
+                    }
+                    _process_conversation_batch(
+                        [conversation],
+                        str(project.uuid),
+                        project_day.get_end_date_utc(),
+                    )
+
+        mock_producer.send_conversation_close.assert_called_once()
+        args, kwargs = mock_producer.send_conversation_close.call_args
+        assert kwargs["message_deduplication_id"] == str(conversation.uuid)
+        assert args[0]["resolution"] == Resolution.RESOLVED
+        assert args[0]["contact_urn"] == conversation.contact_urn
+        assert args[0]["channel_uuid"] == str(conversation.channel_uuid)
+
+    @pytest.mark.django_db
+    def test_batch_processing_skips_billing_sqs_when_resolution_bulk_update_fails(self, settings):
+        settings.SQS_BILLING_QUEUE_URL = "https://sqs.test/q.fifo"
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+        conversation = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+        mock_producer = Mock()
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner.get_billing_sqs_producer", return_value=mock_producer):
+
+                def _bulk_update_side_effect(objs, fields, batch_size=50):
+                    if list(fields) == ["resolution"]:
+                        raise RuntimeError("bulk_update failed")
+
+                with patch(
+                    "conversation_ms.close_daily.runner.Conversation.objects.bulk_update",
+                    side_effect=_bulk_update_side_effect,
+                ):
+                    with patch(
+                        "conversation_ms.close_daily.runner.MessageMigrationService"
+                    ) as mock_migration_cls:
+                        mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                            "persisted": False
+                        }
+                        _process_conversation_batch(
+                            [conversation],
+                            str(project.uuid),
+                            project_day.get_end_date_utc(),
+                        )
+
+        mock_producer.send_conversation_close.assert_not_called()
+
+    @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
     def test_cache_prevents_duplicate_processing(self, mock_cache):
         """Test that cache prevents duplicate processing."""

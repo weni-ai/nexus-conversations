@@ -116,6 +116,12 @@ USE_TZ = True
 # Timezone Configuration
 FALLBACK_TIMEZONE = env.str("FALLBACK_TIMEZONE", default="America/Sao_Paulo")
 
+# Close daily Celery task: distributed lock (TTL should exceed typical run; tune via metrics)
+CLOSE_DAILY_LOCK_ENABLED = env.bool("CLOSE_DAILY_LOCK_ENABLED", default=not TESTING)
+CLOSE_DAILY_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_LOCK_TTL_SECONDS", default=7200)
+# Max IN_PROGRESS conversations per project per normal run (0 = unlimited). Reduces long single-task runs.
+CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT = env.int("CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT", default=0)
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 

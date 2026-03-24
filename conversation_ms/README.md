@@ -26,6 +26,7 @@ Microservice responsible for processing conversation messages from SQS FIFO queu
 ### Core Infrastructure
 
 - ✅ SQS Consumer (FIFO) implementation
+- ✅ SQS producer for billing (`producers/sqs_producer.py`, FIFO; region = `SQS_CONVERSATION_REGION`)
 - ✅ Message processing pipeline (received/sent)
 - ✅ ConversationService integration
 - ✅ Event DTOs (MessageReceivedEvent, MessageSentEvent)
@@ -81,6 +82,8 @@ conversation_ms/
 ├── main.py                          # Entry point
 ├── consumers/
 │   └── sqs_consumer.py              # SQS FIFO consumer
+├── producers/
+│   └── sqs_producer.py              # SQS FIFO outbound → billing (e.g. conversation close)
 ├── services/
 │   ├── message_service.py           # Main message processing
 │   ├── conversation_service.py      # Conversation management
@@ -119,7 +122,8 @@ MessageService.process_message_received/sent()
 
 - `SQS_CONVERSATION_QUEUE_URL`: SQS FIFO queue URL
 - `SQS_CONVERSATION_DLQ_URL`: Dead Letter Queue URL
-- `SQS_CONVERSATION_REGION`: AWS region
+- `SQS_CONVERSATION_REGION`: AWS region (consumer, producer, and billing SQS client)
+- `SQS_BILLING_QUEUE_URL`: Outbound FIFO queue URL for billing (e.g. conversation-close payloads; wiring TBD)
 - `DYNAMODB_MESSAGE_TABLE`: DynamoDB table name for messages
 - `DYNAMODB_REGION`: DynamoDB region
 

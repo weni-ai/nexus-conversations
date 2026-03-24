@@ -13,6 +13,10 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.models import Conversation, Project
+from conversation_ms.producers.sqs_producer import (
+    build_conversation_close_billing_payload,
+    get_billing_sqs_producer,
+)
 from conversation_ms.services.classification_service import (
     ClassificationService,
 )
@@ -1126,7 +1130,7 @@ def _bulk_update_conversation_resolutions(
     conversations_to_update: list[Conversation],
     project_uuid: str,
     batch_size: int,
-) -> None:
+) -> bool:
     """
     Bulk update resolution for conversations with transaction atomicity.
 
@@ -1134,11 +1138,14 @@ def _bulk_update_conversation_resolutions(
         conversations_to_update: List of Conversation objects to update
         project_uuid: Project UUID (for logging)
         batch_size: Original batch size (for logging)
+
+    Returns:
+        True if updates were applied or there was nothing to update; False if the bulk update failed.
     """
     from django.db import transaction
 
     if not conversations_to_update:
-        return
+        return True
 
     try:
         with transaction.atomic():
@@ -1149,6 +1156,7 @@ def _bulk_update_conversation_resolutions(
             f"Project: {project_uuid}, Updated: {len(conversations_to_update)}, "
             f"Batch size: {batch_size}"
         )
+        return True
     except Exception as e:
         sentry_sdk.capture_exception(e)
         conversation_uuids_sample = [str(c.uuid) for c in conversations_to_update[:10]]
@@ -1159,6 +1167,34 @@ def _bulk_update_conversation_resolutions(
             f"Error: {str(e)}, Sample UUIDs: {conversation_uuids_sample}",
             exc_info=True,
         )
+        return False
+
+
+def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: str) -> None:
+    """
+    Notify billing via SQS (FIFO) for each closed conversation. Best-effort: failures are logged only.
+    Skipped when ``SQS_BILLING_QUEUE_URL`` is unset or payload cannot be built.
+    """
+    if not getattr(settings, "SQS_BILLING_QUEUE_URL", ""):
+        return
+
+    producer = get_billing_sqs_producer()
+    for conv in conversations:
+        payload = build_conversation_close_billing_payload(conv)
+        if not payload:
+            logger.warning(
+                "[CloseDailyConversationsTask] Skip billing SQS (missing channel_uuid, contact_urn, or dates) "
+                f"conversation_uuid={conv.uuid} project_uuid={project_uuid}"
+            )
+            continue
+        try:
+            producer.send_conversation_close(payload, message_deduplication_id=str(conv.uuid))
+        except Exception as e:
+            logger.warning(
+                "[CloseDailyConversationsTask] Billing SQS send failed "
+                f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
+                exc_info=True,
+            )
 
 
 def _queue_message_migrations(conversations_to_migrate: list[Conversation], project_uuid: str) -> None:
@@ -1230,7 +1266,13 @@ def _process_conversation_batch(
                 conversations_closed += 1
 
         # 4. Bulk update resolution (with transaction for atomicity)
-        _bulk_update_conversation_resolutions(conversations_to_update_resolution, project_uuid, len(conversation_batch))
+        resolutions_persisted = _bulk_update_conversation_resolutions(
+            conversations_to_update_resolution, project_uuid, len(conversation_batch)
+        )
+
+        # 4b. Billing SQS only after resolutions are persisted (avoid false billing events)
+        if resolutions_persisted:
+            _send_billing_close_to_sqs(conversations_to_update_resolution, project_uuid)
 
         # 5. Queue message migrations asynchronously
         _queue_message_migrations(conversations_to_migrate, project_uuid)

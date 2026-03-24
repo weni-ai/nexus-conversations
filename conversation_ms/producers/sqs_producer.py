@@ -1,17 +1,23 @@
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
+import pendulum
 import sentry_sdk
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
+from conversation_ms.models import Conversation
 
 logger = logging.getLogger(__name__)
 
 # SQS FIFO MessageDeduplicationId: max 128 chars, alphanumeric + hyphen
 SQS_DEDUP_ID_MAX_LENGTH = 128
+# SQS FIFO MessageGroupId max length
+SQS_GROUP_ID_MAX_LENGTH = 128
+
+_REQUIRED_CLOSE_KEYS = ("channel_uuid", "start_date", "contact_urn", "resolution")
 
 
 def _normalize_sqs_deduplication_id(value: str) -> str:
@@ -25,29 +31,57 @@ def _normalize_sqs_deduplication_id(value: str) -> str:
     return safe or str(uuid.uuid4())
 
 
-_REQUIRED_FIFO_DATA_KEYS = ("project_uuid", "contact_urn", "channel_uuid")
-
-
-def _validate_billing_fifo_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure payload has ``data`` with fields required for FIFO grouping and message attributes.
-    Raises ValueError with a clear message if not.
-    """
+def _validate_billing_close_payload(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Validate flat billing close body; returns normalized string values."""
     if not isinstance(payload, dict):
         raise ValueError("payload must be a dict")
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise ValueError("payload must contain a 'data' dict")
-    missing = [k for k in _REQUIRED_FIFO_DATA_KEYS if k not in data or data[k] in (None, "")]
-    if missing:
-        raise ValueError(
-            "payload['data'] missing or empty required keys for FIFO billing message: " + ", ".join(missing)
-        )
-    return data
+    out: Dict[str, str] = {}
+    for k in _REQUIRED_CLOSE_KEYS:
+        v = payload.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise ValueError(f"billing close payload missing or empty: {k!r}")
+        out[k] = str(v).strip()
+    return out
+
+
+def _fifo_message_group_id(channel_uuid: str, contact_urn: str) -> str:
+    raw = f"{channel_uuid}:{contact_urn}"
+    if len(raw) <= SQS_GROUP_ID_MAX_LENGTH:
+        return raw
+    return raw[:SQS_GROUP_ID_MAX_LENGTH]
+
+
+def build_conversation_close_billing_payload(conversation: Conversation) -> Optional[Dict[str, str]]:
+    """
+    Build the billing SQS body for a closed conversation.
+
+    Shape matches billing consumer expectation, e.g.::
+        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code).
+    """
+    if not conversation.channel_uuid or not conversation.contact_urn:
+        return None
+
+    dt = conversation.start_date or conversation.created_at
+    if dt is None:
+        return None
+
+    if dt.tzinfo is None:
+        p = pendulum.instance(dt, tz="UTC")
+    else:
+        p = pendulum.instance(dt).in_timezone("UTC")
+
+    start_date = p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
+
+    return {
+        "channel_uuid": str(conversation.channel_uuid),
+        "start_date": start_date,
+        "contact_urn": conversation.contact_urn,
+        "resolution": str(conversation.resolution),
+    }
 
 
 class BillingSQSProducer:
-    """Send payloads to the billing SQS FIFO queue (shared region with other SQS: ``SQS_CONVERSATION_REGION``)."""
+    """Send conversation-close payloads to the billing SQS FIFO queue (``SQS_BILLING_QUEUE_URL``)."""
 
     def __init__(
         self,
@@ -63,50 +97,47 @@ class BillingSQSProducer:
             self._client = get_boto3_client("sqs", region_name=self._region_name)
         return self._client
 
-    def send_event(self, payload: Dict[str, Any]) -> None:
-        """Send a single event to the FIFO queue. Raises on failure."""
+    def send_conversation_close(
+        self,
+        payload: Dict[str, Any],
+        *,
+        message_deduplication_id: Optional[str] = None,
+    ) -> None:
+        """
+        Send one conversation-close message. ``payload`` must contain only the billing fields
+        (channel_uuid, start_date, contact_urn, resolution). Raises on failure.
+        """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
 
-        data = _validate_billing_fifo_payload(payload)
-        project_uuid = data["project_uuid"]
-        contact_urn = data["contact_urn"]
-        channel_uuid = data["channel_uuid"]
+        normalized = _validate_billing_close_payload(payload)
+        body = {k: normalized[k] for k in _REQUIRED_CLOSE_KEYS}
 
-        correlation_id = _normalize_sqs_deduplication_id(payload.get("correlation_id") or str(uuid.uuid4()))
-        event_type = payload.get("event_type", "message.received")
-
-        message_group_id = f"{project_uuid}:{contact_urn}:{channel_uuid}"
+        dedup = _normalize_sqs_deduplication_id(message_deduplication_id or str(uuid.uuid4()))
+        message_group_id = _fifo_message_group_id(normalized["channel_uuid"], normalized["contact_urn"])
         message_attributes = {
-            "event_type": {"StringValue": event_type, "DataType": "String"},
-            "project_uuid": {"StringValue": project_uuid, "DataType": "String"},
-            "channel_uuid": {"StringValue": channel_uuid, "DataType": "String"},
+            "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
+            "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},
         }
 
         try:
             client = self._get_client()
             client.send_message(
                 QueueUrl=self._queue_url,
-                MessageBody=json.dumps(payload, default=str),
+                MessageBody=json.dumps(body, default=str),
                 MessageGroupId=message_group_id,
-                MessageDeduplicationId=correlation_id,
+                MessageDeduplicationId=dedup,
                 MessageAttributes=message_attributes,
             )
-            logger.debug("Sent billing SQS message: %s", event_type)
+            logger.debug("Sent billing SQS conversation_close channel_uuid=%s", normalized["channel_uuid"])
         except Exception as e:
             logger.error("Failed to send message to billing SQS: %s", e, exc_info=True)
             with sentry_sdk.push_scope() as scope:
-                scope.set_tag("project_uuid", project_uuid)
-                scope.set_tag("contact_urn", contact_urn)
-                scope.set_tag("channel_uuid", channel_uuid)
-                scope.set_context("payload", payload)
+                scope.set_tag("channel_uuid", normalized["channel_uuid"])
+                scope.set_tag("contact_urn", normalized["contact_urn"])
+                scope.set_context("billing_close_payload", body)
                 sentry_sdk.capture_exception(e)
             raise
-
-    def send_events(self, events: List[Dict[str, Any]]) -> None:
-        """Send each event to the queue. Stops on first failure (raises)."""
-        for event in events:
-            self.send_event(event)
 
 
 def get_billing_sqs_producer() -> BillingSQSProducer:

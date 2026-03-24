@@ -1,13 +1,11 @@
 import json
 import logging
 import uuid
-from datetime import timezone as dt_timezone
 from typing import Any, Dict, Optional
 
 import pendulum
 import sentry_sdk
 from django.conf import settings
-from django.utils import timezone as django_timezone
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.models import Conversation
@@ -19,7 +17,13 @@ SQS_DEDUP_ID_MAX_LENGTH = 128
 # SQS FIFO MessageGroupId max length
 SQS_GROUP_ID_MAX_LENGTH = 128
 
-_REQUIRED_CLOSE_KEYS = ("channel_uuid", "start_date", "contact_urn", "resolution")
+_REQUIRED_CLOSE_KEYS = (
+    "channel_uuid",
+    "start_date",
+    "contact_urn",
+    "resolution",
+    "uuid",
+)
 
 
 def _normalize_sqs_deduplication_id(value: str) -> str:
@@ -58,7 +62,8 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     Build the billing SQS body for a closed conversation.
 
     Shape matches billing consumer expectation, e.g.::
-        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code).
+        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code),
+        uuid (conversation primary key).
     """
     if not conversation.channel_uuid or not conversation.contact_urn:
         return None
@@ -67,18 +72,19 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     if dt is None:
         return None
 
-    if django_timezone.is_naive(dt):
-        dt = django_timezone.make_aware(dt, dt_timezone.utc)
+    if dt.tzinfo is None:
+        p = pendulum.instance(dt, tz="UTC")
     else:
-        dt = dt.astimezone(dt_timezone.utc)
+        p = pendulum.instance(dt).in_timezone("UTC")
 
-    start_date = pendulum.instance(dt).in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss") + "Z"
+    start_date = p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
 
     return {
         "channel_uuid": str(conversation.channel_uuid),
         "start_date": start_date,
         "contact_urn": conversation.contact_urn,
         "resolution": str(conversation.resolution),
+        "uuid": str(conversation.uuid),
     }
 
 
@@ -106,8 +112,12 @@ class BillingSQSProducer:
         message_deduplication_id: Optional[str] = None,
     ) -> None:
         """
-        Send one conversation-close message. ``payload`` must contain only the billing fields
-        (channel_uuid, start_date, contact_urn, resolution). Raises on failure.
+        Send one conversation-close message.
+
+        ``payload`` must include non-empty values for: channel_uuid, start_date,
+        contact_urn, resolution, uuid. Additional keys are ignored. The SQS
+        ``MessageBody`` contains only those five fields (normalized strings).
+        Raises ``ValueError`` if validation fails or boto3 send fails.
         """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
@@ -120,6 +130,7 @@ class BillingSQSProducer:
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
             "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},
+            "uuid": {"StringValue": normalized["uuid"], "DataType": "String"},
         }
 
         try:
@@ -131,12 +142,17 @@ class BillingSQSProducer:
                 MessageDeduplicationId=dedup,
                 MessageAttributes=message_attributes,
             )
-            logger.debug("Sent billing SQS conversation_close channel_uuid=%s", normalized["channel_uuid"])
+            logger.debug(
+                "Sent billing SQS conversation_close channel_uuid=%s uuid=%s",
+                normalized["channel_uuid"],
+                normalized["uuid"],
+            )
         except Exception as e:
             logger.error("Failed to send message to billing SQS: %s", e, exc_info=True)
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("channel_uuid", normalized["channel_uuid"])
                 scope.set_tag("contact_urn", normalized["contact_urn"])
+                scope.set_tag("uuid", normalized["uuid"])
                 scope.set_context("billing_close_payload", body)
                 sentry_sdk.capture_exception(e)
             raise

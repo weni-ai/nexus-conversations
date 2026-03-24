@@ -73,17 +73,17 @@ class TestConversationWindowService:
         service = ConversationWindowService()
         service.process_conversation_window(event_data)
 
-        # Verify conversation was updated; resolution set from ticket_uuid, close is from task only
+        # Ticket / chat room flags only; resolution stays IN_PROGRESS for close_daily
         conversation.refresh_from_db()
         assert conversation.external_id == "ext-updated"
         assert conversation.has_chats_room is True
         assert conversation.contact_name == "Updated Contact"
-        assert conversation.resolution == str(ResolutionEntities.HAS_CHAT_ROOM)
+        assert conversation.resolution == str(ResolutionEntities.IN_PROGRESS)
 
-    def test_process_conversation_window_ticket_uuid_sets_resolution_but_no_close_actions(
+    def test_process_conversation_window_ticket_uuid_keeps_in_progress_no_close_actions(
         self, conversation, mock_sentry
     ):
-        """Test that ticket_uuid sets resolution to HAS_CHAT_ROOM"""
+        """ticket_uuid sets has_chats_room but leaves resolution IN_PROGRESS (close_daily closes later)."""
         conversation.resolution = str(ResolutionEntities.IN_PROGRESS)
         conversation.save()
         ticket_uuid = uuid4()
@@ -105,10 +105,10 @@ class TestConversationWindowService:
         conversation.refresh_from_db()
         assert conversation.has_chats_room is True
         assert str(conversation.ticket_uuid) == str(ticket_uuid)
-        assert conversation.resolution == str(ResolutionEntities.HAS_CHAT_ROOM)
+        assert conversation.resolution == str(ResolutionEntities.IN_PROGRESS)
 
     def test_process_conversation_window_ticket_uuid_does_not_trigger_migration(self, conversation, mock_sentry):
-        """Test that receiving ticket_uuid sets resolution but does not trigger migration; close is done by the task."""
+        """ticket_uuid does not change resolution to HAS_CHAT_ROOM; migration/close remain with close_daily."""
         conversation.resolution = str(ResolutionEntities.IN_PROGRESS)
         conversation.save()
 
@@ -128,8 +128,28 @@ class TestConversationWindowService:
         service.process_conversation_window(event_data)
 
         conversation.refresh_from_db()
-        # Resolution is set to HAS_CHAT_ROOM; migration/classification are only done by close_daily_conversations_task
-        assert conversation.resolution == str(ResolutionEntities.HAS_CHAT_ROOM)
+        assert conversation.resolution == str(ResolutionEntities.IN_PROGRESS)
+
+    def test_process_conversation_window_create_with_ticket_stays_in_progress(self, mock_sentry):
+        """New conversation with ticket_uuid is still IN_PROGRESS for batch close."""
+        project_uuid = uuid4()
+        channel_uuid = uuid4()
+        ticket = str(uuid4())
+        event_data = {
+            "correlation_id": str(uuid4()),
+            "data": {
+                "project_uuid": str(project_uuid),
+                "contact_urn": "whatsapp:+5511999999999",
+                "channel_uuid": str(channel_uuid),
+                "ticket_uuid": ticket,
+                "name": "With Ticket",
+            },
+        }
+        ConversationWindowService().process_conversation_window(event_data)
+        conv = Conversation.objects.get(project__uuid=project_uuid, channel_uuid=channel_uuid)
+        assert conv.has_chats_room is True
+        assert str(conv.ticket_uuid) == ticket
+        assert conv.resolution == str(ResolutionEntities.IN_PROGRESS)
 
     def test_process_conversation_window_missing_channel_uuid(self, mock_sentry):
         """Test handling event with missing channel_uuid."""

@@ -97,14 +97,15 @@ class TestBillingSQSProducer:
             queue_url="https://sqs.us-east-1.amazonaws.com/1/q.fifo",
             region_name="us-east-1",
         )
-        producer.send_conversation_close(payload, message_deduplication_id="dedup-1")
+        producer.send_conversation_close(payload)
 
         mock_get_client.assert_called_once_with("sqs", region_name="us-east-1")
         mock_client.send_message.assert_called_once()
         call_kw = mock_client.send_message.call_args.kwargs
         assert call_kw["QueueUrl"] == "https://sqs.us-east-1.amazonaws.com/1/q.fifo"
         assert call_kw["MessageGroupId"] == "00000000-0000-0000-0000-000000000001:whatsapp:5584996765969"
-        assert call_kw["MessageDeduplicationId"] == "dedup-1"
+        dedup = call_kw["MessageDeduplicationId"]
+        assert len(dedup) == 36 and dedup.count("-") == 4
         body = json.loads(call_kw["MessageBody"])
         assert body == payload
         attrs = call_kw["MessageAttributes"]
@@ -149,7 +150,7 @@ class TestBillingSQSProducer:
         mock_get_client.return_value = mock_client
         producer = BillingSQSProducer(queue_url="https://sqs.test/q.fifo")
         payload = {**self._FULL_CLOSE_PAYLOAD, "extra_ignored": "x", "another": 1}
-        producer.send_conversation_close(payload, message_deduplication_id="d1")
+        producer.send_conversation_close(payload)
         body = json.loads(mock_client.send_message.call_args.kwargs["MessageBody"])
         assert set(body.keys()) == set(_REQUIRED_CLOSE_KEYS)
         assert "extra_ignored" not in body

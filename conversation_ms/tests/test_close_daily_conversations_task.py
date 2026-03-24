@@ -360,8 +360,7 @@ class TestCloseDailyConversationsTask:
                     )
 
         mock_producer.send_conversation_close.assert_called_once()
-        args, kwargs = mock_producer.send_conversation_close.call_args
-        assert kwargs["message_deduplication_id"] == str(conversation.uuid)
+        args, _kwargs = mock_producer.send_conversation_close.call_args
         assert args[0]["resolution"] == Resolution.RESOLVED
         assert args[0]["contact_urn"] == conversation.contact_urn
         assert args[0]["channel_uuid"] == str(conversation.channel_uuid)

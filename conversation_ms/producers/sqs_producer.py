@@ -105,12 +105,7 @@ class BillingSQSProducer:
             self._client = get_boto3_client("sqs", region_name=self._region_name)
         return self._client
 
-    def send_conversation_close(
-        self,
-        payload: Dict[str, Any],
-        *,
-        message_deduplication_id: Optional[str] = None,
-    ) -> None:
+    def send_conversation_close(self, payload: Dict[str, Any]) -> None:
         """
         Send one conversation-close message.
 
@@ -125,7 +120,7 @@ class BillingSQSProducer:
         normalized = _validate_billing_close_payload(payload)
         body = {k: normalized[k] for k in _REQUIRED_CLOSE_KEYS}
 
-        dedup = _normalize_sqs_deduplication_id(message_deduplication_id or str(uuid.uuid4()))
+        dedup = _normalize_sqs_deduplication_id(str(uuid.uuid4()))
         message_group_id = _fifo_message_group_id(normalized["channel_uuid"], normalized["contact_urn"])
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},

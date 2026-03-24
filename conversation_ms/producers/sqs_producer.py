@@ -22,7 +22,7 @@ _REQUIRED_CLOSE_KEYS = (
     "start_date",
     "contact_urn",
     "resolution",
-    "conversation_uuid",
+    "uuid",
 )
 
 
@@ -63,7 +63,7 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
 
     Shape matches billing consumer expectation, e.g.::
         channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code),
-        conversation_uuid.
+        uuid (conversation primary key).
     """
     if not conversation.channel_uuid or not conversation.contact_urn:
         return None
@@ -84,7 +84,7 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
         "start_date": start_date,
         "contact_urn": conversation.contact_urn,
         "resolution": str(conversation.resolution),
-        "conversation_uuid": str(conversation.uuid),
+        "uuid": str(conversation.uuid),
     }
 
 
@@ -112,8 +112,12 @@ class BillingSQSProducer:
         message_deduplication_id: Optional[str] = None,
     ) -> None:
         """
-        Send one conversation-close message. ``payload`` must contain only the billing fields
-        (channel_uuid, start_date, contact_urn, resolution, conversation_uuid). Raises on failure.
+        Send one conversation-close message.
+
+        ``payload`` must include non-empty values for: channel_uuid, start_date,
+        contact_urn, resolution, uuid. Additional keys are ignored. The SQS
+        ``MessageBody`` contains only those five fields (normalized strings).
+        Raises ``ValueError`` if validation fails or boto3 send fails.
         """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
@@ -126,7 +130,7 @@ class BillingSQSProducer:
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
             "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},
-            "conversation_uuid": {"StringValue": normalized["conversation_uuid"], "DataType": "String"},
+            "uuid": {"StringValue": normalized["uuid"], "DataType": "String"},
         }
 
         try:
@@ -139,16 +143,16 @@ class BillingSQSProducer:
                 MessageAttributes=message_attributes,
             )
             logger.debug(
-                "Sent billing SQS conversation_close channel_uuid=%s conversation_uuid=%s",
+                "Sent billing SQS conversation_close channel_uuid=%s uuid=%s",
                 normalized["channel_uuid"],
-                normalized["conversation_uuid"],
+                normalized["uuid"],
             )
         except Exception as e:
             logger.error("Failed to send message to billing SQS: %s", e, exc_info=True)
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("channel_uuid", normalized["channel_uuid"])
                 scope.set_tag("contact_urn", normalized["contact_urn"])
-                scope.set_tag("conversation_uuid", normalized["conversation_uuid"])
+                scope.set_tag("uuid", normalized["uuid"])
                 scope.set_context("billing_close_payload", body)
                 sentry_sdk.capture_exception(e)
             raise

@@ -13,7 +13,7 @@ from conversation_ms.tests.factories import ProjectFactory
 
 @pytest.fixture(autouse=True)
 def _in_memory_tasks_cache_lock():
-    """Tasks use Redis in prod; tests patch ``conversation_ms.tasks.cache`` for the sync lock."""
+    """Tasks use Redis in prod; tests patch ``conversation_ms.cache_access.cache`` for the sync lock."""
     store: dict = {}
 
     def add(key, val, timeout=None):
@@ -28,7 +28,7 @@ def _in_memory_tasks_cache_lock():
     def delete(key):
         store.pop(key, None)
 
-    with patch("conversation_ms.tasks.cache") as m:
+    with patch("conversation_ms.cache_access.cache") as m:
         m.add.side_effect = add
         m.get.side_effect = get
         m.delete.side_effect = delete

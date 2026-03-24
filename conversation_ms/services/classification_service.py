@@ -25,7 +25,11 @@ class ClassificationService:
         self.dynamo_repo = DynamoMessageRepository()
 
     def classify_conversation(
-        self, conversation_or_uuid, save_resolution: bool = True, topics_payload: Optional[List[Dict[str, Any]]] = None
+        self,
+        conversation_or_uuid,
+        save_resolution: bool = True,
+        topics_payload: Optional[List[Dict[str, Any]]] = None,
+        messages_override: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
         Main entry point to classify a conversation.
@@ -34,6 +38,7 @@ class ClassificationService:
             conversation_or_uuid: Conversation object or UUID string
             save_resolution: If False, returns resolution without saving (for bulk updates)
             topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
+            messages_override: Optional preloaded messages to avoid refetch from data stores
 
         Returns:
             Tuple of (conversation, classification, resolution) where:
@@ -53,7 +58,7 @@ class ClassificationService:
                 logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
                 return (None, None, None)
 
-        messages = None
+        messages = messages_override
         if conversation.has_chats_room:
             # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
             resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
@@ -61,8 +66,9 @@ class ClassificationService:
                 f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
             )
         else:
-            # Fetch messages (prefer DynamoDB)
-            messages = self._get_conversation_messages(conversation)
+            # Fetch messages (prefer DynamoDB) only if caller did not preload them.
+            if messages is None:
+                messages = self._get_conversation_messages(conversation)
             if not messages:
                 logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
                 return (conversation, None, None)
@@ -207,6 +213,10 @@ class ClassificationService:
 
         try:
             if hasattr(conversation, "messages_data"):
+                logger.info(
+                    f"[ClassificationService] fallback_postgres_used conversation={conversation.uuid} "
+                    f"project={conversation.project.uuid}"
+                )
                 return conversation.messages_data.messages
         except Exception as e:
             logger.warning(f"[ClassificationService] Failed to fetch from Postgres: {e}")
@@ -364,6 +374,15 @@ class ClassificationService:
 
         resolution_value = ResolutionEntities.resolution_mapping(resolution)
 
+        start_date_str = (
+            pendulum.instance(conversation.start_date).to_iso8601_string()
+            if conversation.start_date is not None
+            else ""
+        )
+        end_date_str = (
+            pendulum.instance(conversation.end_date).to_iso8601_string() if conversation.end_date is not None else ""
+        )
+
         event_dto = DataLakeEventDTO(
             event_name="weni_nexus_data",
             date=pendulum.now().to_iso8601_string(),
@@ -374,8 +393,8 @@ class ClassificationService:
             value=resolution_value,
             metadata={
                 "human_support": has_chats_room,
-                "conversation_start_date": pendulum.instance(conversation.start_date).to_iso8601_string(),
-                "conversation_end_date": pendulum.instance(conversation.end_date).to_iso8601_string(),
+                "conversation_start_date": start_date_str,
+                "conversation_end_date": end_date_str,
                 "conversation_uuid": str(conversation.uuid),
             },
         )

@@ -14,6 +14,7 @@ env = environ.Env(
     SQS_ROOMS_QUEUE_URL=(str, ""),
     SQS_CONVERSATION_DLQ_URL=(str, ""),
     SQS_CONVERSATION_REGION=(str, "us-east-1"),
+    SQS_BILLING_QUEUE_URL=(str, ""),
     DYNAMODB_MESSAGE_TABLE=(str, ""),
     DYNAMODB_REGION=(str, "us-east-1"),
     USE_SENTRY=(bool, False),

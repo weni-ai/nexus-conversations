@@ -250,8 +250,6 @@ def _process_single_project(
 ) -> tuple[int, bool]:
     project_uuid = None
     project_timezone = None
-    # daily_close_cache_acquired = False
-
     try:
         project_uuid = project_data.get("uuid")
         if not project_uuid:
@@ -260,13 +258,6 @@ def _process_single_project(
 
         project_timezone = project_data.get("timezone") or fallback_timezone
         project_timezone = _validate_timezone(project_timezone, fallback_timezone, project_uuid)
-
-        # if not force_close and start_date is None and end_date is None:
-        # slot_acquired, target_date = claim_daily_close_cache_slot(project_uuid, project_timezone)
-        # if not slot_acquired:
-        #     TaskLogger.log("daily_close_already_cached", project_uuid=project_uuid, target_date=target_date)
-        #     return 0, False
-        # daily_close_cache_acquired = True
 
         target_date = get_target_date(project_timezone)
 
@@ -298,10 +289,6 @@ def _process_single_project(
         return conversations_closed, True
 
     except Exception as e:
-        # if daily_close_cache_acquired and project_uuid and project_timezone:
-        #     cache_key, _ = _get_daily_cache_key(project_uuid, project_timezone)
-        #     cache_access.cache.delete(cache_key)
-        #     logger.warning(f"[CloseDailyConversationsTask] Cleared daily cache after error for project {project_uuid}")
         _handle_project_error(e, project_uuid, project_data, project_timezone, force_close)
         return 0, False
 

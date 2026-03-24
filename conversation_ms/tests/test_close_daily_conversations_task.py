@@ -9,15 +9,15 @@ import pytest
 from django.test import override_settings
 
 from conversation_ms.close_daily.constants import CLOSE_DAILY_LOCK_KEY, SYNC_PROJECT_TIMEZONES_LOCK_KEY
-from conversation_ms.models import ConversationMessages
-from conversation_ms.tasks import (
+from conversation_ms.close_daily.runner import (
     _determine_date_range,
     _is_conversation_already_processed,
     _process_conversation_batch,
     _process_project_conversations,
     _process_single_project,
-    close_daily_conversations_task,
 )
+from conversation_ms.models import ConversationMessages
+from conversation_ms.tasks import close_daily_conversations_task
 from conversation_ms.tests.factories import ConversationFactory, ProjectFactory, Resolution
 from conversation_ms.utils.date_helpers import ProjectDay
 
@@ -227,24 +227,23 @@ class TestCloseDailyConversationsTask:
             assert conversations_closed >= 0
 
     @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_daily_close_cache_hit_skips(self, mock_cache):
-        """Skip when cache.add fails: daily close for that calendar day was already recorded."""
+    def test_automatic_single_project_always_attempts_processing(self):
+        """No per-day cache skip: each scheduled run invokes the project processor."""
         project = ProjectFactory()
         project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
 
-        mock_cache.add.return_value = False  # key already exists → idempotent skip
-
-        conversations_closed, success = _process_single_project(
-            project_data,
-            "America/Sao_Paulo",
-            force_close=False,
-            start_date=None,
-            end_date=None,
-        )
+        with patch("conversation_ms.close_daily.runner._process_project_conversations", return_value=0) as mock_proc:
+            conversations_closed, success = _process_single_project(
+                project_data,
+                "America/Sao_Paulo",
+                force_close=False,
+                start_date=None,
+                end_date=None,
+            )
 
         assert conversations_closed == 0
-        assert success is False
+        assert success is True
+        mock_proc.assert_called_once()
 
     @pytest.mark.django_db
     def test_conversation_already_processed_skips(self):
@@ -495,33 +494,10 @@ class TestCloseDailyConversationsTask:
         mock_producer.send_conversation_close.assert_not_called()
 
     @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_cache_prevents_duplicate_processing(self, mock_cache):
-        """Test that cache prevents duplicate processing."""
+    def test_project_processing_error_returns_failure(self):
+        """Unhandled errors in project close are logged and reported as failure (no cache rollback)."""
         project = ProjectFactory()
         project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
-
-        mock_cache.add.return_value = False
-
-        conversations_closed, success = _process_single_project(
-            project_data,
-            "America/Sao_Paulo",
-            force_close=False,
-            start_date=None,
-            end_date=None,
-        )
-
-        assert conversations_closed == 0
-        assert success is False
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_cache_cleared_on_error(self, mock_cache):
-        """Test that cache is cleared on processing error."""
-        project = ProjectFactory()
-        project_data = {"uuid": str(project.uuid), "timezone": "America/Sao_Paulo"}
-
-        mock_cache.add.return_value = True  # Day ended
 
         with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
             mock_process.side_effect = Exception("Processing error")
@@ -534,7 +510,7 @@ class TestCloseDailyConversationsTask:
                 end_date=None,
             )
 
-            assert mock_cache.delete.called
+            assert conversations_closed == 0
             assert success is False
 
     @pytest.mark.django_db

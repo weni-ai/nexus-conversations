@@ -46,6 +46,7 @@ def test_build_conversation_close_billing_payload():
         "start_date": "2024-05-28T13:17:16Z",
         "contact_urn": "whatsapp:5584996765969",
         "resolution": "1",
+        "conversation_uuid": str(conv.uuid),
     }
 
 
@@ -64,6 +65,7 @@ def test_build_conversation_close_billing_payload_uses_created_at_when_no_start_
     assert payload["resolution"] == "0"
     assert payload["channel_uuid"] == str(conv.channel_uuid)
     assert payload["start_date"].endswith("Z")
+    assert payload["conversation_uuid"] == str(conv.uuid)
 
 
 @pytest.mark.django_db
@@ -87,6 +89,7 @@ class TestBillingSQSProducer:
             "start_date": "2024-05-28T13:17:16Z",
             "contact_urn": "whatsapp:5584996765969",
             "resolution": "1",
+            "conversation_uuid": "00000000-0000-0000-0000-000000000002",
         }
 
         producer = BillingSQSProducer(
@@ -114,6 +117,7 @@ class TestBillingSQSProducer:
                     "start_date": "2024-01-01T00:00:00Z",
                     "contact_urn": "u",
                     "resolution": "1",
+                    "conversation_uuid": "00000000-0000-0000-0000-0000000000bb",
                 }
             )
 
@@ -126,6 +130,7 @@ class TestBillingSQSProducer:
                     "start_date": "2024-01-01T00:00:00Z",
                     "contact_urn": "u",
                     "resolution": "1",
+                    "conversation_uuid": "00000000-0000-0000-0000-000000000099",
                 }
             )
         mock_get_client.assert_not_called()
@@ -152,6 +157,7 @@ class TestBillingSQSProducer:
             "start_date": "2024-01-01T00:00:00Z",
             "contact_urn": "u1",
             "resolution": "0",
+            "conversation_uuid": "00000000-0000-0000-0000-0000000000aa",
         }
 
         with patch("conversation_ms.producers.sqs_producer.sentry_sdk.push_scope", return_value=scope_cm):

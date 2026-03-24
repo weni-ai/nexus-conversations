@@ -17,7 +17,13 @@ SQS_DEDUP_ID_MAX_LENGTH = 128
 # SQS FIFO MessageGroupId max length
 SQS_GROUP_ID_MAX_LENGTH = 128
 
-_REQUIRED_CLOSE_KEYS = ("channel_uuid", "start_date", "contact_urn", "resolution")
+_REQUIRED_CLOSE_KEYS = (
+    "channel_uuid",
+    "start_date",
+    "contact_urn",
+    "resolution",
+    "conversation_uuid",
+)
 
 
 def _normalize_sqs_deduplication_id(value: str) -> str:
@@ -56,7 +62,8 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     Build the billing SQS body for a closed conversation.
 
     Shape matches billing consumer expectation, e.g.::
-        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code).
+        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code),
+        conversation_uuid.
     """
     if not conversation.channel_uuid or not conversation.contact_urn:
         return None
@@ -77,6 +84,7 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
         "start_date": start_date,
         "contact_urn": conversation.contact_urn,
         "resolution": str(conversation.resolution),
+        "conversation_uuid": str(conversation.uuid),
     }
 
 
@@ -105,7 +113,7 @@ class BillingSQSProducer:
     ) -> None:
         """
         Send one conversation-close message. ``payload`` must contain only the billing fields
-        (channel_uuid, start_date, contact_urn, resolution). Raises on failure.
+        (channel_uuid, start_date, contact_urn, resolution, conversation_uuid). Raises on failure.
         """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
@@ -118,6 +126,7 @@ class BillingSQSProducer:
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
             "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},
+            "conversation_uuid": {"StringValue": normalized["conversation_uuid"], "DataType": "String"},
         }
 
         try:
@@ -129,12 +138,17 @@ class BillingSQSProducer:
                 MessageDeduplicationId=dedup,
                 MessageAttributes=message_attributes,
             )
-            logger.debug("Sent billing SQS conversation_close channel_uuid=%s", normalized["channel_uuid"])
+            logger.debug(
+                "Sent billing SQS conversation_close channel_uuid=%s conversation_uuid=%s",
+                normalized["channel_uuid"],
+                normalized["conversation_uuid"],
+            )
         except Exception as e:
             logger.error("Failed to send message to billing SQS: %s", e, exc_info=True)
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("channel_uuid", normalized["channel_uuid"])
                 scope.set_tag("contact_urn", normalized["contact_urn"])
+                scope.set_tag("conversation_uuid", normalized["conversation_uuid"])
                 scope.set_context("billing_close_payload", body)
                 sentry_sdk.capture_exception(e)
             raise

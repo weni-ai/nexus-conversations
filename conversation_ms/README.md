@@ -125,7 +125,7 @@ MessageService.process_message_received/sent()
 - `SQS_CONVERSATION_DLQ_URL`: Dead Letter Queue URL
 - `LAMBDA_AWS_REGION`: AWS region used by the SQS **consumer** (`conversation_ms/main.py` → `ConversationSQSConsumer`) and by **`ClassificationService`** for the resolution Lambda client (`boto3` Lambda). Align this with the region where those resources live (today this is the primary “SQS/Lambda” region in practice).
 - `SQS_CONVERSATION_REGION`: AWS region for the **billing** SQS FIFO producer (`BillingSQSProducer` / `get_billing_sqs_producer`) and any other code that passes this setting explicitly for conversation-related SQS sends.
-- `SQS_BILLING_QUEUE_URL`: Outbound FIFO queue for billing on **conversation close** (only after resolution bulk-update succeeds). Message body JSON: `channel_uuid`, `start_date` (UTC `Z`), `contact_urn`, `resolution` (string code). Omitted when unset.
+- `SQS_BILLING_QUEUE_URL`: Outbound FIFO queue for billing on **conversation close** (only after resolution bulk-update succeeds). Message body JSON: `channel_uuid`, `start_date` (UTC `Z`), `contact_urn`, `resolution` (string code), `conversation_uuid`. Omitted when unset.
 - `DYNAMODB_MESSAGE_TABLE`: DynamoDB table name for messages
 - `DYNAMODB_REGION`: DynamoDB region
 

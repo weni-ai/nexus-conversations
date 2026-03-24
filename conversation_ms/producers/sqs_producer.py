@@ -1,13 +1,11 @@
 import json
 import logging
 import uuid
-from datetime import timezone as dt_timezone
 from typing import Any, Dict, Optional
 
 import pendulum
 import sentry_sdk
 from django.conf import settings
-from django.utils import timezone as django_timezone
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.models import Conversation
@@ -67,12 +65,12 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     if dt is None:
         return None
 
-    if django_timezone.is_naive(dt):
-        dt = django_timezone.make_aware(dt, dt_timezone.utc)
+    if dt.tzinfo is None:
+        p = pendulum.instance(dt, tz="UTC")
     else:
-        dt = dt.astimezone(dt_timezone.utc)
+        p = pendulum.instance(dt).in_timezone("UTC")
 
-    start_date = pendulum.instance(dt).in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss") + "Z"
+    start_date = p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
 
     return {
         "channel_uuid": str(conversation.channel_uuid),

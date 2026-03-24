@@ -439,6 +439,7 @@ class TestCloseDailyConversationsTask:
         assert args[0]["resolution"] == Resolution.RESOLVED
         assert args[0]["contact_urn"] == conversation.contact_urn
         assert args[0]["channel_uuid"] == str(conversation.channel_uuid)
+        assert args[0]["uuid"] == str(conversation.uuid)
 
     @pytest.mark.django_db
     def test_batch_processing_skips_billing_sqs_when_resolution_bulk_update_fails(self, settings):

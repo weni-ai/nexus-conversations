@@ -204,6 +204,7 @@ Events with `key` field `weni_csat` or `weni_nps` are:
 | `DEFAULT_DATABASE`           | PostgreSQL connection | Required                   |
 | `CELERY_BROKER_URL`          | Redis connection      | `redis://localhost:6379/0` |
 | `SQS_CONVERSATION_QUEUE_URL` | SQS FIFO queue URL    | Required                   |
+| `LAMBDA_AWS_REGION`          | Region for SQS consumer (`main.py`) and resolution Lambda | `us-east-1` (see `settings.py`) |
 | `DYNAMODB_MESSAGE_TABLE`     | DynamoDB table name   | Required                   |
 | `USE_SENTRY`                 | Enable Sentry         | `False`                    |
 | `SENTRY_URL`                 | Sentry DSN            | -                          |

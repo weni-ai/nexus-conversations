@@ -435,9 +435,7 @@ class TestCloseDailyConversationsTask:
             mock_service.classify_conversation.side_effect = _classify
             mock_class_service.return_value = mock_service
             with patch("conversation_ms.close_daily.runner.get_billing_sqs_producer", return_value=mock_producer):
-                with patch(
-                    "conversation_ms.close_daily.runner.MessageMigrationService"
-                ) as mock_migration_cls:
+                with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
                     mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
                         "persisted": False
                     }
@@ -484,9 +482,7 @@ class TestCloseDailyConversationsTask:
                     "conversation_ms.close_daily.runner.Conversation.objects.bulk_update",
                     side_effect=_bulk_update_side_effect,
                 ):
-                    with patch(
-                        "conversation_ms.close_daily.runner.MessageMigrationService"
-                    ) as mock_migration_cls:
+                    with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
                         mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
                             "persisted": False
                         }

@@ -552,11 +552,12 @@ def close_project_conversations_task(
         )
     except SoftTimeLimitExceeded:
         logger.error(f"[CloseProjectTask] Soft time limit exceeded for project {project_uuid}")
-        sentry_sdk.set_tag("project_uuid", project_uuid)
-        sentry_sdk.capture_message(
-            f"close_project_conversations_task soft time limit exceeded: {project_uuid}",
-            level="error",
-        )
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("project_uuid", project_uuid)
+            sentry_sdk.capture_message(
+                f"close_project_conversations_task soft time limit exceeded: {project_uuid}",
+                level="error",
+            )
         return {"status": "timeout", "project_uuid": project_uuid, "conversations_closed": 0}
     except Exception as exc:
         logger.exception(f"[CloseProjectTask] Fatal error processing project {project_uuid}")

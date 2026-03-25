@@ -122,6 +122,11 @@ CLOSE_DAILY_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_LOCK_TTL_SECONDS", default=7
 # Max IN_PROGRESS conversations per project per normal run (0 = unlimited). Reduces long single-task runs.
 CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT = env.int("CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT", default=0)
 
+# Per-project sub-task limits (fan-out architecture)
+CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT", default=1800)
+CLOSE_DAILY_PROJECT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_TIME_LIMIT", default=2100)
+CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", default=2400)
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 

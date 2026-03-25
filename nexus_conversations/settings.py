@@ -127,6 +127,9 @@ CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_SOFT_TIME_LIM
 CLOSE_DAILY_PROJECT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_TIME_LIMIT", default=2100)
 CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", default=2400)
 
+# Parallel classification within each batch (ThreadPoolExecutor)
+CLOSE_DAILY_CLASSIFICATION_THREADS = env.int("CLOSE_DAILY_CLASSIFICATION_THREADS", default=5)
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 

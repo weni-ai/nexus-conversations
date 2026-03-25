@@ -652,10 +652,14 @@ def _process_conversation_batch(
                 try:
                     conv, should_migrate, preloaded_messages = future.result()
                 except Exception as exc:
-                    sentry_sdk.capture_exception(exc)
+                    with sentry_sdk.push_scope() as scope:
+                        scope.set_tag("conversation_uuid", str(original_conv.uuid))
+                        scope.set_tag("project_uuid", project_uuid)
+                        sentry_sdk.capture_exception(exc)
                     logger.error(
                         f"[CloseDailyConversationsTask] thread_failed conversation={original_conv.uuid} "
-                        f"project={project_uuid} error={exc}"
+                        f"project={project_uuid} error={exc}",
+                        exc_info=True,
                     )
                     continue
                 if conv:

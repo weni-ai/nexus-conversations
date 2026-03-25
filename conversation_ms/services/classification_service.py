@@ -30,6 +30,7 @@ class ClassificationService:
         save_resolution: bool = True,
         topics_payload: Optional[List[Dict[str, Any]]] = None,
         messages_override: Optional[List[Dict[str, Any]]] = None,
+        send_to_datalake: bool = True,
     ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
         Main entry point to classify a conversation.
@@ -39,6 +40,9 @@ class ClassificationService:
             save_resolution: If False, returns resolution without saving (for bulk updates)
             topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
             messages_override: Optional preloaded messages to avoid refetch from data stores
+            send_to_datalake: If False, skip sending resolution event to data lake.
+                              Callers that defer persistence (bulk updates) should pass False
+                              and send events only after successful persistence.
 
         Returns:
             Tuple of (conversation, classification, resolution) where:
@@ -83,15 +87,15 @@ class ClassificationService:
             # Just set the resolution on the object without saving (for bulk update)
             conversation.resolution = resolution
 
-        # Send resolution to data lake if feature flag is enabled
         project_uuid = str(conversation.project.uuid)
-        self._send_resolution_to_datalake(
-            resolution=resolution,
-            has_chats_room=conversation.has_chats_room,
-            project_uuid=project_uuid,
-            contact_urn=conversation.contact_urn,
-            conversation=conversation,
-        )
+        if send_to_datalake:
+            self._send_resolution_to_datalake(
+                resolution=resolution,
+                has_chats_room=conversation.has_chats_room,
+                project_uuid=project_uuid,
+                contact_urn=conversation.contact_urn,
+                conversation=conversation,
+            )
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:

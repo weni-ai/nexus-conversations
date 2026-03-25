@@ -1,5 +1,5 @@
 """
-Tests for close_daily_conversations_task.
+Tests for close_daily_conversations_task (dispatcher) and close_project_conversations_task (sub-task).
 """
 
 from unittest.mock import Mock, patch
@@ -8,7 +8,11 @@ import pendulum
 import pytest
 from django.test import override_settings
 
-from conversation_ms.close_daily.constants import CLOSE_DAILY_LOCK_KEY, SYNC_PROJECT_TIMEZONES_LOCK_KEY
+from conversation_ms.close_daily.constants import (
+    CLOSE_DAILY_LOCK_KEY,
+    CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX,
+    SYNC_PROJECT_TIMEZONES_LOCK_KEY,
+)
 from conversation_ms.close_daily.runner import (
     _determine_date_range,
     _is_conversation_already_processed,
@@ -17,7 +21,7 @@ from conversation_ms.close_daily.runner import (
     _process_single_project,
 )
 from conversation_ms.models import ConversationMessages
-from conversation_ms.tasks import close_daily_conversations_task
+from conversation_ms.tasks import close_daily_conversations_task, close_project_conversations_task
 from conversation_ms.tests.factories import ConversationFactory, ProjectFactory, Resolution
 from conversation_ms.utils.date_helpers import ProjectDay
 
@@ -59,138 +63,69 @@ class TestCloseDailyConversationsTask:
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_close_daily_conversations_task_automatic(self, mock_cache):
-        """Test automatic task execution (cron) - processes projects whose day ended."""
-        mock_cache.get.return_value = None  # sync lock not held (default Mock is truthy)
+    def test_dispatcher_enqueues_project_subtasks(self, mock_cache):
+        """Dispatcher scans projects and enqueues one sub-task per project."""
+        mock_cache.get.return_value = None
         ProjectFactory(timezone="America/Sao_Paulo")
 
-        mock_cache.add.return_value = True  # Day ended (cache.add returns True = not processed)
+        mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 1
-
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run()
 
-            assert result["status"] == "success"
-            assert result["projects_scanned"] == 1
-            assert result["projects_processed"] >= 0
-            mock_process.assert_called_once()
+            assert result["status"] == "dispatched"
+            assert result["projects_enqueued"] == 1
+            mock_subtask.delay.assert_called_once()
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_close_daily_conversations_task_force_close(self, mock_cache):
-        """Test force_close processes even if day hasn't ended."""
+    def test_dispatcher_enqueues_with_force_close(self, mock_cache):
+        """Dispatcher forwards force_close to sub-tasks."""
         ProjectFactory(timezone="America/Sao_Paulo")
 
-        mock_cache.add.return_value = False  # Day not ended (already processed)
+        mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 2
-
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run(force_close=True)
 
-            assert result["status"] == "success"
-            mock_process.assert_called_once()
+            assert result["status"] == "dispatched"
+            call_kwargs = mock_subtask.delay.call_args.kwargs
+            assert call_kwargs["force_close"] is True
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_close_daily_conversations_task_force_close_with_start_date(self, mock_cache):
-        """Test force_close with specific start_date."""
+    def test_dispatcher_enqueues_with_date_range(self, mock_cache):
+        """Dispatcher forwards start_date and end_date to sub-tasks."""
         ProjectFactory(timezone="America/Sao_Paulo")
 
         mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 1
-
-            result = close_daily_conversations_task.run(force_close=True, start_date="2024-01-15")
-
-            assert result["status"] == "success"
-            mock_process.assert_called_once()
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_close_daily_conversations_task_force_close_with_date_range(self, mock_cache):
-        """Test force_close with date range."""
-        ProjectFactory(timezone="America/Sao_Paulo")
-
-        mock_cache.add.return_value = True
-
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 3
-
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run(
                 force_close=True, start_date="2024-01-15", end_date="2024-01-17"
             )
 
-            assert result["status"] == "success"
-            mock_process.assert_called_once()
+            assert result["status"] == "dispatched"
+            call_kwargs = mock_subtask.delay.call_args.kwargs
+            assert call_kwargs["start_date"] == "2024-01-15"
+            assert call_kwargs["end_date"] == "2024-01-17"
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_project_with_valid_timezone(self, mock_cache):
-        """Test project with valid timezone."""
-        mock_cache.get.return_value = None
-        ProjectFactory(timezone="America/Sao_Paulo")
-
-        mock_cache.add.return_value = True
-
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
-
-            result = close_daily_conversations_task.run()
-
-            assert result["status"] == "success"
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_project_with_invalid_timezone(self, mock_cache):
-        """Test project with invalid timezone uses fallback."""
-        mock_cache.get.return_value = None
-        ProjectFactory(timezone="Invalid/Timezone")
-
-        mock_cache.add.return_value = True
-
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
-
-            result = close_daily_conversations_task.run()
-
-            assert result["status"] == "success"
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_project_without_timezone(self, mock_cache):
-        """Test project without timezone uses fallback."""
-        mock_cache.get.return_value = None
-        ProjectFactory(timezone=None)
-
-        mock_cache.add.return_value = True
-
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
-
-            result = close_daily_conversations_task.run()
-
-            assert result["status"] == "success"
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
-    def test_different_timezones_same_utc_day(self, mock_cache):
-        """Test projects in different timezones on the same UTC day."""
+    def test_dispatcher_multiple_projects(self, mock_cache):
+        """Dispatcher enqueues one sub-task per project."""
         mock_cache.get.return_value = None
         ProjectFactory(timezone="America/Sao_Paulo")
         ProjectFactory(timezone="America/New_York")
 
         mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
-
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run()
 
-            assert result["status"] == "success"
-            assert mock_process.call_count == 2
+            assert result["status"] == "dispatched"
+            assert result["projects_enqueued"] == 2
+            assert mock_subtask.delay.call_count == 2
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
@@ -279,36 +214,17 @@ class TestCloseDailyConversationsTask:
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_multiple_projects_processed(self, mock_cache):
-        """Each local project is considered for close-daily processing."""
-        mock_cache.get.return_value = None
-        ProjectFactory(timezone="America/Sao_Paulo")
-        ProjectFactory(timezone="America/Sao_Paulo")
-
-        mock_cache.add.return_value = True
-
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
-
-            result = close_daily_conversations_task.run()
-
-            assert result["status"] == "success"
-            assert result["projects_scanned"] == 2
-            assert mock_process.call_count == 2
-
-    @pytest.mark.django_db
-    @patch("conversation_ms.cache_access.cache")
     def test_no_projects_in_database(self, mock_cache):
-        """When there are no projects, the task completes without calling processing."""
+        """When there are no projects, the dispatcher enqueues nothing."""
         mock_cache.get.return_value = None
         mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run()
 
-            assert result["status"] == "success"
-            assert result["projects_scanned"] == 0
-            mock_process.assert_not_called()
+            assert result["status"] == "dispatched"
+            assert result["projects_enqueued"] == 0
+            mock_subtask.delay.assert_not_called()
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
@@ -327,12 +243,11 @@ class TestCloseDailyConversationsTask:
         ProjectFactory(timezone="America/Sao_Paulo")
         mock_cache.add.return_value = True
 
-        with patch("conversation_ms.close_daily.runner._process_project_conversations") as mock_process:
-            mock_process.return_value = 0
+        with patch("conversation_ms.tasks.close_project_conversations_task") as mock_subtask:
             result = close_daily_conversations_task.run(skip_sync_lock_check=True)
 
-        assert result["status"] == "success"
-        mock_process.assert_called_once()
+        assert result["status"] == "dispatched"
+        mock_subtask.delay.assert_called_once()
 
     @pytest.mark.django_db
     def test_project_not_found_in_db(self):
@@ -493,6 +408,82 @@ class TestCloseDailyConversationsTask:
                         )
 
         mock_producer.send_conversation_close.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_batch_processing_sends_datalake_events_after_resolution_persisted(self):
+        """Datalake events are sent only after resolution bulk_update succeeds."""
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+        conversation = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner._send_datalake_events") as mock_datalake:
+                with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
+                    mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                        "persisted": False
+                    }
+                    _process_conversation_batch(
+                        [conversation],
+                        str(project.uuid),
+                        project_day.get_end_date_utc(),
+                    )
+
+        mock_datalake.assert_called_once()
+        sent_conversations = mock_datalake.call_args[0][0]
+        assert len(sent_conversations) == 1
+        assert sent_conversations[0].uuid == conversation.uuid
+
+    @pytest.mark.django_db
+    def test_batch_processing_skips_datalake_events_when_resolution_bulk_update_fails(self):
+        """Datalake events are NOT sent when resolution bulk_update fails."""
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+        conversation = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner._send_datalake_events") as mock_datalake:
+
+                def _bulk_update_side_effect(objs, fields, batch_size=50):
+                    if list(fields) == ["resolution"]:
+                        raise RuntimeError("bulk_update failed")
+
+                with patch(
+                    "conversation_ms.close_daily.runner.Conversation.objects.bulk_update",
+                    side_effect=_bulk_update_side_effect,
+                ):
+                    with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
+                        mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                            "persisted": False
+                        }
+                        _process_conversation_batch(
+                            [conversation],
+                            str(project.uuid),
+                            project_day.get_end_date_utc(),
+                        )
+
+        mock_datalake.assert_not_called()
 
     @pytest.mark.django_db
     def test_project_processing_error_returns_failure(self):
@@ -680,22 +671,76 @@ class TestCloseDailyConversationsTask:
 
     @pytest.mark.django_db
     @patch("conversation_ms.cache_access.cache")
-    def test_close_daily_partial_success_reports_failed_projects(self, mock_cache):
-        mock_cache.get.return_value = None
+    def test_project_subtask_processes_project(self, mock_cache):
+        """Sub-task processes a single project via run_close_project."""
+        project = ProjectFactory(timezone="America/Sao_Paulo")
         mock_cache.add.return_value = True
-        p1 = ProjectFactory(timezone="America/Sao_Paulo")
-        p2 = ProjectFactory(timezone="America/Sao_Paulo")
-
-        def _single_side_effect(project_data, *args, **kwargs):
-            if str(project_data.get("uuid")) == str(p2.uuid):
-                return (0, False)
-            return (1, True)
 
         with patch("conversation_ms.close_daily.runner._process_single_project") as mock_single:
-            mock_single.side_effect = _single_side_effect
-            result = close_daily_conversations_task.run(force_close=True)
+            mock_single.return_value = (5, True)
 
-        assert result["status"] == "partial_success"
-        assert str(p2.uuid) in result["projects_failed_uuids"]
-        assert result["conversations_closed"] == 1
-        assert result["batches_failed"] == 0
+            result = close_project_conversations_task.run(
+                project_uuid=str(project.uuid),
+                project_timezone="America/Sao_Paulo",
+            )
+
+        assert result["status"] == "success"
+        assert result["conversations_closed"] == 5
+        mock_single.assert_called_once()
+
+    @pytest.mark.django_db
+    @patch("conversation_ms.cache_access.cache")
+    def test_project_subtask_skips_when_project_lock_held(self, mock_cache):
+        """Sub-task skips if another sub-task already holds the project lock."""
+        project = ProjectFactory(timezone="America/Sao_Paulo")
+
+        def add_side_effect(key, *args, **kwargs):
+            if key.startswith(CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX):
+                return False
+            return True
+
+        mock_cache.add = Mock(side_effect=add_side_effect)
+
+        result = close_project_conversations_task.run(
+            project_uuid=str(project.uuid),
+            project_timezone="America/Sao_Paulo",
+        )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "project_already_running"
+
+    @pytest.mark.django_db
+    @patch("conversation_ms.cache_access.cache")
+    def test_project_subtask_releases_lock_after_completion(self, mock_cache):
+        """Sub-task releases the project lock after processing."""
+        project = ProjectFactory(timezone="America/Sao_Paulo")
+        mock_cache.add.return_value = True
+
+        with patch("conversation_ms.close_daily.runner._process_single_project") as mock_single:
+            mock_single.return_value = (0, True)
+
+            close_project_conversations_task.run(
+                project_uuid=str(project.uuid),
+                project_timezone="America/Sao_Paulo",
+            )
+
+        expected_lock_key = f"{CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX}{project.uuid}"
+        mock_cache.delete.assert_called_with(expected_lock_key)
+
+    @pytest.mark.django_db
+    @patch("conversation_ms.cache_access.cache")
+    def test_project_subtask_reports_failure(self, mock_cache):
+        """Sub-task reports failure status when _process_single_project fails."""
+        project = ProjectFactory(timezone="America/Sao_Paulo")
+        mock_cache.add.return_value = True
+
+        with patch("conversation_ms.close_daily.runner._process_single_project") as mock_single:
+            mock_single.return_value = (0, False)
+
+            result = close_project_conversations_task.run(
+                project_uuid=str(project.uuid),
+                project_timezone="America/Sao_Paulo",
+            )
+
+        assert result["status"] == "failed"
+        assert result["conversations_closed"] == 0

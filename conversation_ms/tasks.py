@@ -6,6 +6,8 @@ from uuid import UUID
 
 import pendulum
 import sentry_sdk
+from celery.exceptions import SoftTimeLimitExceeded
+from django.conf import settings
 
 from conversation_ms import cache_access
 from conversation_ms.adapters.entities import ResolutionEntities
@@ -17,7 +19,8 @@ from conversation_ms.close_daily.constants import (
 )
 from conversation_ms.close_daily.runner import (
     TaskLogger,
-    run_close_daily_conversations,
+    dispatch_close_daily,
+    run_close_project,
 )
 from conversation_ms.models import Conversation, Project
 from conversation_ms.services.classification_service import (
@@ -494,10 +497,8 @@ def close_daily_conversations_task(
     skip_close_daily_lock_check: bool = False,
 ):
     """
-    Task to close all open conversations (resolution=2) for projects whose day has ended.
-
-    Uses each project's stored ``timezone`` (updated by ``sync_project_timezones_task``).
-    Missing or invalid timezone falls back to FALLBACK_TIMEZONE.
+    Dispatcher task: checks locks, scans projects and enqueues a
+    ``close_project_conversations_task`` per project.
 
     Args:
         force_close: Force processing even if day hasn't ended
@@ -508,7 +509,7 @@ def close_daily_conversations_task(
     """
     TaskLogger.log("task_start")
     try:
-        return run_close_daily_conversations(
+        return dispatch_close_daily(
             force_close=force_close,
             start_date=start_date,
             end_date=end_date,
@@ -516,7 +517,50 @@ def close_daily_conversations_task(
             skip_close_daily_lock_check=skip_close_daily_lock_check,
         )
     except Exception as exc:
-        logger.exception("[CloseDailyConversationsTask] Fatal error in daily conversation closing task")
+        logger.exception("[CloseDailyDispatcher] Fatal error in dispatcher task")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.close_project_conversations_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    soft_time_limit=getattr(settings, "CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT", 1800),
+    time_limit=getattr(settings, "CLOSE_DAILY_PROJECT_TIME_LIMIT", 2100),
+)
+def close_project_conversations_task(
+    self,
+    project_uuid: str,
+    project_timezone: str,
+    force_close: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """
+    Sub-task: process conversations for a single project.
+    Enqueued by the dispatcher ``close_daily_conversations_task``.
+    Has its own per-project lock, retry and time limit.
+    """
+    try:
+        return run_close_project(
+            project_uuid=project_uuid,
+            project_timezone=project_timezone,
+            force_close=force_close,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except SoftTimeLimitExceeded:
+        logger.error(f"[CloseProjectTask] Soft time limit exceeded for project {project_uuid}")
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("project_uuid", project_uuid)
+            sentry_sdk.capture_message(
+                f"close_project_conversations_task soft time limit exceeded: {project_uuid}",
+                level="error",
+            )
+        return {"status": "timeout", "project_uuid": project_uuid, "conversations_closed": 0}
+    except Exception as exc:
+        logger.exception(f"[CloseProjectTask] Fatal error processing project {project_uuid}")
         raise self.retry(exc=exc)
 
 

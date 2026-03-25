@@ -19,6 +19,7 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.close_daily.constants import (
     CLOSE_DAILY_LOCK_KEY,
     CLOSE_DAILY_PROJECT_CHUNK,
+    CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX,
     SYNC_PROJECT_TIMEZONES_LOCK_KEY,
 )
 from conversation_ms.models import Conversation, Project
@@ -39,6 +40,10 @@ def _get_close_daily_lock_ttl_seconds() -> int:
 
 def _close_daily_lock_enabled() -> bool:
     return bool(getattr(settings, "CLOSE_DAILY_LOCK_ENABLED", True))
+
+
+def _get_project_lock_ttl_seconds() -> int:
+    return int(getattr(settings, "CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", 2400))
 
 
 def _max_conversations_per_project_normal_run() -> Optional[int]:
@@ -418,6 +423,7 @@ def _classify_single_conversation(
             save_resolution=False,
             topics_payload=cached_topics,
             messages_override=preloaded_messages,
+            send_to_datalake=False,
         )
         if conv and resolution:
             conv.resolution = resolution
@@ -496,6 +502,21 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
         except Exception as e:
             logger.warning(
                 "[CloseDailyConversationsTask] Billing SQS send failed "
+                f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
+                exc_info=True,
+            )
+
+
+def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
+    from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
+
+    for conv in conversations:
+        try:
+            event_dto = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
+            send_data_lake_event.delay(event_dto.dict())
+        except Exception as e:
+            logger.warning(
+                "[CloseDailyConversationsTask] Datalake event send failed "
                 f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
                 exc_info=True,
             )
@@ -586,6 +607,7 @@ def _process_conversation_batch(
         )
         if resolutions_persisted:
             _send_billing_close_to_sqs(conversations_to_update_resolution, project_uuid)
+            _send_datalake_events(conversations_to_update_resolution, project_uuid)
         _queue_message_migrations(conversations_to_migrate, project_uuid)
 
     except Exception as e:
@@ -705,7 +727,7 @@ def _process_project_conversations(
     return conversations_closed
 
 
-def run_close_daily_conversations(
+def dispatch_close_daily(
     force_close: bool = False,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -713,8 +735,10 @@ def run_close_daily_conversations(
     skip_close_daily_lock_check: bool = False,
 ) -> dict:
     """
-    Core close-daily run: sync-lock skip, optional distributed lock, scan projects, aggregate metrics.
+    Dispatcher: checks locks, scans projects, enqueues a sub-task per project.
     """
+    from conversation_ms.tasks import close_project_conversations_task
+
     if (
         not skip_sync_lock_check
         and not force_close
@@ -722,102 +746,91 @@ def run_close_daily_conversations(
         and end_date is None
         and cache_access.cache.get(SYNC_PROJECT_TIMEZONES_LOCK_KEY)
     ):
-        logger.info("[CloseDailyConversationsTask] Skipping scheduled run: sync_project_timezones_task is in progress")
+        logger.info("[CloseDailyDispatcher] Skipping scheduled run: sync_project_timezones_task is in progress")
         return {
             "status": "skipped",
             "reason": "sync_project_timezones_in_progress",
-            "projects_scanned": 0,
-            "projects_processed": 0,
-            "conversations_closed": 0,
-            "projects_failed_uuids": [],
-            "batches_failed": 0,
+            "projects_enqueued": 0,
         }
 
     lock_acquired = False
     try:
         if _close_daily_lock_enabled() and not skip_close_daily_lock_check:
             if not cache_access.cache.add(CLOSE_DAILY_LOCK_KEY, "1", timeout=_get_close_daily_lock_ttl_seconds()):
-                logger.info("[CloseDailyConversationsTask] Skipping run: another close_daily instance holds the lock")
+                logger.info("[CloseDailyDispatcher] Skipping run: another close_daily instance holds the lock")
                 return {
                     "status": "skipped",
                     "reason": "close_daily_already_running",
-                    "projects_scanned": 0,
-                    "projects_processed": 0,
-                    "conversations_closed": 0,
-                    "projects_failed_uuids": [],
-                    "batches_failed": 0,
+                    "projects_enqueued": 0,
                 }
             lock_acquired = True
 
         fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
-        projects_processed = 0
-        conversations_closed = 0
-        projects_scanned = 0
-        batch: list = []
-        batch_index = 0
-        all_failed_projects: list[str] = []
-        batch_metrics: dict = {"batches_failed": 0}
+        projects_enqueued = 0
 
         for project in (
             Project.objects.only("uuid", "timezone").order_by("uuid").iterator(chunk_size=CLOSE_DAILY_PROJECT_CHUNK)
         ):
-            projects_scanned += 1
-            batch.append({"uuid": str(project.uuid), "timezone": project.timezone or None})
-            if len(batch) >= CLOSE_DAILY_PROJECT_CHUNK:
-                batch_index += 1
-                page_closed, page_proc, page_failed = _process_projects_page(
-                    batch,
-                    fallback_timezone,
-                    force_close,
-                    start_date,
-                    end_date,
-                    batch_metrics=batch_metrics,
-                )
-                conversations_closed += page_closed
-                projects_processed += page_proc
-                all_failed_projects.extend(page_failed)
-                batch = []
-
-        if batch:
-            batch_index += 1
-            page_closed, page_proc, page_failed = _process_projects_page(
-                batch,
-                fallback_timezone,
-                force_close,
-                start_date,
-                end_date,
-                batch_metrics=batch_metrics,
+            project_timezone = project.timezone or fallback_timezone
+            close_project_conversations_task.delay(
+                project_uuid=str(project.uuid),
+                project_timezone=project_timezone,
+                force_close=force_close,
+                start_date=start_date,
+                end_date=end_date,
             )
-            conversations_closed += page_closed
-            projects_processed += page_proc
-            all_failed_projects.extend(page_failed)
+            projects_enqueued += 1
 
-        TaskLogger.log("last_batch", batch_index=batch_index, projects_scanned=projects_scanned)
-        TaskLogger.log(
-            "task_completed",
-            projects_scanned=projects_scanned,
-            projects_processed=projects_processed,
-            conversations_closed=conversations_closed,
-        )
-
-        batches_failed = int(batch_metrics.get("batches_failed", 0))
         logger.info(
-            "[CloseDailyConversationsTask] metrics "
-            f"projects_scanned={projects_scanned} projects_processed={projects_processed} "
-            f"projects_failed={len(all_failed_projects)} conversations_closed={conversations_closed} "
-            f"batches_failed={batches_failed}"
+            f"[CloseDailyDispatcher] Dispatched {projects_enqueued} project sub-tasks. " f"force_close={force_close}"
         )
 
-        status = "success" if not all_failed_projects else "partial_success"
         return {
-            "status": status,
-            "projects_scanned": projects_scanned,
-            "projects_processed": projects_processed,
-            "conversations_closed": conversations_closed,
-            "projects_failed_uuids": all_failed_projects,
-            "batches_failed": batches_failed,
+            "status": "dispatched",
+            "projects_enqueued": projects_enqueued,
         }
 
     finally:
         if lock_acquired:
             cache_access.cache.delete(CLOSE_DAILY_LOCK_KEY)
+
+
+def run_close_project(
+    project_uuid: str,
+    project_timezone: str,
+    force_close: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
+    """
+    Process a single project's conversations with per-project locking.
+    Called by the per-project Celery sub-task.
+    """
+    lock_key = f"{CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX}{project_uuid}"
+    lock_ttl = _get_project_lock_ttl_seconds()
+
+    if not cache_access.cache.add(lock_key, "1", timeout=lock_ttl):
+        logger.info(f"[CloseProjectTask] Skipping project {project_uuid}: another sub-task holds the lock")
+        return {"status": "skipped", "reason": "project_already_running", "conversations_closed": 0}
+
+    try:
+        fallback_timezone = getattr(settings, "FALLBACK_TIMEZONE", "America/Sao_Paulo")
+        project_data = {"uuid": project_uuid, "timezone": project_timezone}
+
+        conversations_closed, success = _process_single_project(
+            project_data,
+            fallback_timezone,
+            force_close,
+            start_date,
+            end_date,
+        )
+
+        status = "success" if success else "failed"
+        return {
+            "status": status,
+            "project_uuid": project_uuid,
+            "conversations_closed": conversations_closed,
+        }
+
+    finally:
+        cache_access.cache.delete(lock_key)

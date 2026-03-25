@@ -508,31 +508,11 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
 
 
 def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
-    from conversation_ms.adapters.data_lake import DataLakeEventDTO, send_data_lake_event
+    from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
 
     for conv in conversations:
         try:
-            resolution_value = ResolutionEntities.resolution_mapping(str(conv.resolution))
-            start_date_str = (
-                pendulum.instance(conv.start_date).to_iso8601_string() if conv.start_date is not None else ""
-            )
-            end_date_str = pendulum.instance(conv.end_date).to_iso8601_string() if conv.end_date is not None else ""
-
-            event_dto = DataLakeEventDTO(
-                event_name="weni_nexus_data",
-                date=pendulum.now().to_iso8601_string(),
-                project=project_uuid,
-                contact_urn=conv.contact_urn,
-                key="conversation_classification",
-                value_type="string",
-                value=resolution_value,
-                metadata={
-                    "human_support": conv.has_chats_room,
-                    "conversation_start_date": start_date_str,
-                    "conversation_end_date": end_date_str,
-                    "conversation_uuid": str(conv.uuid),
-                },
-            )
+            event_dto = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
             send_data_lake_event.delay(event_dto.dict())
         except Exception as e:
             logger.warning(

@@ -2,11 +2,10 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-import pendulum
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
-from conversation_ms.adapters.data_lake import DataLakeEventDTO, send_data_lake_event
+from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
@@ -376,31 +375,5 @@ class ClassificationService:
             logger.warning("Cannot send to data lake: conversation object is None")
             return
 
-        resolution_value = ResolutionEntities.resolution_mapping(resolution)
-
-        start_date_str = (
-            pendulum.instance(conversation.start_date).to_iso8601_string()
-            if conversation.start_date is not None
-            else ""
-        )
-        end_date_str = (
-            pendulum.instance(conversation.end_date).to_iso8601_string() if conversation.end_date is not None else ""
-        )
-
-        event_dto = DataLakeEventDTO(
-            event_name="weni_nexus_data",
-            date=pendulum.now().to_iso8601_string(),
-            project=project_uuid,
-            contact_urn=contact_urn,
-            key="conversation_classification",
-            value_type="string",
-            value=resolution_value,
-            metadata={
-                "human_support": has_chats_room,
-                "conversation_start_date": start_date_str,
-                "conversation_end_date": end_date_str,
-                "conversation_uuid": str(conversation.uuid),
-            },
-        )
-        validated_event = event_dto.dict()
-        send_data_lake_event.delay(validated_event)
+        event_dto = build_conversation_classification_event(conversation, project_uuid, resolution)
+        send_data_lake_event.delay(event_dto.dict())

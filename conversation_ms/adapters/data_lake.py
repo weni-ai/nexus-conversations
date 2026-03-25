@@ -7,10 +7,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+import pendulum
 import sentry_sdk
 from weni_datalake_sdk.clients.client import send_event_data
 from weni_datalake_sdk.paths.events_path import EventPath
 
+from conversation_ms.adapters.entities import ResolutionEntities
 from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,35 @@ class DataLakeEventDTO:
             "value": self.value,
             "metadata": self.metadata,
         }
+
+
+def build_conversation_classification_event(
+    conversation,
+    project_uuid: str,
+    resolution: str,
+) -> DataLakeEventDTO:
+    resolution_value = ResolutionEntities.resolution_mapping(resolution)
+    start_date_str = (
+        pendulum.instance(conversation.start_date).to_iso8601_string() if conversation.start_date is not None else ""
+    )
+    end_date_str = (
+        pendulum.instance(conversation.end_date).to_iso8601_string() if conversation.end_date is not None else ""
+    )
+    return DataLakeEventDTO(
+        event_name="weni_nexus_data",
+        date=pendulum.now().to_iso8601_string(),
+        project=project_uuid,
+        contact_urn=conversation.contact_urn,
+        key="conversation_classification",
+        value_type="string",
+        value=resolution_value,
+        metadata={
+            "human_support": conversation.has_chats_room,
+            "conversation_start_date": start_date_str,
+            "conversation_end_date": end_date_str,
+            "conversation_uuid": str(conversation.uuid),
+        },
+    )
 
 
 @celery_app.task

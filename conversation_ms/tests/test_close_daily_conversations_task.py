@@ -560,7 +560,8 @@ class TestCloseDailyConversationsTask:
 
             assert conversations_closed >= 0
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
+    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=1)
     @patch("conversation_ms.close_daily.runner._queue_message_migrations")
     @patch("conversation_ms.services.message_migration_service.MessageRepository.get_messages_from_dynamo")
     def test_batch_persists_messages_before_classification_for_retry(
@@ -744,3 +745,120 @@ class TestCloseDailyConversationsTask:
 
         assert result["status"] == "failed"
         assert result["conversations_closed"] == 0
+
+
+class TestThreadedClassification:
+    """Tests for threaded classification within _process_conversation_batch."""
+
+    @pytest.mark.django_db
+    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=1)
+    def test_single_thread_processes_all_conversations(self):
+        """With threads=1 the batch still classifies every conversation."""
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+
+        conversations = ConversationFactory.create_batch(
+            3,
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
+                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                    "persisted": False
+                }
+                conversations_closed = _process_conversation_batch(
+                    conversations,
+                    str(project.uuid),
+                    project_day.get_end_date_utc(),
+                )
+
+        assert conversations_closed == 3
+
+    @pytest.mark.django_db
+    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=3)
+    def test_multiple_threads_process_all_conversations(self):
+        """With threads>1, all conversations are classified regardless of execution order."""
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+
+        conversations = ConversationFactory.create_batch(
+            5,
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+
+        def _classify(conv, *args, **kwargs):
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
+                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                    "persisted": False
+                }
+                conversations_closed = _process_conversation_batch(
+                    conversations,
+                    str(project.uuid),
+                    project_day.get_end_date_utc(),
+                )
+
+        assert conversations_closed == 5
+
+    @pytest.mark.django_db
+    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=2)
+    def test_thread_exception_does_not_block_other_conversations(self):
+        """An exception in one thread does not prevent other conversations from being processed."""
+        project = ProjectFactory()
+        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
+
+        conv_ok = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+        conv_fail = ConversationFactory(
+            project=project,
+            resolution=Resolution.IN_PROGRESS,
+            start_date=project_day.start_of_day_utc,
+        )
+
+        call_count = 0
+
+        def _classify(conv, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if conv.uuid == conv_fail.uuid:
+                raise RuntimeError("Lambda timeout")
+            conv.resolution = Resolution.RESOLVED
+            return (conv, None, Resolution.RESOLVED)
+
+        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
+            mock_service = Mock()
+            mock_service.classify_conversation.side_effect = _classify
+            mock_class_service.return_value = mock_service
+            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
+                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
+                    "persisted": False
+                }
+                conversations_closed = _process_conversation_batch(
+                    [conv_ok, conv_fail],
+                    str(project.uuid),
+                    project_day.get_end_date_utc(),
+                )
+
+        assert call_count == 2
+        assert conversations_closed == 1

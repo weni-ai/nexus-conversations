@@ -7,6 +7,7 @@ Imported by ``conversation_ms.tasks`` so tests can patch the same public helpers
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +45,10 @@ def _close_daily_lock_enabled() -> bool:
 
 def _get_project_lock_ttl_seconds() -> int:
     return int(getattr(settings, "CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", 2400))
+
+
+def _get_classification_threads() -> int:
+    return int(getattr(settings, "CLOSE_DAILY_CLASSIFICATION_THREADS", 5))
 
 
 def _max_conversations_per_project_normal_run() -> Optional[int]:
@@ -583,6 +588,28 @@ def _persist_messages_before_classification(
         return None
 
 
+def _classify_conversation_worker(
+    conversation: Conversation,
+    service: ClassificationService,
+    cached_topics: Optional[List[Dict[str, Any]]],
+    project_uuid: str,
+    end_date_utc: pendulum.DateTime,
+    project_timezone: Optional[str],
+    migration_service: MessageMigrationService,
+) -> tuple[Optional[Conversation], bool, Optional[List[Dict[str, Any]]]]:
+    preloaded_messages = _persist_messages_before_classification(conversation, project_uuid, migration_service)
+    conv, should_migrate = _classify_single_conversation(
+        conversation,
+        service,
+        cached_topics,
+        project_uuid,
+        end_date_utc,
+        project_timezone,
+        preloaded_messages=preloaded_messages,
+    )
+    return conv, should_migrate, preloaded_messages
+
+
 def _process_conversation_batch(
     conversation_batch: list[Conversation],
     project_uuid: str,
@@ -605,22 +632,37 @@ def _process_conversation_batch(
         _bulk_update_conversation_end_dates(conversation_batch, project_uuid)
         cached_topics = _get_cached_topics_for_batch(conversation_batch, service, topics_cache)
 
-        for conversation in conversation_batch:
-            preloaded_messages = _persist_messages_before_classification(conversation, project_uuid, migration_service)
-            conv, should_migrate = _classify_single_conversation(
-                conversation,
-                service,
-                cached_topics,
-                project_uuid,
-                end_date_utc,
-                project_timezone,
-                preloaded_messages=preloaded_messages,
-            )
-            if conv:
-                conversations_to_update_resolution.append(conv)
-                if should_migrate and preloaded_messages is None:
-                    conversations_to_migrate.append(conv)
-                conversations_closed += 1
+        max_workers = _get_classification_threads()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _classify_conversation_worker,
+                    conversation,
+                    service,
+                    cached_topics,
+                    project_uuid,
+                    end_date_utc,
+                    project_timezone,
+                    migration_service,
+                ): conversation
+                for conversation in conversation_batch
+            }
+            for future in as_completed(futures):
+                original_conv = futures[future]
+                try:
+                    conv, should_migrate, preloaded_messages = future.result()
+                except Exception as exc:
+                    sentry_sdk.capture_exception(exc)
+                    logger.error(
+                        f"[CloseDailyConversationsTask] thread_failed conversation={original_conv.uuid} "
+                        f"project={project_uuid} error={exc}"
+                    )
+                    continue
+                if conv:
+                    conversations_to_update_resolution.append(conv)
+                    if should_migrate and preloaded_messages is None:
+                        conversations_to_migrate.append(conv)
+                    conversations_closed += 1
 
         resolutions_persisted = _bulk_update_conversation_resolutions(
             conversations_to_update_resolution, project_uuid, len(conversation_batch)

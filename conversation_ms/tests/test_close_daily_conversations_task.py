@@ -338,6 +338,7 @@ class TestCloseDailyConversationsTask:
             resolution=Resolution.IN_PROGRESS,
             start_date=project_day.start_of_day_utc,
         )
+        conversation.end_date = project_day.get_end_date_utc()
         mock_producer = Mock()
 
         def _classify(conv, *args, **kwargs):
@@ -365,6 +366,7 @@ class TestCloseDailyConversationsTask:
         assert args[0]["contact_urn"] == conversation.contact_urn
         assert args[0]["channel_uuid"] == str(conversation.channel_uuid)
         assert args[0]["uuid"] == str(conversation.uuid)
+        assert args[0]["end_date"].endswith("Z")
 
     @pytest.mark.django_db
     def test_batch_processing_skips_billing_sqs_when_resolution_bulk_update_fails(self, settings):

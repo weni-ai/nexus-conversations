@@ -40,11 +40,13 @@ def test_build_conversation_close_billing_payload():
         contact_urn="whatsapp:5584996765969",
         resolution="1",
         start_date=datetime(2024, 5, 28, 13, 17, 16, tzinfo=dt_timezone.utc),
+        end_date=datetime(2024, 5, 29, 2, 59, 59, tzinfo=dt_timezone.utc),
     )
     payload = build_conversation_close_billing_payload(conv)
     assert payload == {
         "channel_uuid": str(conv.channel_uuid),
         "start_date": "2024-05-28T13:17:16Z",
+        "end_date": "2024-05-29T02:59:59Z",
         "contact_urn": "whatsapp:5584996765969",
         "resolution": "1",
         "uuid": str(conv.uuid),
@@ -59,6 +61,7 @@ def test_build_conversation_close_billing_payload_uses_created_at_when_no_start_
         start_date=None,
         contact_urn="whatsapp:1",
         resolution="0",
+        end_date=datetime(2024, 6, 1, 23, 59, 59, tzinfo=dt_timezone.utc),
     )
     payload = build_conversation_close_billing_payload(conv)
     assert payload is not None
@@ -66,6 +69,7 @@ def test_build_conversation_close_billing_payload_uses_created_at_when_no_start_
     assert payload["resolution"] == "0"
     assert payload["channel_uuid"] == str(conv.channel_uuid)
     assert payload["start_date"].endswith("Z")
+    assert payload["end_date"] == "2024-06-01T23:59:59Z"
     assert payload["uuid"] == str(conv.uuid)
 
 
@@ -79,6 +83,19 @@ def test_build_conversation_close_billing_payload_returns_none_without_channel()
 
 
 @pytest.mark.django_db
+def test_build_conversation_close_billing_payload_returns_none_without_end_date():
+    project = ProjectFactory()
+    conv = ConversationFactory(
+        project=project,
+        contact_urn="whatsapp:1",
+        resolution="0",
+        start_date=datetime(2024, 5, 28, 13, 17, 16, tzinfo=dt_timezone.utc),
+    )
+    assert conv.end_date is None
+    assert build_conversation_close_billing_payload(conv) is None
+
+
+@pytest.mark.django_db
 class TestBillingSQSProducer:
     @patch("conversation_ms.producers.sqs_producer.get_boto3_client")
     def test_send_conversation_close_fifo(self, mock_get_client):
@@ -88,6 +105,7 @@ class TestBillingSQSProducer:
         payload = {
             "channel_uuid": "00000000-0000-0000-0000-000000000001",
             "start_date": "2024-05-28T13:17:16Z",
+            "end_date": "2024-05-29T02:59:59Z",
             "contact_urn": "whatsapp:5584996765969",
             "resolution": "1",
             "uuid": "00000000-0000-0000-0000-000000000002",
@@ -112,6 +130,7 @@ class TestBillingSQSProducer:
         assert attrs["channel_uuid"] == {"StringValue": payload["channel_uuid"], "DataType": "String"}
         assert attrs["contact_urn"] == {"StringValue": payload["contact_urn"], "DataType": "String"}
         assert attrs["uuid"] == {"StringValue": payload["uuid"], "DataType": "String"}
+        assert attrs["end_date"] == {"StringValue": payload["end_date"], "DataType": "String"}
 
     def test_send_conversation_close_raises_when_queue_url_missing(self, settings):
         settings.SQS_BILLING_QUEUE_URL = ""
@@ -121,6 +140,7 @@ class TestBillingSQSProducer:
                 {
                     "channel_uuid": "c",
                     "start_date": "2024-01-01T00:00:00Z",
+                    "end_date": "2024-01-01T23:59:59Z",
                     "contact_urn": "u",
                     "resolution": "1",
                     "uuid": "00000000-0000-0000-0000-0000000000bb",
@@ -130,6 +150,7 @@ class TestBillingSQSProducer:
     _FULL_CLOSE_PAYLOAD = {
         "channel_uuid": "00000000-0000-0000-0000-000000000001",
         "start_date": "2024-01-01T00:00:00Z",
+        "end_date": "2024-01-01T23:59:59Z",
         "contact_urn": "u",
         "resolution": "1",
         "uuid": "00000000-0000-0000-0000-000000000099",
@@ -175,6 +196,7 @@ class TestBillingSQSProducer:
         payload = {
             "channel_uuid": "c1",
             "start_date": "2024-01-01T00:00:00Z",
+            "end_date": "2024-01-01T23:59:59Z",
             "contact_urn": "u1",
             "resolution": "0",
             "uuid": "00000000-0000-0000-0000-0000000000aa",

@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import pendulum
@@ -51,8 +52,10 @@ def _validate_billing_close_payload(payload: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _format_dt_utc_z(dt: Any) -> str:
-    """Format a datetime-like value as UTC ISO8601 with ``Z`` suffix (billing contract)."""
+def _format_dt_utc_z(dt: datetime) -> str:
+    """Format *dt* as UTC ISO8601 with ``Z`` suffix (billing contract)."""
+    if not isinstance(dt, datetime):
+        raise ValueError(f"expected datetime for billing date formatting, got {type(dt).__name__!r}")
     if dt.tzinfo is None:
         p = pendulum.instance(dt, tz="UTC")
     else:
@@ -124,9 +127,9 @@ class BillingSQSProducer:
         ``MessageBody`` contains only those six fields (normalized strings).
         Raises ``ValueError`` if validation fails or boto3 send fails.
 
-        FIFO ``MessageDeduplicationId`` is a fresh random value each send so SQS does not
-        suppress legitimate re-deliveries for the same conversation ``uuid`` (billing
-        upserts by conversation id).
+        FIFO ``MessageDeduplicationId`` is a fresh random value on each send so SQS does not
+        suppress legitimate producer re-sends or retries for the same conversation ``uuid`` (billing
+        upserts by conversation id) within the deduplication window.
         """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")

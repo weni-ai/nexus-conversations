@@ -87,7 +87,7 @@ def build_conversation_classification_event(
     )
     return DataLakeEventDTO(
         event_name="weni_nexus_data",
-        date=pendulum.now().to_iso8601_string(),
+        date=start_date_str,
         project=project_uuid,
         contact_urn=conversation.contact_urn,
         key="conversation_classification",

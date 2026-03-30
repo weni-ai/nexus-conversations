@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import pendulum
@@ -20,6 +21,7 @@ SQS_GROUP_ID_MAX_LENGTH = 128
 _REQUIRED_CLOSE_KEYS = (
     "channel_uuid",
     "start_date",
+    "end_date",
     "contact_urn",
     "resolution",
     "uuid",
@@ -50,6 +52,17 @@ def _validate_billing_close_payload(payload: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
+def _format_dt_utc_z(dt: datetime) -> str:
+    """Format *dt* as UTC ISO8601 with ``Z`` suffix (billing contract)."""
+    if not isinstance(dt, datetime):
+        raise ValueError(f"expected datetime for billing date formatting, got {type(dt).__name__!r}")
+    if dt.tzinfo is None:
+        p = pendulum.instance(dt, tz="UTC")
+    else:
+        p = pendulum.instance(dt).in_timezone("UTC")
+    return p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
+
+
 def _fifo_message_group_id(channel_uuid: str, contact_urn: str) -> str:
     raw = f"{channel_uuid}:{contact_urn}"
     if len(raw) <= SQS_GROUP_ID_MAX_LENGTH:
@@ -62,8 +75,8 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     Build the billing SQS body for a closed conversation.
 
     Shape matches billing consumer expectation, e.g.::
-        channel_uuid, start_date (UTC ``Z``), contact_urn, resolution (string code),
-        uuid (conversation primary key).
+        channel_uuid, start_date (UTC ``Z``), end_date (UTC ``Z``), contact_urn,
+        resolution (string code), uuid (conversation primary key).
     """
     if not conversation.channel_uuid or not conversation.contact_urn:
         return None
@@ -72,16 +85,16 @@ def build_conversation_close_billing_payload(conversation: Conversation) -> Opti
     if dt is None:
         return None
 
-    if dt.tzinfo is None:
-        p = pendulum.instance(dt, tz="UTC")
-    else:
-        p = pendulum.instance(dt).in_timezone("UTC")
+    if conversation.end_date is None:
+        return None
 
-    start_date = p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
+    start_date = _format_dt_utc_z(dt)
+    end_date = _format_dt_utc_z(conversation.end_date)
 
     return {
         "channel_uuid": str(conversation.channel_uuid),
         "start_date": start_date,
+        "end_date": end_date,
         "contact_urn": conversation.contact_urn,
         "resolution": str(conversation.resolution),
         "uuid": str(conversation.uuid),
@@ -105,19 +118,18 @@ class BillingSQSProducer:
             self._client = get_boto3_client("sqs", region_name=self._region_name)
         return self._client
 
-    def send_conversation_close(
-        self,
-        payload: Dict[str, Any],
-        *,
-        message_deduplication_id: Optional[str] = None,
-    ) -> None:
+    def send_conversation_close(self, payload: Dict[str, Any]) -> None:
         """
         Send one conversation-close message.
 
         ``payload`` must include non-empty values for: channel_uuid, start_date,
-        contact_urn, resolution, uuid. Additional keys are ignored. The SQS
-        ``MessageBody`` contains only those five fields (normalized strings).
+        end_date, contact_urn, resolution, uuid. Additional keys are ignored. The SQS
+        ``MessageBody`` contains only those six fields (normalized strings).
         Raises ``ValueError`` if validation fails or boto3 send fails.
+
+        FIFO ``MessageDeduplicationId`` is a fresh random value on each send so SQS does not
+        suppress legitimate producer re-sends or retries for the same conversation ``uuid`` (billing
+        upserts by conversation id) within the deduplication window.
         """
         if not self._queue_url:
             raise ValueError("SQS_BILLING_QUEUE_URL is not configured")
@@ -125,12 +137,13 @@ class BillingSQSProducer:
         normalized = _validate_billing_close_payload(payload)
         body = {k: normalized[k] for k in _REQUIRED_CLOSE_KEYS}
 
-        dedup = _normalize_sqs_deduplication_id(message_deduplication_id or str(uuid.uuid4()))
+        dedup = _normalize_sqs_deduplication_id(str(uuid.uuid4()))
         message_group_id = _fifo_message_group_id(normalized["channel_uuid"], normalized["contact_urn"])
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
             "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},
             "uuid": {"StringValue": normalized["uuid"], "DataType": "String"},
+            "end_date": {"StringValue": normalized["end_date"], "DataType": "String"},
         }
 
         try:

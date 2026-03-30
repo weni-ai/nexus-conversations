@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pendulum
 import sentry_sdk
@@ -51,7 +51,7 @@ def _get_classification_threads() -> int:
     return int(getattr(settings, "CLOSE_DAILY_CLASSIFICATION_THREADS", 5))
 
 
-def _max_conversations_per_project_normal_run() -> Optional[int]:
+def _max_conversations_per_project_normal_run() -> int | None:
     cap = int(getattr(settings, "CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT", 0) or 0)
     return cap if cap > 0 else None
 
@@ -96,11 +96,11 @@ def _normalize_date_string(date_string: str) -> str:
 
 def _determine_date_range(
     force_close: bool,
-    start_date: Optional[str],
-    end_date: Optional[str],
+    start_date: str | None,
+    end_date: str | None,
     target_date: str,
     project_timezone: str,
-) -> tuple[pendulum.DateTime, pendulum.DateTime, Optional[ProjectDay]]:
+) -> tuple[pendulum.DateTime, pendulum.DateTime, ProjectDay | None]:
     if force_close and start_date:
         normalized_start = _normalize_date_string(start_date)
         normalized_end = _normalize_date_string(end_date) if end_date else None
@@ -128,9 +128,9 @@ def _validate_timezone(project_timezone: str, fallback_timezone: str, project_uu
 
 def _handle_project_error(
     error: Exception,
-    project_uuid: Optional[str],
-    project_data: Optional[dict],
-    project_timezone: Optional[str],
+    project_uuid: str | None,
+    project_data: dict | None,
+    project_timezone: str | None,
     force_close: bool,
 ):
     if project_uuid:
@@ -184,7 +184,7 @@ class TaskLogger:
         project_timezone: str,
         start_utc: pendulum.DateTime,
         end_utc: pendulum.DateTime,
-        project_day: Optional[ProjectDay],
+        project_day: ProjectDay | None,
         force_close: bool,
     ):
         date_label = project_day.get_date_string() if project_day else "custom_range"
@@ -253,10 +253,10 @@ def _process_single_project(
     project_data: dict,
     fallback_timezone: str,
     force_close: bool,
-    start_date: Optional[str],
-    end_date: Optional[str],
-    classification_service: Optional[ClassificationService] = None,
-    batch_metrics: Optional[dict] = None,
+    start_date: str | None,
+    end_date: str | None,
+    classification_service: ClassificationService | None = None,
+    batch_metrics: dict | None = None,
 ) -> tuple[int, bool]:
     project_uuid = None
     project_timezone = None
@@ -307,10 +307,10 @@ def _process_projects_page(
     projects_data: list,
     fallback_timezone: str,
     force_close: bool,
-    start_date: Optional[str],
-    end_date: Optional[str],
-    classification_service: Optional[ClassificationService] = None,
-    batch_metrics: Optional[dict] = None,
+    start_date: str | None,
+    end_date: str | None,
+    classification_service: ClassificationService | None = None,
+    batch_metrics: dict | None = None,
 ) -> tuple[int, int, list[str]]:
     total_conversations_closed = 0
     projects_processed = 0
@@ -360,7 +360,7 @@ def _get_cached_topics_for_batch(
     conversation_batch: list[Conversation],
     service: ClassificationService,
     topics_cache: dict,
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     if not conversation_batch:
         return None
     first_conversation = conversation_batch[0]
@@ -370,7 +370,7 @@ def _get_cached_topics_for_batch(
     return topics_cache[project_uuid_key]
 
 
-def _calculate_target_date(end_date_utc: pendulum.DateTime, project_timezone: Optional[str]) -> str:
+def _calculate_target_date(end_date_utc: pendulum.DateTime, project_timezone: str | None) -> str:
     if project_timezone:
         try:
             return end_date_utc.in_timezone(project_timezone).to_date_string()
@@ -384,7 +384,7 @@ def _handle_conversation_without_messages(
     conversation_uuid: str,
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
-    project_timezone: Optional[str],
+    project_timezone: str | None,
 ) -> None:
     conversation.resolution = str(ResolutionEntities.UNCLASSIFIED)
     target_date = _calculate_target_date(end_date_utc, project_timezone)
@@ -415,12 +415,12 @@ def _handle_conversation_without_messages(
 def _classify_single_conversation(
     conversation: Conversation,
     service: ClassificationService,
-    cached_topics: Optional[List[Dict[str, Any]]],
+    cached_topics: list[dict[str, Any]] | None,
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
-    project_timezone: Optional[str],
-    preloaded_messages: Optional[List[Dict[str, Any]]] = None,
-) -> tuple[Optional[Conversation], bool]:
+    project_timezone: str | None,
+    preloaded_messages: list[dict[str, Any]] | None = None,
+) -> tuple[Conversation | None, bool]:
     conversation_uuid = str(conversation.uuid)
     try:
         conv, classification, resolution = service.classify_conversation(
@@ -503,7 +503,7 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
             )
             continue
         try:
-            producer.send_conversation_close(payload, message_deduplication_id=str(conv.uuid))
+            producer.send_conversation_close(payload)
         except Exception as e:
             logger.warning(
                 "[CloseDailyConversationsTask] Billing SQS send failed "
@@ -513,31 +513,11 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
 
 
 def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
-    from conversation_ms.adapters.data_lake import DataLakeEventDTO, send_data_lake_event
+    from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
 
     for conv in conversations:
         try:
-            resolution_value = ResolutionEntities.resolution_mapping(str(conv.resolution))
-            start_date_str = (
-                pendulum.instance(conv.start_date).to_iso8601_string() if conv.start_date is not None else ""
-            )
-            end_date_str = pendulum.instance(conv.end_date).to_iso8601_string() if conv.end_date is not None else ""
-
-            event_dto = DataLakeEventDTO(
-                event_name="weni_nexus_data",
-                date=pendulum.now().to_iso8601_string(),
-                project=project_uuid,
-                contact_urn=conv.contact_urn,
-                key="conversation_classification",
-                value_type="string",
-                value=resolution_value,
-                metadata={
-                    "human_support": conv.has_chats_room,
-                    "conversation_start_date": start_date_str,
-                    "conversation_end_date": end_date_str,
-                    "conversation_uuid": str(conv.uuid),
-                },
-            )
+            event_dto = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
             send_data_lake_event.delay(event_dto.dict())
         except Exception as e:
             logger.warning(
@@ -564,7 +544,7 @@ def _persist_messages_before_classification(
     conversation: Conversation,
     project_uuid: str,
     migration_service: MessageMigrationService,
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     try:
         result = migration_service.persist_conversation_messages_to_postgres(conversation, delete_from_dynamo=False)
         if result.get("persisted"):
@@ -591,12 +571,12 @@ def _persist_messages_before_classification(
 def _classify_conversation_worker(
     conversation: Conversation,
     service: ClassificationService,
-    cached_topics: Optional[List[Dict[str, Any]]],
+    cached_topics: list[dict[str, Any]] | None,
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
-    project_timezone: Optional[str],
+    project_timezone: str | None,
     migration_service: MessageMigrationService,
-) -> tuple[Optional[Conversation], bool, Optional[List[Dict[str, Any]]]]:
+) -> tuple[Conversation | None, bool, list[dict[str, Any]] | None]:
     preloaded_messages = _persist_messages_before_classification(conversation, project_uuid, migration_service)
     conv, should_migrate = _classify_single_conversation(
         conversation,
@@ -614,10 +594,10 @@ def _process_conversation_batch(
     conversation_batch: list[Conversation],
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
-    classification_service: Optional[ClassificationService] = None,
-    topics_cache: Optional[dict] = None,
-    project_timezone: Optional[str] = None,
-    batch_metrics: Optional[dict] = None,
+    classification_service: ClassificationService | None = None,
+    topics_cache: dict | None = None,
+    project_timezone: str | None = None,
+    batch_metrics: dict | None = None,
 ) -> int:
     conversations_closed = 0
     service = classification_service or ClassificationService()
@@ -652,10 +632,14 @@ def _process_conversation_batch(
                 try:
                     conv, should_migrate, preloaded_messages = future.result()
                 except Exception as exc:
-                    sentry_sdk.capture_exception(exc)
+                    with sentry_sdk.push_scope() as scope:
+                        scope.set_tag("conversation_uuid", str(original_conv.uuid))
+                        scope.set_tag("project_uuid", project_uuid)
+                        sentry_sdk.capture_exception(exc)
                     logger.error(
                         f"[CloseDailyConversationsTask] thread_failed conversation={original_conv.uuid} "
-                        f"project={project_uuid} error={exc}"
+                        f"project={project_uuid} error={exc}",
+                        exc_info=True,
                     )
                     continue
                 if conv:
@@ -691,9 +675,9 @@ def _process_project_conversations(
     start_of_range_utc: pendulum.DateTime,
     end_of_range_utc: pendulum.DateTime,
     force_close: bool = False,
-    classification_service: Optional[ClassificationService] = None,
-    topics_cache: Optional[dict] = None,
-    batch_metrics: Optional[dict] = None,
+    classification_service: ClassificationService | None = None,
+    topics_cache: dict | None = None,
+    batch_metrics: dict | None = None,
 ) -> int:
     conversations_closed = 0
 
@@ -791,8 +775,8 @@ def _process_project_conversations(
 
 def dispatch_close_daily(
     force_close: bool = False,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     skip_sync_lock_check: bool = False,
     skip_close_daily_lock_check: bool = False,
 ) -> dict:
@@ -861,8 +845,8 @@ def run_close_project(
     project_uuid: str,
     project_timezone: str,
     force_close: bool = False,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict:
     """
     Process a single project's conversations with per-project locking.

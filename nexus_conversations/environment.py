@@ -40,4 +40,5 @@ env = environ.Env(
     PIKA_EDA_SSL_ENABLED=(bool, True),
     PIKA_EDA_HEARTBEAT=(int, 600),
     PIKA_EDA_BLOCKED_CONNECTION_TIMEOUT=(int, 300),
+    JWT_PUBLIC_KEY=(str, ""),
 )

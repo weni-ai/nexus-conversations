@@ -6,9 +6,9 @@ from uuid import UUID
 
 import pendulum
 import sentry_sdk
-from django.db.models import F
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
+from django.db.models import F
 
 from conversation_ms import cache_access
 from conversation_ms.adapters.entities import ResolutionEntities
@@ -647,3 +647,32 @@ def flush_project_count_buffers():
             count += 1
     if count:
         logger.debug("[ProjectCount] flush_project_count_buffers updated %s projects", count)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.create_external_billing_ticket_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def create_external_billing_ticket_task(self, auth_token: str, urn: str, created_on: str):
+    """
+    Async task to create an external billing ticket via the billing API.
+    Fire-and-forget from the calling endpoint; retries on transient failures.
+    """
+
+    try:
+        client = BillingClient()
+        result = client.create_external_billing_ticket(auth_token, urn, created_on)
+        if not result:
+            raise RuntimeError(f"Billing API returned empty response for contact_urn={urn}")
+        return result
+    except Exception as exc:
+        logger.error(
+            "[CreateExternalBillingTicketTask] Error creating billing ticket " "contact_urn=%s error=%s",
+            urn,
+            exc,
+            exc_info=True,
+        )
+        sentry_sdk.capture_exception(exc)
+        raise self.retry(exc=exc)

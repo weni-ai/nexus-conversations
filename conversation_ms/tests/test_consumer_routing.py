@@ -2,8 +2,11 @@
 Tests for SQS consumer event routing.
 """
 
+import json
 from unittest.mock import Mock, patch
 from uuid import uuid4
+
+import pytest
 
 from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
 
@@ -86,3 +89,45 @@ class TestConsumerEventRouting:
 
             mock_service_class.assert_called_once()
             mock_service.process_conversation_window.assert_called_once_with(sample_sqs_conversation_window_event)
+
+    def test_process_message_skips_routing_when_idempotent_duplicate(self, sample_sqs_received_event):
+        consumer = ConversationSQSConsumer(queue_url="https://sqs.test/queue")
+        consumer._idempotency = Mock()
+        consumer._idempotency.is_enabled = True
+        consumer._idempotency.try_claim.return_value = False
+
+        body = {**sample_sqs_received_event, "event_type": "message.received"}
+        message = {
+            "MessageId": "sqs-msg-duplicate",
+            "ReceiptHandle": "rh-dup",
+            "Body": json.dumps(body),
+            "MessageAttributes": {},
+        }
+
+        with patch.object(consumer, "_route_event") as mock_route:
+            receipt = consumer._process_message(message)
+
+        assert receipt == "rh-dup"
+        mock_route.assert_not_called()
+        consumer._idempotency.try_claim.assert_called_once_with("sqs-msg-duplicate")
+        consumer._idempotency.release_claim.assert_not_called()
+
+    def test_process_message_releases_claim_when_handler_raises(self, sample_sqs_received_event):
+        consumer = ConversationSQSConsumer(queue_url="https://sqs.test/queue")
+        consumer._idempotency = Mock()
+        consumer._idempotency.is_enabled = True
+        consumer._idempotency.try_claim.return_value = True
+
+        body = {**sample_sqs_received_event, "event_type": "message.received"}
+        message = {
+            "MessageId": "sqs-msg-fail",
+            "ReceiptHandle": "rh-fail",
+            "Body": json.dumps(body),
+            "MessageAttributes": {},
+        }
+
+        with patch.object(consumer, "_route_event", side_effect=RuntimeError("handler failed")):
+            with pytest.raises(RuntimeError, match="handler failed"):
+                consumer._process_message(message)
+
+        consumer._idempotency.release_claim.assert_called_once_with("sqs-msg-fail")

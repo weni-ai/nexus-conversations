@@ -19,6 +19,9 @@ from conversation_ms.adapters.aws import get_boto3_resource
 
 logger = logging.getLogger(__name__)
 
+# Default hours until ExpiresOn for message items (DynamoDB TTL); shared with SQS idempotency markers.
+DEFAULT_MESSAGE_TTL_HOURS = 168
+
 
 @contextmanager
 def get_dynamodb_table(table_name: str):
@@ -65,7 +68,7 @@ class DynamoMessageRepository:
         message_data: dict,
         channel_uuid: str = None,
         resolution_status: int = 2,  # IN_PROGRESS
-        ttl_hours: int = 168,  # 7 days
+        ttl_hours: int = DEFAULT_MESSAGE_TTL_HOURS,
     ) -> None:
         """Store message with proper conversation and resolution tracking.
         Uses message_id from message_data when provided (e.g. from nexus-ai for traces).

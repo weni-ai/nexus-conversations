@@ -200,7 +200,7 @@ CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexu
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
-DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="NexusMessages")
+DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="ConversationMessages")
 
 # Sentry config
 USE_SENTRY = env.bool("USE_SENTRY", default=False)

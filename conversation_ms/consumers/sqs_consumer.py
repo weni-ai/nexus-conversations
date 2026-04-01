@@ -9,6 +9,7 @@ from typing import Dict, Optional
 from botocore.exceptions import ClientError
 
 from conversation_ms.adapters.aws import get_boto3_client
+from conversation_ms.adapters.sqs_idempotency import SqsConsumerIdempotency
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ class ConversationSQSConsumer:
             logger.error(f"[ConversationSQSConsumer] Error initializing SQS client: {e}")
             sys.stdout.flush()
             raise
+
+        self._idempotency = SqsConsumerIdempotency.from_settings()
 
         logger.info(
             f"[ConversationSQSConsumer] Initialized consumer_id={self.consumer_id} "
@@ -257,14 +260,31 @@ class ConversationSQSConsumer:
                 if "data" not in event_data:
                     event_data = {"correlation_id": event_data.get("correlation_id"), "data": event_data}
 
-            # Route event to appropriate handler
-            self._route_event(event_type, event_data)
+            idempotency_active = self._idempotency.is_enabled and bool(message_id)
+            if self._idempotency.is_enabled and not message_id:
+                logger.warning(
+                    "[ConversationSQSConsumer] Idempotency enabled but MessageId missing; processing without claim",
+                )
 
-            # Simulate processing delay (e.g., DB insertion)
-            if self.processing_delay > 0:
-                time.sleep(self.processing_delay)
+            if idempotency_active and not self._idempotency.try_claim(message_id):
+                logger.info(
+                    f"[ConversationSQSConsumer] Skipping duplicate SQS delivery message_id={message_id}",
+                )
+                return receipt_handle
 
-            return receipt_handle
+            try:
+                # Route event to appropriate handler
+                self._route_event(event_type, event_data)
+
+                # Simulate processing delay (e.g., DB insertion)
+                if self.processing_delay > 0:
+                    time.sleep(self.processing_delay)
+
+                return receipt_handle
+            except Exception:
+                if idempotency_active:
+                    self._idempotency.release_claim(message_id)
+                raise
 
         except json.JSONDecodeError as e:
             logger.error(

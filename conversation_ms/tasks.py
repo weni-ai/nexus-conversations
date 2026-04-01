@@ -582,3 +582,32 @@ def reclassify_unclassified_conversations():
 
     logger.info(f"[ReclassifyTask] Triggered classification for {count} conversations")
     return count
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.create_external_billing_ticket_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def create_external_billing_ticket_task(self, auth_token: str, urn: str, created_on: str):
+    """
+    Async task to create an external billing ticket via the billing API.
+    Fire-and-forget from the calling endpoint; retries on transient failures.
+    """
+
+    try:
+        client = BillingClient()
+        result = client.create_external_billing_ticket(auth_token, urn, created_on)
+        if not result:
+            raise RuntimeError(f"Billing API returned empty response for contact_urn={urn}")
+        return result
+    except Exception as exc:
+        logger.error(
+            "[CreateExternalBillingTicketTask] Error creating billing ticket " "contact_urn=%s error=%s",
+            urn,
+            exc,
+            exc_info=True,
+        )
+        sentry_sdk.capture_exception(exc)
+        raise self.retry(exc=exc)

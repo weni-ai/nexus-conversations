@@ -333,7 +333,7 @@ class ConversationSQSConsumer:
 
         msg = event_preview.message or {}
         mid_raw = msg.get("message_id") or msg.get("id")
-        mid = str(mid_raw).strip() if mid_raw is not None else ""
+        mid = str(mid_raw) if mid_raw is not None else ""
         if not (mid and event_preview.project_uuid and event_preview.contact_urn is not None):
             return False
 

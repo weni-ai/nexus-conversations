@@ -9,7 +9,10 @@ from typing import Dict, Optional
 from botocore.exceptions import ClientError
 
 from conversation_ms.adapters.aws import get_boto3_client
-from conversation_ms.adapters.sqs_idempotency import SqsConsumerIdempotency
+from conversation_ms.adapters.sqs_idempotency import (
+    SqsConsumerIdempotency,
+    build_sqs_consumer_idempotency_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,15 +263,17 @@ class ConversationSQSConsumer:
                 if "data" not in event_data:
                     event_data = {"correlation_id": event_data.get("correlation_id"), "data": event_data}
 
-            idempotency_active = self._idempotency.is_enabled and bool(message_id)
-            if self._idempotency.is_enabled and not message_id:
+            idempotency_key = build_sqs_consumer_idempotency_key(event_type, event_data, message_id)
+            idempotency_active = self._idempotency.is_enabled and bool(idempotency_key)
+            if self._idempotency.is_enabled and not idempotency_key:
                 logger.warning(
-                    "[ConversationSQSConsumer] Idempotency enabled but MessageId missing; processing without claim",
+                    "[ConversationSQSConsumer] Idempotency enabled but no idempotency key; processing without claim",
                 )
 
-            if idempotency_active and not self._idempotency.try_claim(message_id):
+            if idempotency_active and not self._idempotency.try_claim(idempotency_key):
                 logger.info(
-                    f"[ConversationSQSConsumer] Skipping duplicate SQS delivery message_id={message_id}",
+                    "[ConversationSQSConsumer] Skipping duplicate SQS delivery "
+                    f"idempotency_key={idempotency_key} sqs_message_id={message_id}",
                 )
                 return receipt_handle
 
@@ -283,7 +288,7 @@ class ConversationSQSConsumer:
                 return receipt_handle
             except Exception:
                 if idempotency_active:
-                    self._idempotency.release_claim(message_id)
+                    self._idempotency.release_claim(idempotency_key)
                 raise
 
         except json.JSONDecodeError as e:

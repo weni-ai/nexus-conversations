@@ -11,6 +11,7 @@ from conversation_ms.adapters.sqs_idempotency import (
     IDEMPOTENCY_CONVERSATION_KEY,
     MESSAGE_TIMESTAMP_ATTR,
     SqsConsumerIdempotency,
+    build_sqs_consumer_idempotency_key,
 )
 
 
@@ -102,3 +103,41 @@ class TestSqsConsumerIdempotency:
                 MESSAGE_TIMESTAMP_ATTR: "to-remove",
             },
         )
+
+
+class TestBuildSqsConsumerIdempotencyKey:
+    def test_message_received_uses_project_channel_message_id(self):
+        d = {
+            "project_uuid": "p1",
+            "channel_uuid": "c1",
+            "message": {"id": "m1", "text": "hi"},
+        }
+        event = {"data": d}
+        key = build_sqs_consumer_idempotency_key("message.received", event, "sqs-99")
+        assert key == "message.received#p1#c1#m1"
+
+    def test_message_sent_same_pattern(self):
+        d = {"project_uuid": "p", "channel_uuid": "c", "message": {"id": "mid"}}
+        key = build_sqs_consumer_idempotency_key("message.sent", {"data": d}, None)
+        assert key == "message.sent#p#c#mid"
+
+    def test_conversation_window_uses_ticket_uuid(self):
+        d = {
+            "project_uuid": "p",
+            "channel_uuid": "c",
+            "ticket_uuid": "t1",
+        }
+        key = build_sqs_consumer_idempotency_key("conversation.window", {"data": d}, "sqs-1")
+        assert key == "conversation.window#p#c#t1"
+
+    def test_unknown_event_with_message_shape(self):
+        d = {"project_uuid": "p", "channel_uuid": "c", "message": {"id": "x"}}
+        key = build_sqs_consumer_idempotency_key("custom.event", {"data": d}, None)
+        assert key == "custom.event#p#c#x"
+
+    def test_fallback_sqs_when_no_business_key(self):
+        key = build_sqs_consumer_idempotency_key("message.received", {"data": {}}, "abc-123")
+        assert key == "sqs#abc-123"
+
+    def test_returns_none_without_business_or_sqs(self):
+        assert build_sqs_consumer_idempotency_key("message.received", {"data": {}}, None) is None

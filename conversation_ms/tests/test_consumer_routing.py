@@ -109,7 +109,9 @@ class TestConsumerEventRouting:
 
         assert receipt == "rh-dup"
         mock_route.assert_not_called()
-        consumer._idempotency.try_claim.assert_called_once_with("sqs-msg-duplicate")
+        d = body["data"]
+        expected_key = f"message.received#{d['project_uuid']}#{d['channel_uuid']}#{d['message']['id']}"
+        consumer._idempotency.try_claim.assert_called_once_with(expected_key)
         consumer._idempotency.release_claim.assert_not_called()
 
     def test_process_message_releases_claim_when_handler_raises(self, sample_sqs_received_event):
@@ -130,4 +132,6 @@ class TestConsumerEventRouting:
             with pytest.raises(RuntimeError, match="handler failed"):
                 consumer._process_message(message)
 
-        consumer._idempotency.release_claim.assert_called_once_with("sqs-msg-fail")
+        d = body["data"]
+        expected_key = f"message.received#{d['project_uuid']}#{d['channel_uuid']}#{d['message']['id']}"
+        consumer._idempotency.release_claim.assert_called_once_with(expected_key)

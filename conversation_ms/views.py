@@ -2,6 +2,7 @@ import logging
 from uuid import uuid4
 
 import pendulum
+from django.core.cache import cache
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status, viewsets
@@ -9,6 +10,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
@@ -139,6 +141,19 @@ class SubTopicsViewSet(ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=4),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
+def _process_with_retry(service, event_data):
+    service.process_conversation_window(event_data)
+
+
+EXTERNAL_BILLING_CACHE_TIMEOUT = 86400
+
+
 class ExternalConversationWindowView(JWTModuleMixin, APIView):
     def post(self, request, project_uuid):
         contact_urn = request.data.get("contact_urn")
@@ -166,7 +181,7 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
         }
 
         try:
-            ConversationWindowService().process_conversation_window(event_data)
+            _process_with_retry(ConversationWindowService(), event_data)
         except Exception:
             logger.exception(
                 "[ExternalConversationWindowView] Error processing conversation window "
@@ -179,9 +194,16 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-        raw_token = auth_header.split(" ", 1)[1] if " " in auth_header else ""
-        create_external_billing_ticket_task.delay(raw_token, contact_urn, created_on)
+        billing_cache_key = f"external_billing_sent:{ticket_uuid}"
+        if cache.add(billing_cache_key, True, timeout=EXTERNAL_BILLING_CACHE_TIMEOUT):
+            auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+            raw_token = auth_header.split(" ", 1)[1] if " " in auth_header else ""
+            create_external_billing_ticket_task.delay(raw_token, contact_urn, created_on)
+        else:
+            logger.info(
+                "[ExternalConversationWindowView] Billing already dispatched " "for ticket_uuid=%s, skipping",
+                ticket_uuid,
+            )
 
         return Response(
             {"ticket_uuid": ticket_uuid},

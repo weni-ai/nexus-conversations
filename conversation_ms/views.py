@@ -1,12 +1,18 @@
+import logging
+from uuid import uuid4
+
+import pendulum
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status, viewsets
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
+from conversation_ms.mixins import JWTModuleMixin
 from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import (
@@ -15,6 +21,10 @@ from conversation_ms.serializers import (
     SubTopicsSerializer,
     TopicsSerializer,
 )
+from conversation_ms.services.conversation_window_service import ConversationWindowService
+from conversation_ms.tasks import create_external_billing_ticket_task
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -127,3 +137,53 @@ class SubTopicsViewSet(ModelViewSet):
             serializer.save(topic=topic)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ExternalConversationWindowView(JWTModuleMixin, APIView):
+    def post(self, request, project_uuid):
+        contact_urn = request.data.get("contact_urn")
+        channel_uuid = request.data.get("channel_uuid")
+
+        if not contact_urn or not channel_uuid:
+            return Response(
+                {"error": "contact_urn and channel_uuid are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created_on = request.data.get("created_on", pendulum.now("UTC").isoformat())
+        ticket_uuid = str(uuid4())
+
+        event_data = {
+            "correlation_id": f"external-{ticket_uuid}",
+            "data": {
+                "project_uuid": str(self.project_uuid),
+                "contact_urn": contact_urn,
+                "channel_uuid": str(channel_uuid),
+                "ticket_uuid": ticket_uuid,
+                "start": created_on,
+                "has_chats_room": True,
+            },
+        }
+
+        try:
+            ConversationWindowService().process_conversation_window(event_data)
+        except Exception:
+            logger.exception(
+                "[ExternalConversationWindowView] Error processing conversation window "
+                "project_uuid=%s contact_urn=%s",
+                self.project_uuid,
+                contact_urn,
+            )
+            return Response(
+                {"error": "Failed to process conversation window"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        raw_token = auth_header.split(" ", 1)[1] if " " in auth_header else ""
+        create_external_billing_ticket_task.delay(raw_token, contact_urn, created_on)
+
+        return Response(
+            {"ticket_uuid": ticket_uuid},
+            status=status.HTTP_201_CREATED,
+        )

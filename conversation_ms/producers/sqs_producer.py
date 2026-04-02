@@ -155,7 +155,7 @@ class BillingSQSProducer:
                 MessageDeduplicationId=dedup,
                 MessageAttributes=message_attributes,
             )
-            logger.debug(
+            logger.info(
                 "Sent billing SQS conversation_close channel_uuid=%s uuid=%s",
                 normalized["channel_uuid"],
                 normalized["uuid"],

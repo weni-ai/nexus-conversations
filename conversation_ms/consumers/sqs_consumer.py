@@ -4,11 +4,18 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
+import sentry_sdk
 from botocore.exceptions import ClientError
+from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
+from conversation_ms.adapters.dynamo import DynamoMessageRepository, get_message_table
+from conversation_ms.events import MessageReceivedEvent, MessageSentEvent
+from conversation_ms.services.message_service import MessageService
+
+EventPreview = Union[MessageReceivedEvent, MessageSentEvent]
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +316,67 @@ class ConversationSQSConsumer:
                 f"available_handlers={list(event_handlers.keys())}",
             )
 
+    def _skip_if_dynamo_message_duplicate(
+        self,
+        event_data: Dict,
+        event_preview: EventPreview,
+        event_kind: str,
+    ) -> bool:
+        """
+        If Dynamo already has this message (same keys as storage_message), log, report to Sentry, and return True.
+        event_kind is "received" or "sent" (for logs and Sentry context).
+        """
+
+        table_configured = bool((getattr(settings, "DYNAMODB_MESSAGE_TABLE", None) or "").strip())
+        if not table_configured:
+            return False
+
+        msg = event_preview.message or {}
+        mid_raw = msg.get("message_id") or msg.get("id")
+        mid = str(mid_raw) if mid_raw is not None else ""
+        if not (mid and event_preview.project_uuid and event_preview.contact_urn is not None):
+            return False
+
+        dynamo_repo = DynamoMessageRepository()
+        created_at = (
+            event_preview.timestamp.isoformat()
+            if hasattr(event_preview.timestamp, "isoformat")
+            else str(event_preview.timestamp)
+        )
+        sortable_ts = dynamo_repo._convert_to_dynamo_sortable_timestamp(created_at)
+        conversation_key = f"{event_preview.project_uuid}#{event_preview.contact_urn}#{event_preview.channel_uuid}"
+        message_timestamp = f"{sortable_ts}#{mid}"
+        dynamo_key = {
+            "conversation_key": conversation_key,
+            "message_timestamp": message_timestamp,
+        }
+        with get_message_table() as table:
+            existing = table.get_item(Key=dynamo_key, ConsistentRead=True)
+            if not existing.get("Item"):
+                return False
+
+        logger.info(
+            f"[ConversationSQSConsumer] Skipping duplicate message.{event_kind} "
+            f"conversation_key={conversation_key!r} message_timestamp={message_timestamp!r}",
+        )
+        with sentry_sdk.push_scope():
+            sentry_sdk.set_tag("project_uuid", event_preview.project_uuid or "unknown")
+            sentry_sdk.set_tag("contact_urn", event_preview.contact_urn or "unknown")
+            sentry_sdk.set_tag("message_id", mid)
+            sentry_sdk.set_context(
+                f"sqs_duplicate_message_{event_kind}",
+                {
+                    "conversation_key": conversation_key,
+                    "message_timestamp": message_timestamp,
+                    "correlation_id": event_data.get("correlation_id", ""),
+                },
+            )
+            sentry_sdk.capture_message(
+                f"Duplicate message.{event_kind} skipped (DynamoDB item already exists)",
+                level="warning",
+            )
+        return True
+
     def _handle_message_received(self, event_data: Dict):
         """
         Handle message.received event.
@@ -316,7 +384,9 @@ class ConversationSQSConsumer:
         Args:
             event_data: Event data dictionary
         """
-        from conversation_ms.services.message_service import MessageService
+        event_preview = MessageReceivedEvent.from_sqs_event(event_data)
+        if self._skip_if_dynamo_message_duplicate(event_data, event_preview, "received"):
+            return
 
         logger.info(
             f"[ConversationSQSConsumer] Handling message.received event "
@@ -325,7 +395,6 @@ class ConversationSQSConsumer:
             f"contact_urn={event_data.get('data', {}).get('contact_urn')}",
         )
 
-        # Processar mensagem usando MessageService
         message_service = MessageService()
         message_service.process_message_received(event_data)
 
@@ -336,7 +405,9 @@ class ConversationSQSConsumer:
         Args:
             event_data: Event data dictionary
         """
-        from conversation_ms.services.message_service import MessageService
+        event_preview = MessageSentEvent.from_sqs_event(event_data)
+        if self._skip_if_dynamo_message_duplicate(event_data, event_preview, "sent"):
+            return
 
         logger.info(
             f"[ConversationSQSConsumer] Handling message.sent event "
@@ -345,7 +416,6 @@ class ConversationSQSConsumer:
             f"contact_urn={event_data.get('data', {}).get('contact_urn')}",
         )
 
-        # Processar mensagem usando MessageService
         message_service = MessageService()
         message_service.process_message_sent(event_data)
 

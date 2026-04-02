@@ -24,4 +24,5 @@ env = environ.Env(
     # Data Lake SDK (for CSAT/NPS)
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
+    JWT_PUBLIC_KEY=(str, ""),
 )

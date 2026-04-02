@@ -4,6 +4,7 @@ Django settings for nexus_conversations project.
 Internal microservice for processing conversation messages from SQS FIFO queue.
 """
 
+import base64
 import os
 import sys
 from pathlib import Path
@@ -260,3 +261,15 @@ AWS_REGION = env.str("AWS_REGION", default="sa-east-1")
 LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")
 
 DATALAKE_FEATURE_FLAG = env.list("DATALAKE_FEATURE_FLAG", default=[])
+
+
+JWT_PUBLIC_KEY_ENV = env.str("JWT_PUBLIC_KEY", default="")
+if JWT_PUBLIC_KEY_ENV:
+    JWT_PUBLIC_KEY = base64.b64decode(JWT_PUBLIC_KEY_ENV)
+else:
+    JWT_PUBLIC_KEY_PATH = BASE_DIR / "jwt_keys" / "public_key.pem"
+    try:
+        with open(JWT_PUBLIC_KEY_PATH, "rb") as f:
+            JWT_PUBLIC_KEY = f.read()
+    except FileNotFoundError:
+        JWT_PUBLIC_KEY = None

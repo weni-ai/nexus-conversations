@@ -1,5 +1,7 @@
+import hashlib
 import json
 import logging
+import string
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -17,6 +19,10 @@ logger = logging.getLogger(__name__)
 SQS_DEDUP_ID_MAX_LENGTH = 128
 # SQS FIFO MessageGroupId max length
 SQS_GROUP_ID_MAX_LENGTH = 128
+
+# Ref: AWS SQS — MessageGroupId ≤128 chars, alphanumeric + punctuation (ASCII).
+# string.punctuation matches the documented AWS punctuation set for this parameter.
+_MESSAGE_GROUP_ID_ALLOWED = frozenset(string.ascii_letters + string.digits + string.punctuation)
 
 _REQUIRED_CLOSE_KEYS = (
     "channel_uuid",
@@ -63,11 +69,46 @@ def _format_dt_utc_z(dt: datetime) -> str:
     return p.format("YYYY-MM-DDTHH:mm:ss") + "Z"
 
 
+def _message_group_id_needs_hashed_suffix(prefix: str, contact_urn: str) -> bool:
+    """
+    True when the literal group id is too long or contains characters outside the SQS
+    allowlist (e.g. spaces). Naive substitution would merge distinct URNs such as
+    "a b" and "a-b", so we use a digest suffix instead.
+    """
+    combined = prefix + contact_urn
+    if len(combined) > SQS_GROUP_ID_MAX_LENGTH:
+        return True
+    return any(c not in _MESSAGE_GROUP_ID_ALLOWED for c in combined)
+
+
+def _fifo_message_group_digest_suffix(channel_uuid: str, contact_urn: str) -> str:
+    """Full SHA-256 hex digest of channel:urn (UTF-8); caller truncates for MessageGroupId."""
+    raw = f"{channel_uuid}:{contact_urn}".encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _fifo_message_group_id(channel_uuid: str, contact_urn: str) -> str:
-    raw = f"{channel_uuid}:{contact_urn}"
-    if len(raw) <= SQS_GROUP_ID_MAX_LENGTH:
-        return raw
-    return raw[:SQS_GROUP_ID_MAX_LENGTH]
+    """
+    Build a FIFO MessageGroupId from billing fields only (no extra payload keys).
+
+    Same rules as nexus-ai ConversationEvents producer: use channel_uuid:contact_urn
+    when it fits ≤128 chars and matches AWS allowed characters; otherwise a
+    deterministic SHA-256 hex suffix (digest of channel_uuid:contact_urn) so length
+    and invalid characters (e.g. spaces in URN) are safe without naive substitution
+    that would merge distinct URNs.
+    """
+    prefix = f"{channel_uuid}:"
+    if _message_group_id_needs_hashed_suffix(prefix, contact_urn):
+        digest = _fifo_message_group_digest_suffix(channel_uuid, contact_urn)
+        prefix_safe = all(c in _MESSAGE_GROUP_ID_ALLOWED for c in prefix)
+        if not prefix_safe:
+            return digest[:SQS_GROUP_ID_MAX_LENGTH]
+        max_suffix = SQS_GROUP_ID_MAX_LENGTH - len(prefix)
+        if max_suffix < 1:
+            return digest[:SQS_GROUP_ID_MAX_LENGTH]
+        return prefix + digest[:max_suffix]
+
+    return prefix + contact_urn
 
 
 def build_conversation_close_billing_payload(conversation: Conversation) -> Optional[Dict[str, str]]:
@@ -138,7 +179,10 @@ class BillingSQSProducer:
         body = {k: normalized[k] for k in _REQUIRED_CLOSE_KEYS}
 
         dedup = _normalize_sqs_deduplication_id(str(uuid.uuid4()))
-        message_group_id = _fifo_message_group_id(normalized["channel_uuid"], normalized["contact_urn"])
+        message_group_id = _fifo_message_group_id(
+            normalized["channel_uuid"],
+            normalized["contact_urn"],
+        )
         message_attributes = {
             "channel_uuid": {"StringValue": normalized["channel_uuid"], "DataType": "String"},
             "contact_urn": {"StringValue": normalized["contact_urn"], "DataType": "String"},

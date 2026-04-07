@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
-from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
+from conversation_ms.adapters.data_lake import (
+    build_conversation_classification_event,
+    send_data_lake_event,
+    topic_metadata_from_classification,
+)
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
@@ -87,6 +91,17 @@ class ClassificationService:
             conversation.resolution = resolution
 
         project_uuid = str(conversation.project.uuid)
+
+        # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
+        if messages is None:
+            messages = self._get_conversation_messages(conversation)
+
+        classification: Optional[ConversationClassification] = None
+        if messages:
+            classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
+        else:
+            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+
         if send_to_datalake:
             self._send_resolution_to_datalake(
                 resolution=resolution,
@@ -94,17 +109,9 @@ class ClassificationService:
                 project_uuid=project_uuid,
                 contact_urn=conversation.contact_urn,
                 conversation=conversation,
+                topic_metadata=topic_metadata_from_classification(classification),
             )
 
-        # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
-        if messages is None:
-            messages = self._get_conversation_messages(conversation)
-
-        if not messages:
-            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return (conversation, None, resolution)
-
-        classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
         return (conversation, classification, resolution)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
@@ -331,6 +338,7 @@ class ClassificationService:
             project_uuid=project_uuid,
             contact_urn=contact_urn,
             conversation=conversation,
+            topic_metadata=topic_metadata_from_classification(None),
         )
 
         logger.info(
@@ -367,13 +375,17 @@ class ClassificationService:
         project_uuid: str,
         contact_urn: str,
         conversation: object = None,
+        topic_metadata: Optional[Dict[str, str]] = None,
     ) -> None:
         """
-        Create and send resolution event to data lake.
+        Create and send resolution event to data lake (includes topic/subtopic metadata when provided).
         """
         if not conversation:
             logger.warning("Cannot send to data lake: conversation object is None")
             return
 
-        event_dto = build_conversation_classification_event(conversation, project_uuid, resolution)
+        meta = topic_metadata if topic_metadata is not None else topic_metadata_from_classification(None)
+        event_dto = build_conversation_classification_event(
+            conversation, project_uuid, resolution, topic_classification_metadata=meta
+        )
         send_data_lake_event.delay(event_dto.dict())

@@ -5,7 +5,7 @@ Adapted from inline_agents.backends.data_lake and inline_agents.data_lake.event_
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pendulum
 import sentry_sdk
@@ -73,10 +73,38 @@ class DataLakeEventDTO:
         }
 
 
+def topic_metadata_from_classification(classification: Any) -> Dict[str, str]:
+    """
+    Build topic/subtopic fields for conversation_classification metadata.
+    Aligns with Nexus weni_nexus_data shape (topic_uuid, subtopic_uuid, subtopic, topic_name, topic).
+    """
+    empty = {
+        "topic_uuid": "",
+        "subtopic_uuid": "",
+        "subtopic": "",
+        "topic_name": "",
+        "topic": "",
+    }
+    if classification is None:
+        return empty
+    topic = getattr(classification, "topic", None)
+    if topic is None:
+        return empty
+    subtopic = getattr(classification, "subtopic", None)
+    return {
+        "topic_uuid": str(topic.uuid),
+        "subtopic_uuid": str(subtopic.uuid) if subtopic else "",
+        "subtopic": subtopic.name if subtopic else "",
+        "topic_name": topic.name,
+        "topic": topic.name,
+    }
+
+
 def build_conversation_classification_event(
     conversation,
     project_uuid: str,
     resolution: str,
+    topic_classification_metadata: Optional[Dict[str, str]] = None,
 ) -> DataLakeEventDTO:
     resolution_value = ResolutionEntities.resolution_mapping(resolution)
     start_date_str = (
@@ -85,6 +113,19 @@ def build_conversation_classification_event(
     end_date_str = (
         pendulum.instance(conversation.end_date).to_iso8601_string() if conversation.end_date is not None else ""
     )
+    metadata: Dict[str, Any] = {
+        "human_support": conversation.has_chats_room,
+        "conversation_start_date": start_date_str,
+        "conversation_end_date": end_date_str,
+        "conversation_uuid": str(conversation.uuid),
+    }
+    topic_meta = (
+        topic_classification_metadata
+        if topic_classification_metadata is not None
+        else topic_metadata_from_classification(None)
+    )
+    metadata.update(topic_meta)
+
     return DataLakeEventDTO(
         event_name="weni_nexus_data",
         date=start_date_str,
@@ -93,12 +134,7 @@ def build_conversation_classification_event(
         key="conversation_classification",
         value_type="string",
         value=resolution_value,
-        metadata={
-            "human_support": conversation.has_chats_room,
-            "conversation_start_date": start_date_str,
-            "conversation_end_date": end_date_str,
-            "conversation_uuid": str(conversation.uuid),
-        },
+        metadata=metadata,
     )
 
 

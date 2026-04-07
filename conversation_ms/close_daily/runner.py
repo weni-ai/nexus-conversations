@@ -513,11 +513,24 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
 
 
 def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
-    from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
+    from conversation_ms.adapters.data_lake import (
+        build_conversation_classification_event,
+        send_data_lake_event,
+        topic_metadata_from_classification,
+    )
+    from conversation_ms.models import ConversationClassification
 
     for conv in conversations:
         try:
-            event_dto = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
+            classification = (
+                ConversationClassification.objects.select_related("topic", "subtopic")
+                .filter(conversation_id=conv.uuid)
+                .first()
+            )
+            topic_meta = topic_metadata_from_classification(classification)
+            event_dto = build_conversation_classification_event(
+                conv, project_uuid, str(conv.resolution), topic_classification_metadata=topic_meta
+            )
             send_data_lake_event.delay(event_dto.dict())
         except Exception as e:
             logger.warning(

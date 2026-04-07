@@ -16,6 +16,11 @@ import sentry_sdk
 from django.conf import settings
 
 from conversation_ms import cache_access
+from conversation_ms.adapters.data_lake import (
+    build_conversation_classification_event,
+    build_topics_event,
+    send_data_lake_event,
+)
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.close_daily.constants import (
     CLOSE_DAILY_LOCK_KEY,
@@ -23,7 +28,7 @@ from conversation_ms.close_daily.constants import (
     CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX,
     SYNC_PROJECT_TIMEZONES_LOCK_KEY,
 )
-from conversation_ms.models import Conversation, Project
+from conversation_ms.models import Conversation, ConversationClassification, Project, Topic
 from conversation_ms.producers.sqs_producer import (
     build_conversation_close_billing_payload,
     get_billing_sqs_producer,
@@ -513,12 +518,23 @@ def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: 
 
 
 def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
-    from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
+    if not conversations:
+        return
+
+    conv_ids = [c.uuid for c in conversations]
+    classifications = ConversationClassification.objects.filter(conversation_id__in=conv_ids).select_related(
+        "topic", "subtopic", "subtopic__topic"
+    )
+    classification_by_conversation_id = {cc.conversation_id: cc for cc in classifications}
+    has_active_topics = Topic.objects.filter(project__uuid=project_uuid, is_active=True).exists()
 
     for conv in conversations:
         try:
-            event_dto = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
-            send_data_lake_event.delay(event_dto.dict())
+            classification = classification_by_conversation_id.get(conv.uuid)
+            cc_event = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
+            send_data_lake_event.delay(cc_event.dict())
+            topics_event = build_topics_event(conv, project_uuid, classification, has_active_topics=has_active_topics)
+            send_data_lake_event.delay(topics_event.dict())
         except Exception as e:
             logger.warning(
                 "[CloseDailyConversationsTask] Datalake event send failed "

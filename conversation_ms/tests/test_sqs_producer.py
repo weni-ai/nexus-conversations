@@ -11,6 +11,7 @@ import pytest
 from conversation_ms.producers.sqs_producer import (
     _MESSAGE_GROUP_ID_ALLOWED,
     _REQUIRED_CLOSE_KEYS,
+    SQS_GROUP_ID_MAX_LENGTH,
     BillingSQSProducer,
     _fifo_message_group_digest_suffix,
     _fifo_message_group_id,
@@ -41,10 +42,10 @@ def _expected_hashed_group_id(channel: str, urn: str) -> str:
     digest = _fifo_message_group_digest_suffix(channel, urn)
     prefix_safe = all(c in _MESSAGE_GROUP_ID_ALLOWED for c in prefix)
     if not prefix_safe:
-        return digest[:128]
-    max_suffix = 128 - len(prefix)
+        return digest[:SQS_GROUP_ID_MAX_LENGTH]
+    max_suffix = SQS_GROUP_ID_MAX_LENGTH - len(prefix)
     if max_suffix < 1:
-        return digest[:128]
+        return digest[:SQS_GROUP_ID_MAX_LENGTH]
     return prefix + digest[:max_suffix]
 
 
@@ -61,9 +62,9 @@ class TestFifoMessageGroupId:
         channel = "a" * 36
         urn = "c" * 100
         prefix = f"{channel}:"
-        assert len(prefix + urn) > 128
+        assert len(prefix + urn) > SQS_GROUP_ID_MAX_LENGTH
         out = _fifo_message_group_id(channel, urn)
-        assert len(out) <= 128
+        assert len(out) <= SQS_GROUP_ID_MAX_LENGTH
         assert out == _expected_hashed_group_id(channel, urn)
         assert out.startswith(prefix)
         assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
@@ -73,7 +74,7 @@ class TestFifoMessageGroupId:
         urn = "whatsapp:1"
         digest = _fifo_message_group_digest_suffix(channel, urn)
         out = _fifo_message_group_id(channel, urn)
-        assert out == digest[:128]
+        assert out == digest[:SQS_GROUP_ID_MAX_LENGTH]
         assert len(out) == 64
         assert " " not in out
         assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
@@ -91,7 +92,7 @@ class TestFifoMessageGroupId:
         urn = "ext:356526701290@jsmf1585--americanasquiosque.myvtex.com"
         out = _fifo_message_group_id(channel, urn)
         assert out == f"{channel}:{urn}"
-        assert len(out) <= 128
+        assert len(out) <= SQS_GROUP_ID_MAX_LENGTH
         assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
 
     def test_space_urn_and_hyphen_urn_do_not_share_group_id(self):
@@ -201,7 +202,7 @@ class TestBillingSQSProducer:
             payload["contact_urn"],
         )
         assert call_kw["MessageGroupId"] == expected_gid
-        assert len(call_kw["MessageGroupId"]) <= 128
+        assert len(call_kw["MessageGroupId"]) <= SQS_GROUP_ID_MAX_LENGTH
         assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in call_kw["MessageGroupId"])
         dedup = call_kw["MessageDeduplicationId"]
         assert len(dedup) == 36 and dedup.count("-") == 4

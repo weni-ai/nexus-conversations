@@ -91,11 +91,13 @@ def _fifo_message_group_id(channel_uuid: str, contact_urn: str) -> str:
     """
     Build a FIFO MessageGroupId from billing fields only (no extra payload keys).
 
-    Same rules as nexus-ai ConversationEvents producer: use channel_uuid:contact_urn
-    when it fits ≤128 chars and matches AWS allowed characters; otherwise a
-    deterministic SHA-256 hex suffix (digest of channel_uuid:contact_urn) so length
-    and invalid characters (e.g. spaces in URN) are safe without naive substitution
-    that would merge distinct URNs.
+    Same safety model as nexus-ai ConversationEvents producer: use the literal
+    ``channel_uuid:contact_urn`` when it fits within ``SQS_GROUP_ID_MAX_LENGTH`` and
+    every character is allowed by SQS. Otherwise derive a deterministic value from
+    SHA-256(``channel_uuid:contact_urn``): usually ``channel_uuid:`` plus a truncated
+    hex digest; if the ``channel_uuid:`` prefix contains disallowed characters, return
+    a digest-only id (truncated to ``SQS_GROUP_ID_MAX_LENGTH``) so invalid prefixes are
+    never sent. Avoids naive substitution that would merge distinct URNs.
     """
     prefix = f"{channel_uuid}:"
     if _message_group_id_needs_hashed_suffix(prefix, contact_urn):

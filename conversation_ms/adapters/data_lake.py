@@ -5,7 +5,7 @@ Adapted from inline_agents.backends.data_lake and inline_agents.data_lake.event_
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pendulum
 import sentry_sdk
@@ -73,39 +73,77 @@ class DataLakeEventDTO:
         }
 
 
-def topic_metadata_from_classification(classification: Any) -> Dict[str, str]:
+def _topics_value_and_metadata(
+    classification: Any,
+    *,
+    has_active_topics: bool,
+    human_support: bool,
+) -> tuple[str, Dict[str, Any]]:
     """
-    Build topic/subtopic fields for conversation_classification metadata.
-    Aligns with Nexus weni_nexus_data shape (topic_uuid, subtopic_uuid, subtopic, topic_name, topic).
+    Value and metadata for key=topics, matching nexus-ai ``lambda_conversation_topics`` datalake shape.
     """
-    empty = {
+    base_meta: Dict[str, Any] = {
         "topic_uuid": "",
         "subtopic_uuid": "",
         "subtopic": "",
-        "topic_name": "",
-        "topic": "",
+        "human_support": human_support,
     }
-    if classification is None:
-        return empty
-    topic = getattr(classification, "topic", None)
-    if topic is None:
-        return empty
+    if not has_active_topics or classification is None:
+        return "bias", base_meta
+
     subtopic = getattr(classification, "subtopic", None)
-    return {
+    topic = getattr(classification, "topic", None)
+    if topic is None and subtopic is not None:
+        topic = getattr(subtopic, "topic", None)
+
+    if topic is None:
+        return "bias", base_meta
+
+    meta = {
         "topic_uuid": str(topic.uuid),
         "subtopic_uuid": str(subtopic.uuid) if subtopic else "",
         "subtopic": subtopic.name if subtopic else "",
-        "topic_name": topic.name,
-        "topic": topic.name,
+        "human_support": human_support,
     }
+    return topic.name, meta
+
+
+def build_topics_event(
+    conversation,
+    project_uuid: str,
+    classification: Any,
+    *,
+    has_active_topics: bool,
+) -> DataLakeEventDTO:
+    """
+    Separate ``topics`` datalake event.
+    """
+    start_date_str = (
+        pendulum.instance(conversation.start_date).to_iso8601_string() if conversation.start_date is not None else ""
+    )
+    value, metadata = _topics_value_and_metadata(
+        classification,
+        has_active_topics=has_active_topics,
+        human_support=conversation.has_chats_room,
+    )
+    return DataLakeEventDTO(
+        event_name="weni_nexus_data",
+        date=start_date_str,
+        project=project_uuid,
+        contact_urn=conversation.contact_urn,
+        key="topics",
+        value_type="string",
+        value=value,
+        metadata=metadata,
+    )
 
 
 def build_conversation_classification_event(
     conversation,
     project_uuid: str,
     resolution: str,
-    topic_classification_metadata: Optional[Dict[str, str]] = None,
 ) -> DataLakeEventDTO:
+    """Resolution-only event."""
     resolution_value = ResolutionEntities.resolution_mapping(resolution)
     start_date_str = (
         pendulum.instance(conversation.start_date).to_iso8601_string() if conversation.start_date is not None else ""
@@ -119,12 +157,6 @@ def build_conversation_classification_event(
         "conversation_end_date": end_date_str,
         "conversation_uuid": str(conversation.uuid),
     }
-    topic_meta = (
-        topic_classification_metadata
-        if topic_classification_metadata is not None
-        else topic_metadata_from_classification(None)
-    )
-    metadata.update(topic_meta)
 
     return DataLakeEventDTO(
         event_name="weni_nexus_data",

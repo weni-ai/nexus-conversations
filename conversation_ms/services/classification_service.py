@@ -7,8 +7,8 @@ from django.conf import settings
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.data_lake import (
     build_conversation_classification_event,
+    build_topics_event,
     send_data_lake_event,
-    topic_metadata_from_classification,
 )
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
@@ -96,6 +96,10 @@ class ClassificationService:
         if messages is None:
             messages = self._get_conversation_messages(conversation)
 
+        if topics_payload is None:
+            topics_payload = self._get_topics_payload(conversation.project)
+        has_active_topics = len(topics_payload) > 0
+
         classification: Optional[ConversationClassification] = None
         if messages:
             classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
@@ -105,11 +109,14 @@ class ClassificationService:
         if send_to_datalake:
             self._send_resolution_to_datalake(
                 resolution=resolution,
-                has_chats_room=conversation.has_chats_room,
                 project_uuid=project_uuid,
-                contact_urn=conversation.contact_urn,
                 conversation=conversation,
-                topic_metadata=topic_metadata_from_classification(classification),
+            )
+            self._send_topics_to_datalake(
+                conversation=conversation,
+                project_uuid=project_uuid,
+                classification=classification,
+                has_active_topics=has_active_topics,
             )
 
         return (conversation, classification, resolution)
@@ -334,11 +341,8 @@ class ClassificationService:
 
         self._send_resolution_to_datalake(
             resolution=resolution,
-            has_chats_room=has_chats_room,
             project_uuid=project_uuid,
-            contact_urn=contact_urn,
             conversation=conversation,
-            topic_metadata=topic_metadata_from_classification(None),
         )
 
         logger.info(
@@ -371,21 +375,31 @@ class ClassificationService:
     def _send_resolution_to_datalake(
         self,
         resolution: str,
-        has_chats_room: bool,
         project_uuid: str,
-        contact_urn: str,
         conversation: object = None,
-        topic_metadata: Optional[Dict[str, str]] = None,
     ) -> None:
         """
-        Create and send resolution event to data lake (includes topic/subtopic metadata when provided).
+        Send conversation_classification event (resolution only; topics are a separate event).
         """
         if not conversation:
             logger.warning("Cannot send to data lake: conversation object is None")
             return
 
-        meta = topic_metadata if topic_metadata is not None else topic_metadata_from_classification(None)
-        event_dto = build_conversation_classification_event(
-            conversation, project_uuid, resolution, topic_classification_metadata=meta
+        event_dto = build_conversation_classification_event(conversation, project_uuid, resolution)
+        send_data_lake_event.delay(event_dto.dict())
+
+    def _send_topics_to_datalake(
+        self,
+        conversation: Conversation,
+        project_uuid: str,
+        classification: Optional[ConversationClassification],
+        has_active_topics: bool,
+    ) -> None:
+        """Send topics event (nexus-ai ``lambda_conversation_topics`` contract)."""
+        event_dto = build_topics_event(
+            conversation,
+            project_uuid,
+            classification,
+            has_active_topics=has_active_topics,
         )
         send_data_lake_event.delay(event_dto.dict())

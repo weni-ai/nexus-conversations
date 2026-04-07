@@ -68,14 +68,15 @@ def test_classify_conversation_success(mock_settings, mock_send_data_lake_event,
     assert result_resolution == "2"
     assert ConversationClassification.objects.count() == 1
 
-    mock_send_data_lake_event.delay.assert_called_once()
-    sent = mock_send_data_lake_event.delay.call_args[0][0]
-    assert sent["key"] == "conversation_classification"
-    assert sent["metadata"]["topic_uuid"] == str(topic.uuid)
-    assert sent["metadata"]["topic_name"] == "Financeiro"
-    assert sent["metadata"]["topic"] == "Financeiro"
-    assert sent["metadata"]["subtopic_uuid"] == str(subtopic.uuid)
-    assert sent["metadata"]["subtopic"] == "Boleto"
+    assert mock_send_data_lake_event.delay.call_count == 2
+    payloads = [call[0][0] for call in mock_send_data_lake_event.delay.call_args_list]
+    by_key = {p["key"]: p for p in payloads}
+    assert "topic_uuid" not in by_key["conversation_classification"]["metadata"]
+    topics_sent = by_key["topics"]
+    assert topics_sent["value"] == "Financeiro"
+    assert topics_sent["metadata"]["topic_uuid"] == str(topic.uuid)
+    assert topics_sent["metadata"]["subtopic_uuid"] == str(subtopic.uuid)
+    assert topics_sent["metadata"]["subtopic"] == "Boleto"
 
 
 @pytest.mark.django_db
@@ -145,10 +146,12 @@ def test_classify_conversation_has_chats_room(mock_settings, mock_send_data_lake
     # Verify messages were fetched (lazy load for topics)
     assert classification_service.dynamo_repo.get_messages.called
 
-    mock_send_data_lake_event.delay.assert_called_once()
-    sent = mock_send_data_lake_event.delay.call_args[0][0]
-    assert sent["metadata"]["topic_uuid"] == str(topic.uuid)
-    assert sent["metadata"]["topic_name"] == "Financeiro"
+    assert mock_send_data_lake_event.delay.call_count == 2
+    payloads = [call[0][0] for call in mock_send_data_lake_event.delay.call_args_list]
+    by_key = {p["key"]: p for p in payloads}
+    topics_sent = by_key["topics"]
+    assert topics_sent["metadata"]["topic_uuid"] == str(topic.uuid)
+    assert topics_sent["value"] == "Financeiro"
 
 
 @pytest.mark.django_db

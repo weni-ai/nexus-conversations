@@ -80,7 +80,7 @@ def _topics_value_and_metadata(
     human_support: bool,
 ) -> tuple[str, Dict[str, Any]]:
     """
-    Value and metadata for key=topics, matching nexus-ai ``lambda_conversation_topics`` datalake shape.
+    Value and metadata for key=topics.
     """
     base_meta: Dict[str, Any] = {
         "topic_uuid": "",

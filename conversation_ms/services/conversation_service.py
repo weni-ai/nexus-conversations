@@ -66,7 +66,6 @@ class ConversationService:
                 contact_name=contact_name,
                 channel_uuid=channel_uuid,
                 msg_created_at=msg_created_at,
-                event_metadata=event_metadata,
             )
 
             if conversation:

@@ -7,13 +7,12 @@ following the architectural decision that nexus-conversations is the source of t
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import pendulum
 import sentry_sdk
 
 from conversation_ms.models import Conversation, Project
-from conversation_ms.sentry_reports import report_missing_required_sentry
 from conversation_ms.utils.date_helpers import (
     conversation_effective_service_end_utc,
     end_of_project_local_calendar_day_utc,
@@ -38,7 +37,6 @@ class MainConversationService:
         contact_name: str,
         msg_created_at: str,
         channel_uuid: Optional[str] = None,
-        event_metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[Conversation]:
         """
         Ensure conversation exists.
@@ -109,19 +107,6 @@ class MainConversationService:
                     )
 
             if matched is None:
-                # Sentry when creating new conversation but contact_name is not received (we still create)
-                if not (contact_name or "").strip():
-                    report_missing_required_sentry(
-                        reason="contact_name is empty when creating new conversation",
-                        missing_fields=["contact_name"],
-                        project_uuid=project_uuid,
-                        contact_urn=contact_urn,
-                        contact_name=contact_name or "",
-                        channel_uuid=channel_uuid,
-                        msg_created_at=msg_created_at,
-                        event_metadata=event_metadata,
-                        level="warning",
-                    )
                 # Create new conversation
                 conversation = self._create_conversation(
                     project=project,

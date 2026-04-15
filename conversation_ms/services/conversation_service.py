@@ -19,6 +19,9 @@ class ConversationService:
         channel_uuid: Optional[str] = None,
         event_metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[object]:
+        """
+        Ensure a conversation row exists for routing, delegating persistence to ``MainConversationService``.
+        """
         # Sentry when creating would need required fields but created_at is missing
         if not msg_created_at:
             report_missing_required_sentry(
@@ -66,7 +69,6 @@ class ConversationService:
                 contact_name=contact_name,
                 channel_uuid=channel_uuid,
                 msg_created_at=msg_created_at,
-                event_metadata=event_metadata,
             )
 
             if conversation:

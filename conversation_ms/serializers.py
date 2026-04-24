@@ -186,6 +186,19 @@ class ConversationSerializer(serializers.ModelSerializer):
         return None
 
 
+class ConversationListCursorResponseSerializer(serializers.Serializer):
+    """
+    OpenAPI shape for GET .../conversations/ (cursor page + aggregates).
+    Matches the runtime payload built in ConversationViewSet.list.
+    """
+
+    next = serializers.URLField(allow_null=True, required=False)
+    previous = serializers.URLField(allow_null=True, required=False)
+    results = ConversationSerializer(many=True)
+    total_count = serializers.IntegerField()
+    status_summary = serializers.DictField()
+
+
 class ConversationDetailSerializer(ConversationSerializer):
     """
     Normalized conversation format for detail (retrieve) - matches nexus-ai output.

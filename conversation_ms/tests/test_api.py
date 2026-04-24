@@ -57,6 +57,9 @@ class TestConversationEndpoint:
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data["results"]) == 2
+        assert response.data["total_count"] == 2
+        assert response.data["status_summary"]["0"] == 1
+        assert response.data["status_summary"]["2"] == 1
 
     def test_filter_conversations_by_status(self, api_client, project, auth_headers):
         Conversation.objects.create(project=project, resolution="0")  # Resolved
@@ -67,9 +70,26 @@ class TestConversationEndpoint:
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data["results"]) == 1
+        assert response.data["total_count"] == 1
+        assert response.data["status_summary"]["0"] == 1
+        assert response.data["status_summary"]["2"] == 1
         # DRF ModelSerializer standard behavior for CharField with choices is to return the value
         # But here resolution is CharField in model with choices, so it returns the string value
         assert str(response.data["results"][0]["resolution"]) == "0"
+
+    def test_list_conversations_unknown_resolution_maps_to_unclassified_summary(
+        self, api_client, project, auth_headers
+    ):
+        Conversation.objects.create(project=project, resolution="0")
+        Conversation.objects.create(project=project, resolution="invalid-legacy")
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["total_count"] == 2
+        assert response.data["status_summary"]["0"] == 1
+        assert response.data["status_summary"]["3"] == 1
 
     def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution="0")

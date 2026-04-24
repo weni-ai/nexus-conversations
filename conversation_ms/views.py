@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pendulum
 from django.core.cache import cache
+from django.db.models import Count
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status, viewsets
@@ -76,6 +77,59 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.select_related("messages_data")
 
         return queryset.order_by("-created_at", "-uuid")
+
+    def _filtered_queryset(self, queryset, query_params):
+        """Apply ConversationFilter; same contract as DjangoFilterBackend for this viewset."""
+        return ConversationFilter(data=query_params, queryset=queryset, request=self.request).qs
+
+    @staticmethod
+    def _resolution_status_summary(queryset):
+        """
+        Count conversations per resolution for the given queryset (DB aggregate).
+        Unknown / empty resolution maps to "3" (Unclassified), matching nexus-ai public V2.
+        """
+        summary = {str(k): 0 for k, _ in Conversation.RESOLUTION_CHOICES}
+        qs = queryset.order_by()
+        for row in qs.values("resolution").annotate(c=Count("uuid")):
+            raw = row["resolution"]
+            if raw is None or str(raw) == "":
+                bucket = "3"
+            else:
+                bucket = str(raw)
+                if bucket not in summary:
+                    bucket = "3"
+            summary[bucket] += row["c"]
+        return summary
+
+    def list(self, request, *args, **kwargs):
+        base_qs = self.get_queryset()
+        filtered_qs = self._filtered_queryset(base_qs, request.query_params)
+
+        summary_params = request.query_params.copy()
+        for key in ("status", "resolution"):
+            summary_params.pop(key, None)
+        summary_qs = self._filtered_queryset(base_qs, summary_params)
+
+        total_count = filtered_qs.order_by().count()
+        status_summary = self._resolution_status_summary(summary_qs)
+
+        page = self.paginate_queryset(filtered_qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            payload = dict(response.data)
+            payload["total_count"] = total_count
+            payload["status_summary"] = status_summary
+            return Response(payload)
+
+        serializer = self.get_serializer(filtered_qs, many=True)
+        return Response(
+            {
+                "results": serializer.data,
+                "total_count": total_count,
+                "status_summary": status_summary,
+            }
+        )
 
 
 class TopicsViewSet(ModelViewSet):

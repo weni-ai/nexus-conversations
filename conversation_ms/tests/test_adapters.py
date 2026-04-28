@@ -9,7 +9,7 @@ import pendulum
 import pytest
 
 from conversation_ms.adapters.conversation import update_conversation_data
-from conversation_ms.adapters.data_lake import DataLakeEventDTO
+from conversation_ms.adapters.data_lake import DataLakeEventDTO, build_topics_event
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.router_service import MainConversationService
 from conversation_ms.models import Conversation, Project
@@ -491,6 +491,41 @@ class TestDataLakeEventDTO:
         )
         with pytest.raises(ValueError, match="project cannot be empty"):
             dto.validate()
+
+
+@pytest.mark.django_db
+class TestBuildTopicsEvent:
+    """Tests for build_topics_event (nexus-ai topics event shape)."""
+
+    def test_bias_when_no_active_topics(self, project):
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            channel_uuid=uuid4(),
+        )
+        dto = build_topics_event(conv, str(project.uuid), None, has_active_topics=False)
+        assert dto.key == "topics"
+        assert dto.value == "bias"
+        assert dto.metadata["topic_uuid"] == ""
+        assert dto.metadata["subtopic_uuid"] == ""
+
+    def test_derives_topic_from_subtopic_when_topic_fk_null(self, project):
+        from conversation_ms.models import ConversationClassification, SubTopic, Topic
+
+        topic = Topic.objects.create(project=project, name="Parent")
+        sub = SubTopic.objects.create(topic=topic, name="Child")
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            channel_uuid=uuid4(),
+        )
+        cc = ConversationClassification.objects.create(conversation=conv, topic=None, subtopic=sub)
+
+        dto = build_topics_event(conv, str(project.uuid), cc, has_active_topics=True)
+        assert dto.value == "Parent"
+        assert dto.metadata["topic_uuid"] == str(topic.uuid)
+        assert dto.metadata["subtopic_uuid"] == str(sub.uuid)
+        assert dto.metadata["subtopic"] == "Child"
 
 
 @pytest.mark.django_db

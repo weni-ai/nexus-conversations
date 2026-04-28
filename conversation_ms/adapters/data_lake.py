@@ -73,11 +73,77 @@ class DataLakeEventDTO:
         }
 
 
+def _topics_value_and_metadata(
+    classification: Any,
+    *,
+    has_active_topics: bool,
+    human_support: bool,
+) -> tuple[str, Dict[str, Any]]:
+    """
+    Value and metadata for key=topics.
+    """
+    base_meta: Dict[str, Any] = {
+        "topic_uuid": "",
+        "subtopic_uuid": "",
+        "subtopic": "",
+        "human_support": human_support,
+    }
+    if not has_active_topics or classification is None:
+        return "bias", base_meta
+
+    subtopic = getattr(classification, "subtopic", None)
+    topic = getattr(classification, "topic", None)
+    if topic is None and subtopic is not None:
+        topic = getattr(subtopic, "topic", None)
+
+    if topic is None:
+        return "bias", base_meta
+
+    meta = {
+        "topic_uuid": str(topic.uuid),
+        "subtopic_uuid": str(subtopic.uuid) if subtopic else "",
+        "subtopic": subtopic.name if subtopic else "",
+        "human_support": human_support,
+    }
+    return topic.name, meta
+
+
+def build_topics_event(
+    conversation,
+    project_uuid: str,
+    classification: Any,
+    *,
+    has_active_topics: bool,
+) -> DataLakeEventDTO:
+    """
+    Separate ``topics`` datalake event.
+    """
+    start_date_str = (
+        pendulum.instance(conversation.start_date).to_iso8601_string() if conversation.start_date is not None else ""
+    )
+    value, metadata = _topics_value_and_metadata(
+        classification,
+        has_active_topics=has_active_topics,
+        human_support=conversation.has_chats_room,
+    )
+    return DataLakeEventDTO(
+        event_name="weni_nexus_data",
+        date=start_date_str,
+        project=project_uuid,
+        contact_urn=conversation.contact_urn,
+        key="topics",
+        value_type="string",
+        value=value,
+        metadata=metadata,
+    )
+
+
 def build_conversation_classification_event(
     conversation,
     project_uuid: str,
     resolution: str,
 ) -> DataLakeEventDTO:
+    """Resolution-only event."""
     resolution_value = ResolutionEntities.resolution_mapping(resolution)
     start_date_str = (
         pendulum.instance(conversation.start_date).to_iso8601_string() if conversation.start_date is not None else ""
@@ -85,6 +151,13 @@ def build_conversation_classification_event(
     end_date_str = (
         pendulum.instance(conversation.end_date).to_iso8601_string() if conversation.end_date is not None else ""
     )
+    metadata: Dict[str, Any] = {
+        "human_support": conversation.has_chats_room,
+        "conversation_start_date": start_date_str,
+        "conversation_end_date": end_date_str,
+        "conversation_uuid": str(conversation.uuid),
+    }
+
     return DataLakeEventDTO(
         event_name="weni_nexus_data",
         date=start_date_str,
@@ -93,12 +166,7 @@ def build_conversation_classification_event(
         key="conversation_classification",
         value_type="string",
         value=resolution_value,
-        metadata={
-            "human_support": conversation.has_chats_room,
-            "conversation_start_date": start_date_str,
-            "conversation_end_date": end_date_str,
-            "conversation_uuid": str(conversation.uuid),
-        },
+        metadata=metadata,
     )
 
 

@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
-from conversation_ms.adapters.data_lake import build_conversation_classification_event, send_data_lake_event
+from conversation_ms.adapters.data_lake import (
+    build_conversation_classification_event,
+    build_topics_event,
+    send_data_lake_event,
+)
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
@@ -87,24 +91,34 @@ class ClassificationService:
             conversation.resolution = resolution
 
         project_uuid = str(conversation.project.uuid)
-        if send_to_datalake:
-            self._send_resolution_to_datalake(
-                resolution=resolution,
-                has_chats_room=conversation.has_chats_room,
-                project_uuid=project_uuid,
-                contact_urn=conversation.contact_urn,
-                conversation=conversation,
-            )
 
         # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
             messages = self._get_conversation_messages(conversation)
 
-        if not messages:
-            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-            return (conversation, None, resolution)
+        if topics_payload is None:
+            topics_payload = self._get_topics_payload(conversation.project)
+        has_active_topics = len(topics_payload) > 0
 
-        classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
+        classification: Optional[ConversationClassification] = None
+        if messages:
+            classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
+        else:
+            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+
+        if send_to_datalake:
+            self._send_resolution_to_datalake(
+                resolution=resolution,
+                project_uuid=project_uuid,
+                conversation=conversation,
+            )
+            self._send_topics_to_datalake(
+                conversation=conversation,
+                project_uuid=project_uuid,
+                classification=classification,
+                has_active_topics=has_active_topics,
+            )
+
         return (conversation, classification, resolution)
 
     def _get_resolution_classification(self, conversation: Conversation, messages: List[Dict[str, Any]]) -> str:
@@ -327,9 +341,7 @@ class ClassificationService:
 
         self._send_resolution_to_datalake(
             resolution=resolution,
-            has_chats_room=has_chats_room,
             project_uuid=project_uuid,
-            contact_urn=contact_urn,
             conversation=conversation,
         )
 
@@ -363,17 +375,31 @@ class ClassificationService:
     def _send_resolution_to_datalake(
         self,
         resolution: str,
-        has_chats_room: bool,
         project_uuid: str,
-        contact_urn: str,
         conversation: object = None,
     ) -> None:
         """
-        Create and send resolution event to data lake.
+        Send conversation_classification event (resolution only; topics are a separate event).
         """
         if not conversation:
             logger.warning("Cannot send to data lake: conversation object is None")
             return
 
         event_dto = build_conversation_classification_event(conversation, project_uuid, resolution)
+        send_data_lake_event.delay(event_dto.dict())
+
+    def _send_topics_to_datalake(
+        self,
+        conversation: Conversation,
+        project_uuid: str,
+        classification: Optional[ConversationClassification],
+        has_active_topics: bool,
+    ) -> None:
+        """Send topics event (nexus-ai ``lambda_conversation_topics`` contract)."""
+        event_dto = build_topics_event(
+            conversation,
+            project_uuid,
+            classification,
+            has_active_topics=has_active_topics,
+        )
         send_data_lake_event.delay(event_dto.dict())

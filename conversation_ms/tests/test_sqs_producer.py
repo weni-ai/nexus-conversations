@@ -1,5 +1,6 @@
 """Tests for BillingSQSProducer and billing close payload."""
 
+import hashlib
 import json
 from datetime import datetime
 from datetime import timezone as dt_timezone
@@ -8,8 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from conversation_ms.producers.sqs_producer import (
+    _MESSAGE_GROUP_ID_ALLOWED,
     _REQUIRED_CLOSE_KEYS,
+    SQS_GROUP_ID_MAX_LENGTH,
     BillingSQSProducer,
+    _fifo_message_group_digest_suffix,
+    _fifo_message_group_id,
     _normalize_sqs_deduplication_id,
     build_conversation_close_billing_payload,
     get_billing_sqs_producer,
@@ -30,6 +35,77 @@ def test_normalize_sqs_deduplication_id_sanitizes():
     out = _normalize_sqs_deduplication_id("a:b@c#d")
     assert ":" not in out
     assert "@" not in out
+
+
+def _expected_hashed_group_id(channel: str, urn: str) -> str:
+    prefix = f"{channel}:"
+    digest = _fifo_message_group_digest_suffix(channel, urn)
+    prefix_safe = all(c in _MESSAGE_GROUP_ID_ALLOWED for c in prefix)
+    if not prefix_safe:
+        return digest[:SQS_GROUP_ID_MAX_LENGTH]
+    max_suffix = SQS_GROUP_ID_MAX_LENGTH - len(prefix)
+    if max_suffix < 1:
+        return digest[:SQS_GROUP_ID_MAX_LENGTH]
+    return prefix + digest[:max_suffix]
+
+
+class TestFifoMessageGroupId:
+    def test_short_safe_urn_unchanged(self):
+        channel = "00000000-0000-0000-0000-000000000001"
+        urn = "whatsapp:5584996765969"
+        expected = f"{channel}:{urn}"
+        out = _fifo_message_group_id(channel, urn)
+        assert out == expected
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
+
+    def test_long_contact_urn_uses_deterministic_digest_suffix(self):
+        channel = "a" * 36
+        urn = "c" * 100
+        prefix = f"{channel}:"
+        assert len(prefix + urn) > SQS_GROUP_ID_MAX_LENGTH
+        out = _fifo_message_group_id(channel, urn)
+        assert len(out) <= SQS_GROUP_ID_MAX_LENGTH
+        assert out == _expected_hashed_group_id(channel, urn)
+        assert out.startswith(prefix)
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
+
+    def test_invalid_chars_in_prefix_use_digest_only(self):
+        channel = "00000000-0000-0000-0000-00000000 00"
+        urn = "whatsapp:1"
+        digest = _fifo_message_group_digest_suffix(channel, urn)
+        out = _fifo_message_group_id(channel, urn)
+        assert out == digest[:SQS_GROUP_ID_MAX_LENGTH]
+        assert len(out) == 64
+        assert " " not in out
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
+
+    def test_display_name_style_urn_with_spaces_uses_digest_suffix(self):
+        channel = "d29f4b52-cb0a-43e5-8e32-abb522a0d1ca"
+        urn = "ext:Admin MIA - IEG - 1775131903230"
+        out = _fifo_message_group_id(channel, urn)
+        assert " " not in out
+        assert out == _expected_hashed_group_id(channel, urn)
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
+
+    def test_vtex_style_urn_literal_when_under_limit(self):
+        channel = "41d3e926-3656-4ef4-ba2c-38b2b4b01b31"
+        urn = "ext:356526701290@jsmf1585--americanasquiosque.myvtex.com"
+        out = _fifo_message_group_id(channel, urn)
+        assert out == f"{channel}:{urn}"
+        assert len(out) <= SQS_GROUP_ID_MAX_LENGTH
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in out)
+
+    def test_space_urn_and_hyphen_urn_do_not_share_group_id(self):
+        channel = "20000000-0000-0000-0000-000000000002"
+        g1 = _fifo_message_group_id(channel, "ext:foo bar")
+        g2 = _fifo_message_group_id(channel, "ext:foo-bar")
+        assert g1 != g2
+
+    def test_digest_matches_full_string_hash(self):
+        channel = "c" * 36
+        urn = "ext:weird-\u03bb"
+        expected_hex = hashlib.sha256(f"{channel}:{urn}".encode()).hexdigest()
+        assert _fifo_message_group_digest_suffix(channel, urn) == expected_hex
 
 
 @pytest.mark.django_db
@@ -121,7 +197,13 @@ class TestBillingSQSProducer:
         mock_client.send_message.assert_called_once()
         call_kw = mock_client.send_message.call_args.kwargs
         assert call_kw["QueueUrl"] == "https://sqs.us-east-1.amazonaws.com/1/q.fifo"
-        assert call_kw["MessageGroupId"] == "00000000-0000-0000-0000-000000000001:whatsapp:5584996765969"
+        expected_gid = _fifo_message_group_id(
+            payload["channel_uuid"],
+            payload["contact_urn"],
+        )
+        assert call_kw["MessageGroupId"] == expected_gid
+        assert len(call_kw["MessageGroupId"]) <= SQS_GROUP_ID_MAX_LENGTH
+        assert all(c in _MESSAGE_GROUP_ID_ALLOWED for c in call_kw["MessageGroupId"])
         dedup = call_kw["MessageDeduplicationId"]
         assert len(dedup) == 36 and dedup.count("-") == 4
         body = json.loads(call_kw["MessageBody"])

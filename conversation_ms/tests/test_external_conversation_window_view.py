@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from django.core.cache import cache
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -43,10 +44,20 @@ def valid_payload():
     }
 
 
+_LOC_MEM_CACHE = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "test_external_conversation_window",
+    }
+}
+
+
 @pytest.fixture(autouse=True)
-def _clear_cache():
-    yield
-    cache.clear()
+def _use_locmem_cache_and_clear():
+    """Avoid django-redis during tests when REDIS_URL points at an unreachable host (e.g. redis:6379)."""
+    with override_settings(CACHES=_LOC_MEM_CACHE):
+        yield
+        cache.clear()
 
 
 @pytest.mark.django_db

@@ -20,6 +20,48 @@ from conversation_ms.repositories.message_repository import MessageRepository
 logger = logging.getLogger(__name__)
 
 
+def _filter_messages_by_conversation_window(messages: list, obj: Conversation) -> list:
+    """
+    When the conversation has start_date and/or end_date, keep messages whose created_at
+    falls within that window (inclusive). If neither is set, return messages unchanged.
+    Messages without parseable created_at are kept.
+    """
+    has_start = obj.start_date is not None
+    has_end = obj.end_date is not None
+    if not has_start and not has_end:
+        return messages
+
+    lower_dt = upper_dt = None
+    if has_start:
+        try:
+            lower_dt = pendulum.instance(obj.start_date).in_timezone("UTC")
+        except Exception:
+            lower_dt = None
+    if has_end:
+        try:
+            upper_dt = pendulum.instance(obj.start_date).in_timezone("UTC")
+        except Exception:
+            upper_dt = None
+
+    filtered = []
+    for msg in messages:
+        raw = msg.get("created_at")
+        if not raw:
+            filtered.append(msg)
+            continue
+        try:
+            t = pendulum.parse(str(raw)).in_timezone("UTC")
+        except Exception:
+            filtered.append(msg)
+            continue
+        if lower_dt is not None and t < lower_dt:
+            continue
+        if upper_dt is not None and t > upper_dt:
+            continue
+        filtered.append(msg)
+    return filtered
+
+
 class TopicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic
@@ -147,6 +189,8 @@ class ConversationSerializer(serializers.ModelSerializer):
                 messages = self._get_from_dynamo(obj) or self._get_from_postgres(obj) or []
             else:
                 messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
+
+            messages = _filter_messages_by_conversation_window(messages, obj)
 
             # Sort by created_at descending (newest first) for pagination
             messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)

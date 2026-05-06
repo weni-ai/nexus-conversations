@@ -39,7 +39,7 @@ def _filter_messages_by_conversation_window(messages: list, obj: Conversation) -
             lower_dt = None
     if has_end:
         try:
-            upper_dt = pendulum.instance(obj.start_date).in_timezone("UTC")
+            upper_dt = pendulum.instance(obj.end_date).in_timezone("UTC")
         except Exception:
             upper_dt = None
 

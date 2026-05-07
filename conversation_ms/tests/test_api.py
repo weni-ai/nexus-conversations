@@ -239,3 +239,99 @@ class TestConversationEndpoint:
         assert results[0]["id"] is not None
         mock_capture.assert_called_once()
         mock_context.assert_called_once()
+
+    def test_retrieve_conversation_filters_messages_by_start_and_end_date(self, api_client, project, auth_headers):
+        """Detail messages are limited to [start_date, end_date] when both are set (Postgres path)."""
+        conversation = Conversation.objects.create(
+            project=project,
+            resolution="0",
+            start_date="2026-01-01T10:00:00Z",
+            end_date="2026-01-01T12:00:00Z",
+        )
+        messages_data = [
+            {"source": "user", "text": "Before", "created_at": "2026-01-01T09:59:00Z"},
+            {"source": "user", "text": "Inside", "created_at": "2026-01-01T11:00:00Z"},
+            {"source": "assistant", "text": "After", "created_at": "2026-01-01T12:01:00Z"},
+        ]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data["messages"]["results"]
+        texts = {m["text"] for m in results}
+        assert texts == {"Inside"}
+
+    def test_retrieve_conversation_filters_messages_dynamo_path(self, api_client, project, auth_headers):
+        """IN_PROGRESS uses Dynamo first; window filter still applies when start/end are set."""
+        conversation = Conversation.objects.create(
+            project=project,
+            resolution="2",
+            start_date="2026-03-01T08:00:00Z",
+            end_date="2026-03-01T10:00:00Z",
+        )
+        outside = {
+            "uuid": str(uuid4()),
+            "id": str(uuid4()),
+            "text": "Outside",
+            "source": "incoming",
+            "created_at": "2026-03-01T07:00:00Z",
+        }
+        inside = {
+            "uuid": str(uuid4()),
+            "id": str(uuid4()),
+            "text": "Inside window",
+            "source": "incoming",
+            "created_at": "2026-03-01T09:00:00Z",
+        }
+
+        with patch(
+            "conversation_ms.serializers.MessageRepository.get_messages_from_dynamo",
+            return_value=[
+                {
+                    "message_id": outside["uuid"],
+                    "text": outside["text"],
+                    "source": "user",
+                    "created_at": outside["created_at"],
+                },
+                {
+                    "message_id": inside["uuid"],
+                    "text": inside["text"],
+                    "source": "user",
+                    "created_at": inside["created_at"],
+                },
+            ],
+        ):
+            url = reverse(
+                "project-conversations-detail",
+                kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+            )
+            response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data["messages"]["results"]
+        assert len(results) == 1
+        assert results[0]["text"] == "Inside window"
+        assert results[0]["source"] == "incoming"
+
+    def test_retrieve_conversation_no_date_filter_when_start_end_unset(self, api_client, project, auth_headers):
+        """Without start_date/end_date, all stored messages are returned (backward compatible)."""
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        messages_data = [
+            {"source": "user", "text": "Old", "created_at": "2020-01-01T00:00:00Z"},
+            {"source": "assistant", "text": "New", "created_at": "2026-05-01T00:00:00Z"},
+        ]
+        ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data["messages"]["results"]) == 2

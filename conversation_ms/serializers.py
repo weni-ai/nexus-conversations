@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any, Optional, Tuple
 
 import pendulum
 import sentry_sdk
@@ -18,6 +19,78 @@ from conversation_ms.pagination import MessagePagination
 from conversation_ms.repositories.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _conversation_message_window_utc(conversation: Conversation) -> Tuple[Optional[Any], Optional[Any]]:
+    """
+    UTC inclusive bounds used when filtering messages by the conversation window.
+
+    ``window_start`` is floored to the beginning of its UTC second. Dynamo (and some
+    clients) only store second precision for ``created_at``; ``conversation.start_date``
+    can include subseconds, so without flooring the first stored message can parse as
+    strictly before ``start_date`` and be dropped incorrectly.
+    """
+    has_start = conversation.start_date is not None
+    has_end = conversation.end_date is not None
+    if not has_start and not has_end:
+        return None, None
+
+    window_start = window_end = None
+    if has_start:
+        try:
+            window_start = pendulum.instance(conversation.start_date).in_timezone("UTC").start_of("second")
+        except Exception:
+            window_start = None
+    if has_end:
+        try:
+            window_end = pendulum.instance(conversation.end_date).in_timezone("UTC")
+        except Exception:
+            window_end = None
+
+    return window_start, window_end
+
+
+def _parse_message_created_at_utc(raw: str):
+    """
+    Parse message ``created_at`` to UTC.
+
+    Strings without an explicit offset (typical Dynamo ``YYYY-MM-DDTHH:mm:ss``) are parsed as UTC.
+    Strings with an offset (e.g. ``...-03:00``) keep that instant when converted to UTC.
+    """
+    return pendulum.parse(str(raw).strip(), tz="UTC").in_timezone("UTC")
+
+
+def _filter_messages_by_conversation_window(messages: list, conversation: Conversation) -> list:
+    """
+    Drop messages whose ``created_at`` falls outside ``[start_date, end_date]`` when either
+    is set on the conversation. Bounds are inclusive.
+
+    Messages with missing or unparseable ``created_at`` are kept (legacy / partial rows).
+    """
+    window_start, window_end = _conversation_message_window_utc(conversation)
+    if window_start is None and window_end is None:
+        return messages
+
+    result: list = []
+    for message in messages:
+        raw_created_at = message.get("created_at")
+        if not raw_created_at:
+            result.append(message)
+            continue
+
+        try:
+            at_utc = _parse_message_created_at_utc(raw_created_at)
+        except Exception:
+            result.append(message)
+            continue
+
+        if window_start is not None and at_utc < window_start:
+            continue
+        if window_end is not None and at_utc > window_end:
+            continue
+        result.append(message)
+
+    return result
 
 
 class TopicSerializer(serializers.ModelSerializer):
@@ -147,6 +220,8 @@ class ConversationSerializer(serializers.ModelSerializer):
                 messages = self._get_from_dynamo(obj) or self._get_from_postgres(obj) or []
             else:
                 messages = self._get_from_postgres(obj) or self._get_from_dynamo(obj) or []
+
+            messages = _filter_messages_by_conversation_window(messages, obj)
 
             # Sort by created_at descending (newest first) for pagination
             messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)

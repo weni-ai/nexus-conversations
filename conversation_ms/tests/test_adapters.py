@@ -140,6 +140,9 @@ class TestMainConversationService:
         assert conv.uuid == existing.uuid
         existing.refresh_from_db()
         assert pendulum.instance(existing.start_date).in_timezone("UTC") == pendulum.parse(earlier).in_timezone("UTC")
+        assert pendulum.instance(existing.end_date).in_timezone("UTC") == end_of_project_local_calendar_day_utc(
+            late_start, tz
+        )
 
     def test_ensure_conversation_exists_does_not_move_start_across_prior_project_local_day(self, project):
         """Late message from previous project-local day must not move start_date (service-day anchor)."""

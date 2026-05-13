@@ -5,6 +5,7 @@ Tests for ConversationWindowService.
 from unittest.mock import patch
 from uuid import uuid4
 
+import pendulum
 import pytest
 from django.core.exceptions import ValidationError
 
@@ -129,6 +130,34 @@ class TestConversationWindowService:
 
         conversation.refresh_from_db()
         assert conversation.resolution == str(ResolutionEntities.IN_PROGRESS)
+
+    def test_process_conversation_window_preserves_start_date_when_already_set(self, project, mock_sentry):
+        """Later window events must not overwrite ``start_date`` (e.g. ticket time vs first message)."""
+        channel_uuid = uuid4()
+        original_start = pendulum.parse("2026-05-13T09:51:46Z")
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Mari",
+            channel_uuid=channel_uuid,
+            resolution=str(ResolutionEntities.IN_PROGRESS),
+            start_date=original_start,
+            end_date=pendulum.parse("2026-05-14T02:59:59Z"),
+        )
+        event_data = {
+            "correlation_id": str(uuid4()),
+            "data": {
+                "project_uuid": str(project.uuid),
+                "contact_urn": conv.contact_urn,
+                "channel_uuid": str(channel_uuid),
+                "start": "2026-05-13T10:07:00Z",
+                "end": "2026-05-13T23:59:59Z",
+                "ticket_uuid": str(uuid4()),
+            },
+        }
+        ConversationWindowService().process_conversation_window(event_data)
+        conv.refresh_from_db()
+        assert pendulum.instance(conv.start_date).in_timezone("UTC") == original_start.in_timezone("UTC")
 
     def test_process_conversation_window_create_with_ticket_stays_in_progress(self, mock_sentry):
         """New conversation with ticket_uuid is still IN_PROGRESS for batch close."""

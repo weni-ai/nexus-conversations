@@ -212,7 +212,7 @@ class MainConversationService:
     ) -> None:
         """
         If this message predates stored start_date on the same project-local calendar day,
-        widen the window backward.
+        move ``start_date`` to that message.
 
         Moving ``start_date`` into a *previous* local day would change
         ``conversation_effective_service_end_utc`` (it anchors the service day to
@@ -231,14 +231,11 @@ class MainConversationService:
             ):
                 return
             conversation.start_date = msg_date
-            msg_day_end = end_of_project_local_calendar_day_utc(msg_date, tz_name)
+            update_fields = ["start_date"]
             if conversation.end_date is None:
-                conversation.end_date = msg_day_end
-            else:
-                conv_end = pendulum.instance(conversation.end_date).in_timezone("UTC")
-                if msg_day_end > conv_end:
-                    conversation.end_date = msg_day_end
-            conversation.save(update_fields=["start_date", "end_date"])
+                conversation.end_date = end_of_project_local_calendar_day_utc(msg_date, tz_name)
+                update_fields.append("end_date")
+            conversation.save(update_fields=update_fields)
             logger.info(
                 "[MainConversationService] Moved start_date earlier to match earliest message "
                 "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",

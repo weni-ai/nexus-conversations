@@ -112,6 +112,68 @@ class TestMainConversationService:
             msg_created_at, tz
         )
 
+    def test_ensure_conversation_exists_moves_start_date_earlier_when_message_precedes_stored_start(self, project):
+        """If ``start_date`` was set too late (e.g. room event), a customer message can pull it back."""
+        project.timezone = "America/Sao_Paulo"
+        project.save(update_fields=["timezone"])
+        channel_uuid = uuid4()
+        late_start = pendulum.parse("2026-05-13T10:07:00Z")
+        tz = resolve_effective_project_timezone(project.timezone)
+        existing = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Mari",
+            channel_uuid=channel_uuid,
+            resolution="2",
+            start_date=late_start,
+            end_date=end_of_project_local_calendar_day_utc(late_start, tz),
+        )
+        service = MainConversationService()
+        earlier = "2026-05-13T09:51:46Z"
+        conv = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Mari",
+            channel_uuid=str(channel_uuid),
+            msg_created_at=earlier,
+        )
+        assert conv.uuid == existing.uuid
+        existing.refresh_from_db()
+        assert pendulum.instance(existing.start_date).in_timezone("UTC") == pendulum.parse(earlier).in_timezone("UTC")
+        assert pendulum.instance(existing.end_date).in_timezone("UTC") == end_of_project_local_calendar_day_utc(
+            late_start, tz
+        )
+
+    def test_ensure_conversation_exists_does_not_move_start_across_prior_project_local_day(self, project):
+        """Late message from previous project-local day must not move start_date (service-day anchor)."""
+        project.timezone = "America/Sao_Paulo"
+        project.save(update_fields=["timezone"])
+        channel_uuid = uuid4()
+        late_start = pendulum.parse("2026-05-13T10:07:00Z")
+        tz = resolve_effective_project_timezone(project.timezone)
+        existing = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Mari",
+            channel_uuid=channel_uuid,
+            resolution="2",
+            start_date=late_start,
+            end_date=end_of_project_local_calendar_day_utc(late_start, tz),
+        )
+        service = MainConversationService()
+        # May 12 22:00 -03 == May 13 01:00Z — strictly before stored UTC start but different local calendar day
+        prior_local_day_msg = "2026-05-13T01:00:00Z"
+        conv = service.ensure_conversation_exists(
+            project_uuid=str(project.uuid),
+            contact_urn="whatsapp:+5511999999999",
+            contact_name="Mari",
+            channel_uuid=str(channel_uuid),
+            msg_created_at=prior_local_day_msg,
+        )
+        assert conv.uuid == existing.uuid
+        existing.refresh_from_db()
+        assert pendulum.instance(existing.start_date).in_timezone("UTC") == late_start.in_timezone("UTC")
+
     def test_ensure_conversation_exists_creates_project(self):
         """Test creating project if it doesn't exist."""
         project_uuid = uuid4()

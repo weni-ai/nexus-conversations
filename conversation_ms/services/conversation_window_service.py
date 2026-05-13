@@ -66,7 +66,10 @@ class ConversationWindowService:
                 # Update existing conversation
                 conversation.external_id = event.external_id or conversation.external_id
                 conversation.has_chats_room = event.has_chats_room
-                conversation.start_date = event.start_date or conversation.start_date
+                # Room/window events may carry a ``start`` that reflects ticket/session time, not the first
+                # customer message. Never replace an already-set ``start_date`` (messages backfill when null).
+                if conversation.start_date is None and event.start_date is not None:
+                    conversation.start_date = event.start_date
                 conversation.end_date = event.end_date or conversation.end_date
                 conversation.contact_name = event.contact_name or conversation.contact_name
                 conversation.ticket_uuid = event.ticket_uuid or conversation.ticket_uuid

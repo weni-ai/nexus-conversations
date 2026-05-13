@@ -76,6 +76,9 @@ elif [[ "healthcheck-celery-worker" == "$1" ]]; then
     echo "${HEALTHCHECK_OUT}"
     grep -F -qs "${celery_queue}@${HOSTNAME}: OK" <<< "${HEALTHCHECK_OUT}" || exit 1
     exit 0
+elif [[ "edaconsume" == "$1" ]]; then
+    echo "Starting EDA AMQP Consumer"
+    do_gosu "${APP_USER}:${APP_GROUP}" exec python manage.py edaconsume
 elif [[ "healthcheck-consumer" == "$1" ]]; then
     # Check if heartbeat file exists and was modified recently (e.g. last 120 seconds)
     # Default path matches main.py default

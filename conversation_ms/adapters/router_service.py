@@ -126,30 +126,12 @@ class MainConversationService:
                 return conversation
 
             conversation = matched
-
-            # Backfill start_date/end_date when conversation was created by another path (e.g. Mailroom)
-            if conversation.start_date is None and msg_created_at:
-                try:
-                    msg_date = pendulum.parse(msg_created_at)
-                    conversation.start_date = msg_date
-                    conversation.end_date = end_of_project_local_calendar_day_utc(msg_created_at, tz_name)
-                    conversation.save(update_fields=["start_date", "end_date"])
-                    logger.info(
-                        "[MainConversationService] Backfilled start_date/end_date from message timestamp "
-                        "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",
-                        conversation.uuid,
-                        project_uuid,
-                        contact_urn,
-                        conversation.start_date,
-                    )
-                except (ValueError, TypeError) as e:
-                    logger.warning(
-                        "[MainConversationService] Could not backfill start_date: invalid msg_created_at "
-                        "conversation_uuid=%s msg_created_at=%s error=%s",
-                        conversation.uuid,
-                        msg_created_at,
-                        str(e),
-                    )
+            self._backfill_conversation_window_from_message(
+                conversation, msg_created_at, tz_name, project_uuid, contact_urn
+            )
+            self._maybe_move_start_date_earlier_from_message(
+                conversation, msg_created_at, tz_name, project_uuid, contact_urn
+            )
 
             logger.debug(
                 "[MainConversationService] Found existing conversation "
@@ -185,6 +167,81 @@ class MainConversationService:
                 exc_info=True,
             )
             raise
+
+    def _backfill_conversation_window_from_message(
+        self,
+        conversation: Conversation,
+        msg_created_at: str,
+        tz_name: str,
+        project_uuid: str,
+        contact_urn: str,
+    ) -> None:
+        """Set start_date/end_date from the message when missing (e.g. row created by rooms first)."""
+        if conversation.start_date is not None or not msg_created_at:
+            return
+        try:
+            msg_date = pendulum.parse(msg_created_at)
+            conversation.start_date = msg_date
+            conversation.end_date = end_of_project_local_calendar_day_utc(msg_created_at, tz_name)
+            conversation.save(update_fields=["start_date", "end_date"])
+            logger.info(
+                "[MainConversationService] Backfilled start_date/end_date from message timestamp "
+                "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",
+                conversation.uuid,
+                project_uuid,
+                contact_urn,
+                conversation.start_date,
+            )
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                "[MainConversationService] Could not backfill start_date: invalid msg_created_at "
+                "conversation_uuid=%s msg_created_at=%s error=%s",
+                conversation.uuid,
+                msg_created_at,
+                str(e),
+            )
+
+    def _maybe_move_start_date_earlier_from_message(
+        self,
+        conversation: Conversation,
+        msg_created_at: str,
+        tz_name: str,
+        project_uuid: str,
+        contact_urn: str,
+    ) -> None:
+        """If this message predates stored start_date, widen the window backward."""
+        if conversation.start_date is None or not msg_created_at:
+            return
+        try:
+            msg_date = pendulum.parse(msg_created_at)
+            conv_start = pendulum.instance(conversation.start_date).in_timezone("UTC")
+            if msg_date.in_timezone("UTC") >= conv_start:
+                return
+            conversation.start_date = msg_date
+            msg_day_end = end_of_project_local_calendar_day_utc(msg_created_at, tz_name)
+            if conversation.end_date is None:
+                conversation.end_date = msg_day_end
+            else:
+                conv_end = pendulum.instance(conversation.end_date).in_timezone("UTC")
+                if msg_day_end > conv_end:
+                    conversation.end_date = msg_day_end
+            conversation.save(update_fields=["start_date", "end_date"])
+            logger.info(
+                "[MainConversationService] Moved start_date earlier to match earliest message "
+                "conversation_uuid=%s project_uuid=%s contact_urn=%s start_date=%s",
+                conversation.uuid,
+                project_uuid,
+                contact_urn,
+                conversation.start_date,
+            )
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                "[MainConversationService] Could not adjust start_date from message timestamp "
+                "conversation_uuid=%s msg_created_at=%s error=%s",
+                conversation.uuid,
+                msg_created_at,
+                str(e),
+            )
 
     def _create_conversation(
         self,

@@ -329,3 +329,31 @@ class SubTopicsSerializer(serializers.ModelSerializer):
 
     def get_topic_name(self, obj):
         return obj.topic.name
+
+
+class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
+    """
+    Body for POST ``projects/<uuid>/flows-db-cohort-reconcile/``.
+
+    ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
+    DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
+    """
+
+    flows_api_token = serializers.CharField(write_only=True, trim_whitespace=False)
+    date_start = serializers.CharField()
+    date_end = serializers.CharField(required=False, allow_blank=True, default="")
+    use_date_end = serializers.BooleanField(default=True)
+    apply_terminal_cohort_filter = serializers.BooleanField(default=True)
+    flows_base_url = serializers.CharField(required=False, allow_blank=True, default="")
+    key = serializers.CharField(required=False, default="conversation_classification")
+    authorization_prefix = serializers.CharField(required=False, default="Token")
+    flows_page_limit = serializers.IntegerField(required=False, default=10_000, min_value=1)
+    flows_offset_start = serializers.IntegerField(required=False, default=0, min_value=0)
+    flows_max_pages = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=1)
+    mismatch_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0)
+    uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0)
+
+    def validate(self, attrs):
+        if attrs.get("use_date_end", True) and not (attrs.get("date_end") or "").strip():
+            raise serializers.ValidationError({"date_end": "This field is required when use_date_end is true."})
+        return attrs

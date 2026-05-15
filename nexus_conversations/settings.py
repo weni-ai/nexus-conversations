@@ -181,12 +181,13 @@ CELERY_BROKER_URL = env.str("CELERY_BROKER_URL", default="redis://localhost:6379
 CELERY_ACCEPT_CONTENT = ["application/json"]
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
-CELERY_TASK_ALWAYS_EAGER = TESTING
-CELERY_TASK_EAGER_PROPAGATES = TESTING
 
 # Flows API (classification events vs DB cohort reconciliation)
 FLOWS_EVENTS_API_URL = env.str("FLOWS_EVENTS_API_URL", default="https://flows.weni.ai/api/v2/events.json")
-FLOWS_DB_COHORT_TASK_TIMEOUT = env.int("FLOWS_DB_COHORT_TASK_TIMEOUT", default=920)
+# AsyncResult.get timeout (seconds); should be >= typical run; Celery soft limit should be <= this.
+FLOWS_DB_COHORT_TASK_TIMEOUT = env.int("FLOWS_DB_COHORT_TASK_TIMEOUT", default=900)
+FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", default=880)
+FLOWS_DB_COHORT_CELERY_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_TIME_LIMIT", default=960)
 FLOWS_DB_COHORT_SYNC_VIA_CELERY = env.bool("FLOWS_DB_COHORT_SYNC_VIA_CELERY", default=True)
 
 # SQS Configuration for Conversation MS

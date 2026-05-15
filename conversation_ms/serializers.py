@@ -333,7 +333,7 @@ class SubTopicsSerializer(serializers.ModelSerializer):
 
 class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     """
-    Body for POST ``projects/<uuid>/flows-db-cohort-reconcile/``.
+    Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort-reconcile/`` (see ``conversation_ms.urls``).
 
     ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
     DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
@@ -344,16 +344,36 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     date_end = serializers.CharField(required=False, allow_blank=True, default="")
     use_date_end = serializers.BooleanField(default=True)
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
-    flows_base_url = serializers.CharField(required=False, allow_blank=True, default="")
     key = serializers.CharField(required=False, default="conversation_classification")
     authorization_prefix = serializers.CharField(required=False, default="Token")
-    flows_page_limit = serializers.IntegerField(required=False, default=10_000, min_value=1)
+    flows_page_limit = serializers.IntegerField(required=False, default=10_000, min_value=1, max_value=10_000)
     flows_offset_start = serializers.IntegerField(required=False, default=0, min_value=0)
-    flows_max_pages = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=1)
-    mismatch_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0)
-    uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0)
+    flows_max_pages = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1, max_value=200
+    )
+    mismatch_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
+    uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
         if attrs.get("use_date_end", True) and not (attrs.get("date_end") or "").strip():
             raise serializers.ValidationError({"date_end": "This field is required when use_date_end is true."})
+
+        from conversation_ms.services.flows_db_cohort_service import parse_api_utc
+
+        try:
+            start_bound = parse_api_utc(str(attrs["date_start"]).strip())
+        except ValueError as e:
+            raise serializers.ValidationError({"date_start": str(e)}) from e
+
+        if attrs.get("use_date_end", True):
+            end_raw = (attrs.get("date_end") or "").strip()
+            try:
+                end_bound = parse_api_utc(end_raw)
+            except ValueError as e:
+                raise serializers.ValidationError({"date_end": str(e)}) from e
+            if start_bound > end_bound:
+                raise serializers.ValidationError(
+                    {"date_end": "Must represent an instant on or after date_start for the same window."}
+                )
+
         return attrs

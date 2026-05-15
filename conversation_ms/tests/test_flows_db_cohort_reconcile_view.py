@@ -16,6 +16,11 @@ from conversation_ms.models import Conversation, Project
 
 @pytest.mark.django_db
 class TestFlowsDbCohortReconcileView:
+    @pytest.fixture(autouse=True)
+    def _celery_eager(self, settings):
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+
     @pytest.fixture
     def api_client(self):
         return APIClient()
@@ -135,7 +140,6 @@ class TestFlowsDbCohortReconcileView:
                 "flows_api_token": "bad",
                 "date_start": "2026-01-10T00:00:00Z",
                 "date_end": "2026-01-20T23:59:59Z",
-                "flows_base_url": "https://flows.example/api",
             },
             format="json",
             **auth_headers,

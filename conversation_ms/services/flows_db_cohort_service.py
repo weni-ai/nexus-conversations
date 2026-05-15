@@ -43,7 +43,11 @@ def parse_api_utc(s: str) -> dj_tz.datetime:
 def parse_meta_dt(s: str | None) -> pendulum.DateTime | None:
     if not s:
         return None
-    return pendulum.parse(s).in_timezone("UTC")
+    try:
+        return pendulum.parse(s).in_timezone("UTC")
+    except Exception:
+        logger.warning("[flows_db_cohort] Malformed Flows metadata datetime: %r", s)
+        return None
 
 
 def window_pendulum(cfg: dict[str, Any]) -> tuple[pendulum.DateTime, pendulum.DateTime | None]:
@@ -63,7 +67,9 @@ def pendulum_in_window(p: pendulum.DateTime | None, su: pendulum.DateTime, eu: p
 
 
 def event_metadata_both_in_window(ev: dict[str, Any], cfg: dict[str, Any]) -> bool:
-    meta = ev.get("metadata") or {}
+    meta = ev.get("metadata")
+    if not isinstance(meta, dict):
+        return False
     ms = parse_meta_dt(meta.get("conversation_start_date"))
     me = parse_meta_dt(meta.get("conversation_end_date"))
     if ms is None or me is None:
@@ -117,7 +123,12 @@ def _validate_flows_pagination_params(cfg: dict[str, Any]) -> tuple[str, int, in
 def _read_flows_events_page(url: str, req: Request) -> list[Any]:
     try:
         with urlopen(req, timeout=300) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning("[flows_db_cohort] Invalid JSON from Flows url=%s body=%s", url, raw[:500])
+            raise URLError(f"Invalid JSON response from Flows: {e}") from e
     except HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
         logger.warning("[flows_db_cohort] HTTPError %s url=%s body=%s", e.code, url, body[:500])
@@ -167,7 +178,7 @@ def _collect_flow_events_pages(
     return all_events, page_idx
 
 
-def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     token, limit, offset, max_pages = _validate_flows_pagination_params(cfg)
 
     base_params: dict[str, Any] = {
@@ -179,7 +190,7 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[
     if cfg.get("use_date_end", True):
         base_params["date_end"] = cfg["date_end"]
 
-    flows_base_url = cfg.get("flows_base_url") or _flows_base_url()
+    flows_base_url = _flows_base_url()
     auth_prefix = (cfg.get("authorization_prefix") or "Token").strip()
 
     all_events, page_idx = _collect_flow_events_pages(
@@ -195,17 +206,20 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[
     key_name = cfg.get("key", "conversation_classification")
     by_key = [e for e in all_events if isinstance(e, dict) and e.get("key") == key_name]
     cohort = [e for e in by_key if event_metadata_both_in_window(e, cfg)]
-    out_meta = [e for e in by_key if not event_metadata_both_in_window(e, cfg)]
+    metadata_outside_window_count = sum(1 for e in by_key if not event_metadata_both_in_window(e, cfg))
 
-    stats = {
+    stats: dict[str, Any] = {
         "pages_fetched": page_idx,
         "api_raw_event_count": len(all_events),
-        "conversation_classification_count": len(by_key),
+        "event_key": key_name,
+        "matching_key_event_count": len(by_key),
         "cohort_metadata_window_count": len(cohort),
-        "metadata_outside_window_count": len(out_meta),
+        "metadata_outside_window_count": metadata_outside_window_count,
         "flows_base_url": flows_base_url,
     }
-    return cohort, out_meta, stats
+    if key_name == "conversation_classification":
+        stats["conversation_classification_count"] = len(by_key)
+    return cohort, stats
 
 
 def _rows_from_qs(qs) -> list[dict[str, Any]]:
@@ -237,7 +251,7 @@ def build_db_cohort_documents(cfg: dict[str, Any]) -> tuple[dict[str, Any], dict
     qs_out = base.filter(~date_in)
 
     rows_in = _rows_from_qs(qs_in)
-    rows_out = _rows_from_qs(qs_out)
+    outside_count = qs_out.count()
 
     common_meta = {
         "project": str(pu),
@@ -251,19 +265,19 @@ def build_db_cohort_documents(cfg: dict[str, Any]) -> tuple[dict[str, Any], dict
     out_out = {
         **common_meta,
         "subset": "outside_date_window_same_terminal_base",
-        "count": len(rows_out),
-        "conversations": rows_out,
+        "count": outside_count,
+        "conversations": [],
     }
     summary = {
         "in_window_count": len(rows_in),
-        "outside_window_count": len(rows_out),
+        "outside_window_count": outside_count,
         "cohort_definition": common_meta["cohort_definition"],
         "apply_terminal_cohort_filter": common_meta["apply_terminal_cohort_filter"],
     }
     return out_in, out_out, summary
 
 
-def detail_compare_flows_to_db(
+def detail_compare_flows_to_db(  # noqa: C901
     events: list[dict[str, Any]],
     cfg: dict[str, Any],
     mismatch_sample_limit: int,
@@ -271,6 +285,8 @@ def detail_compare_flows_to_db(
     stats: dict[str, int] = {
         "events": len(events),
         "missing_conversation_row": 0,
+        "invalid_conversation_uuid_in_metadata": 0,
+        "non_dict_metadata": 0,
         "start_match": 0,
         "start_mismatch": 0,
         "end_match": 0,
@@ -281,20 +297,44 @@ def detail_compare_flows_to_db(
     mismatches: list[dict[str, Any]] = []
     project_pk = UUID(str(cfg["project"]))
 
+    rows: list[tuple[dict[str, Any], dict[str, Any], UUID]] = []
     for ev in events:
-        meta = ev.get("metadata") or {}
+        if not isinstance(ev, dict):
+            continue
+        meta = ev.get("metadata")
+        if not isinstance(meta, dict):
+            stats["non_dict_metadata"] += 1
+            continue
         u = meta.get("conversation_uuid")
         if not u:
             stats["no_uuid_in_metadata"] += 1
             continue
         try:
-            conv = Conversation.objects.get(uuid=UUID(str(u)), project_id=project_pk)
-        except Conversation.DoesNotExist:
+            uid = UUID(str(u))
+        except (ValueError, TypeError, AttributeError):
+            stats["invalid_conversation_uuid_in_metadata"] += 1
+            if len(mismatches) < mismatch_sample_limit:
+                mismatches.append({"uuid": str(u), "reason": "invalid_uuid"})
+            continue
+        rows.append((ev, meta, uid))
+
+    conv_by_lower: dict[str, Conversation] = {}
+    if rows:
+        unique_ids = list({str(r[2]).lower(): r[2] for r in rows}.values())
+        for c in Conversation.objects.filter(project_id=project_pk, uuid__in=unique_ids).only(
+            "uuid", "start_date", "end_date"
+        ):
+            conv_by_lower[str(c.uuid).lower()] = c
+
+    for _ev, meta, uid in rows:
+        conv = conv_by_lower.get(str(uid).lower())
+        if conv is None:
             stats["missing_conversation_row"] += 1
             if len(mismatches) < mismatch_sample_limit:
-                mismatches.append({"uuid": u, "reason": "not_in_db"})
+                mismatches.append({"uuid": str(uid), "reason": "not_in_db"})
             continue
 
+        u = str(uid)
         api_start = parse_meta_dt(meta.get("conversation_start_date"))
         api_end = parse_meta_dt(meta.get("conversation_end_date"))
         db_start = pendulum.instance(conv.start_date).in_timezone("UTC") if conv.start_date else None
@@ -338,7 +378,10 @@ def bidirectional_uuid_sets(
 ) -> dict[str, Any]:
     flow_uuids = set()
     for ev in events:
-        u = (ev.get("metadata") or {}).get("conversation_uuid")
+        meta = ev.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        u = meta.get("conversation_uuid")
         if u:
             flow_uuids.add(str(u).lower())
 
@@ -362,14 +405,14 @@ def run_flows_db_cohort_reconcile(cfg: dict[str, Any]) -> dict[str, Any]:
     Run full reconcile: Flows fetch, DB cohort, detail compare, bidirectional UUID sets.
 
     ``cfg`` must include: project, flows_api_token, date_start, date_end (if use_date_end).
-    Optional: use_date_end, apply_terminal_cohort_filter, flows_base_url, key,
+    Optional: use_date_end, apply_terminal_cohort_filter, key,
     authorization_prefix, flows_page_limit, flows_offset_start, flows_max_pages,
     mismatch_sample_limit, uuid_sample_limit.
     """
     mismatch_sample_limit = int(cfg.get("mismatch_sample_limit", 20))
     uuid_sample_limit = int(cfg.get("uuid_sample_limit", 20))
 
-    cohort, _out_meta, fetch_stats = fetch_flows_cohort(cfg)
+    cohort, fetch_stats = fetch_flows_cohort(cfg)
     db_in, _db_out, db_summary = build_db_cohort_documents(cfg)
     stats, mismatches = detail_compare_flows_to_db(cohort, cfg, mismatch_sample_limit)
     bidir = bidirectional_uuid_sets(cohort, db_in, uuid_sample_limit)

@@ -3,6 +3,7 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pendulum
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.conf import settings
 from django.core.cache import cache
@@ -305,9 +306,6 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
         "mismatch_sample_limit": data.get("mismatch_sample_limit", 20),
         "uuid_sample_limit": data.get("uuid_sample_limit", 20),
     }
-    raw_url = (data.get("flows_base_url") or "").strip()
-    if raw_url:
-        cfg["flows_base_url"] = raw_url
     return cfg
 
 
@@ -342,16 +340,22 @@ class FlowsDbCohortReconcileView(APIView):
         data = ser.validated_data
 
         cfg = _flows_db_cohort_build_cfg(str(project_uuid), data)
-        timeout = getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 920)
+        http_timeout = getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 900)
+        celery_soft = getattr(settings, "FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", 880)
+        celery_hard = getattr(settings, "FLOWS_DB_COHORT_CELERY_TIME_LIMIT", 960)
         via_celery = getattr(settings, "FLOWS_DB_COHORT_SYNC_VIA_CELERY", True)
 
         try:
             if via_celery:
-                async_res = reconcile_flows_db_cohort_task.delay(cfg)
-                result = async_res.get(timeout=timeout)
+                async_res = reconcile_flows_db_cohort_task.apply_async(
+                    args=[cfg],
+                    soft_time_limit=celery_soft,
+                    time_limit=celery_hard,
+                )
+                result = async_res.get(timeout=http_timeout)
             else:
                 result = run_flows_db_cohort_reconcile(cfg)
-        except CeleryTimeoutError:
+        except (CeleryTimeoutError, SoftTimeLimitExceeded):
             return Response(
                 {"error": "Reconciliation timed out"},
                 status=status.HTTP_504_GATEWAY_TIMEOUT,

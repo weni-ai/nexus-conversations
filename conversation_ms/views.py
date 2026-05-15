@@ -312,9 +312,11 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
 @extend_schema(
     summary="Reconcile Flows cohort with DB",
     description=(
+        "Returns JSON with plain English field names describing Flows fetch stats, database cohort counts, "
+        "per-conversation timestamp comparison, and conversation-id overlap between Flows and the database. "
         "Fetches conversation_classification events from Flows for the time window, "
         "builds the matching DB cohort (same inclusive window on start_date and end_date), "
-        "compares metadata to Conversation rows, and reports bidirectional UUID gaps. "
+        "compares metadata to Conversation rows, and reports id gaps. "
         "Runs inside a Celery task by default; the HTTP request blocks until completion."
     ),
     parameters=[

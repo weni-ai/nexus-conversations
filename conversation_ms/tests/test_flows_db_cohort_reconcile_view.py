@@ -119,14 +119,15 @@ class TestFlowsDbCohortReconcileView:
 
         assert response.status_code == status.HTTP_200_OK
         body = response.data
-        assert body["project"] == str(project.uuid)
-        assert body["fetch"]["cohort_metadata_window_count"] == 1
-        assert body["db_cohort"]["in_window_count"] == 1
-        assert body["detail_compare"]["stats"]["both_match"] == 1
-        assert body["bidirectional"]["flows_unique_uuids"] == 1
-        assert body["bidirectional"]["db_cohort_unique_uuids"] == 1
-        assert body["bidirectional"]["in_flows_not_in_db_cohort_count"] == 0
-        assert body["bidirectional"]["in_db_cohort_not_in_flows_count"] == 0
+        assert body["project_id"] == str(project.uuid)
+        assert body["flows_service_results"]["flows_events_inside_selected_dates"] == 1
+        assert body["database_results"]["conversations_inside_date_rules"] == 1
+        assert body["timestamp_comparison"]["totals"]["matching_start_and_end_times"] == 1
+        assert body["id_comparison_between_flows_and_database"]["unique_ids_in_flows_cohort"] == 1
+        assert body["id_comparison_between_flows_and_database"]["unique_ids_in_database_cohort"] == 1
+        assert body["id_comparison_between_flows_and_database"]["count_only_in_flows"] == 0
+        assert body["id_comparison_between_flows_and_database"]["count_only_in_database"] == 0
+        assert body["timestamp_comparison"]["examples_where_timestamps_differ"] == []
 
     @patch("conversation_ms.services.flows_db_cohort_service.urlopen")
     def test_flows_http_error_returns_502(self, mock_urlopen, api_client, project, auth_headers):

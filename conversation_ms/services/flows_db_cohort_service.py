@@ -209,16 +209,16 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     metadata_outside_window_count = sum(1 for e in by_key if not event_metadata_both_in_window(e, cfg))
 
     stats: dict[str, Any] = {
-        "pages_fetched": page_idx,
-        "api_raw_event_count": len(all_events),
-        "event_key": key_name,
-        "matching_key_event_count": len(by_key),
-        "cohort_metadata_window_count": len(cohort),
-        "metadata_outside_window_count": metadata_outside_window_count,
-        "flows_base_url": flows_base_url,
+        "flows_api_pages_read": page_idx,
+        "flows_events_total_from_api": len(all_events),
+        "flows_event_type": key_name,
+        "flows_events_with_this_type": len(by_key),
+        "flows_events_inside_selected_dates": len(cohort),
+        "flows_events_outside_selected_dates": metadata_outside_window_count,
+        "flows_request_url_base": flows_base_url,
     }
     if key_name == "conversation_classification":
-        stats["conversation_classification_count"] = len(by_key)
+        stats["flows_classification_event_count"] = len(by_key)
     return cohort, stats
 
 
@@ -261,20 +261,20 @@ def build_db_cohort_documents(cfg: dict[str, Any]) -> tuple[dict[str, Any], dict
         "cohort_definition": "both_conversation_start_and_end_inside_config_window",
         "apply_terminal_cohort_filter": bool(cfg.get("apply_terminal_cohort_filter", True)),
     }
-    out_in = {**common_meta, "count": len(rows_in), "conversations": rows_in}
+    out_in = {**common_meta, "count": len(rows_in), "conversation_rows": rows_in}
     out_out = {
         **common_meta,
         "subset": "outside_date_window_same_terminal_base",
         "count": outside_count,
-        "conversations": [],
+        "conversation_rows": [],
     }
-    summary = {
-        "in_window_count": len(rows_in),
-        "outside_window_count": outside_count,
-        "cohort_definition": common_meta["cohort_definition"],
-        "apply_terminal_cohort_filter": common_meta["apply_terminal_cohort_filter"],
+    database_totals = {
+        "conversations_inside_date_rules": len(rows_in),
+        "conversations_outside_date_rules": outside_count,
+        "date_matching_rule_description": common_meta["cohort_definition"],
+        "resolution_filter_applied": common_meta["apply_terminal_cohort_filter"],
     }
-    return out_in, out_out, summary
+    return out_in, out_out, database_totals
 
 
 def detail_compare_flows_to_db(  # noqa: C901
@@ -283,16 +283,16 @@ def detail_compare_flows_to_db(  # noqa: C901
     mismatch_sample_limit: int,
 ) -> tuple[dict[str, int], list[dict[str, Any]]]:
     stats: dict[str, int] = {
-        "events": len(events),
-        "missing_conversation_row": 0,
-        "invalid_conversation_uuid_in_metadata": 0,
-        "non_dict_metadata": 0,
-        "start_match": 0,
-        "start_mismatch": 0,
-        "end_match": 0,
-        "end_mismatch": 0,
-        "both_match": 0,
-        "no_uuid_in_metadata": 0,
+        "conversations_compared": len(events),
+        "not_found_in_database": 0,
+        "invalid_conversation_id_in_flows": 0,
+        "unreadable_flows_metadata": 0,
+        "matching_start_times": 0,
+        "different_start_times": 0,
+        "matching_end_times": 0,
+        "different_end_times": 0,
+        "matching_start_and_end_times": 0,
+        "missing_conversation_id_in_flows": 0,
     }
     mismatches: list[dict[str, Any]] = []
     project_pk = UUID(str(cfg["project"]))
@@ -303,18 +303,18 @@ def detail_compare_flows_to_db(  # noqa: C901
             continue
         meta = ev.get("metadata")
         if not isinstance(meta, dict):
-            stats["non_dict_metadata"] += 1
+            stats["unreadable_flows_metadata"] += 1
             continue
         u = meta.get("conversation_uuid")
         if not u:
-            stats["no_uuid_in_metadata"] += 1
+            stats["missing_conversation_id_in_flows"] += 1
             continue
         try:
             uid = UUID(str(u))
         except (ValueError, TypeError, AttributeError):
-            stats["invalid_conversation_uuid_in_metadata"] += 1
+            stats["invalid_conversation_id_in_flows"] += 1
             if len(mismatches) < mismatch_sample_limit:
-                mismatches.append({"uuid": str(u), "reason": "invalid_uuid"})
+                mismatches.append({"conversation_id": str(u), "reason": "invalid_conversation_id"})
             continue
         rows.append((ev, meta, uid))
 
@@ -329,9 +329,9 @@ def detail_compare_flows_to_db(  # noqa: C901
     for _ev, meta, uid in rows:
         conv = conv_by_lower.get(str(uid).lower())
         if conv is None:
-            stats["missing_conversation_row"] += 1
+            stats["not_found_in_database"] += 1
             if len(mismatches) < mismatch_sample_limit:
-                mismatches.append({"uuid": str(uid), "reason": "not_in_db"})
+                mismatches.append({"conversation_id": str(uid), "reason": "not_found_in_database"})
             continue
 
         u = str(uid)
@@ -343,28 +343,28 @@ def detail_compare_flows_to_db(  # noqa: C901
         sm = api_start is not None and db_start is not None and api_start == db_start
         em = api_end is not None and db_end is not None and api_end == db_end
         if api_start is None or db_start is None:
-            stats["start_mismatch"] += 1
+            stats["different_start_times"] += 1
             sm_ok = False
         else:
-            stats["start_match" if sm else "start_mismatch"] += 1
+            stats["matching_start_times" if sm else "different_start_times"] += 1
             sm_ok = sm
         if api_end is None or db_end is None:
-            stats["end_mismatch"] += 1
+            stats["different_end_times"] += 1
             em_ok = False
         else:
-            stats["end_match" if em else "end_mismatch"] += 1
+            stats["matching_end_times" if em else "different_end_times"] += 1
             em_ok = em
         if sm_ok and em_ok:
-            stats["both_match"] += 1
+            stats["matching_start_and_end_times"] += 1
         elif not (sm_ok and em_ok):
             if len(mismatches) < mismatch_sample_limit:
                 mismatches.append(
                     {
-                        "uuid": u,
-                        "api_start": meta.get("conversation_start_date"),
-                        "db_start": conv.start_date.isoformat() if conv.start_date else None,
-                        "api_end": meta.get("conversation_end_date"),
-                        "db_end": conv.end_date.isoformat() if conv.end_date else None,
+                        "conversation_id": u,
+                        "flows_start_time": meta.get("conversation_start_date"),
+                        "database_start_time": conv.start_date.isoformat() if conv.start_date else None,
+                        "flows_end_time": meta.get("conversation_end_date"),
+                        "database_end_time": conv.end_date.isoformat() if conv.end_date else None,
                     }
                 )
 
@@ -385,24 +385,25 @@ def bidirectional_uuid_sets(
         if u:
             flow_uuids.add(str(u).lower())
 
-    db_uuids = {str(r["uuid"]).lower() for r in dbdoc.get("conversations", [])}
+    db_rows = dbdoc.get("conversation_rows") or dbdoc.get("conversations") or []
+    db_uuids = {str(r["uuid"]).lower() for r in db_rows}
 
     in_flows_not_in_db = sorted(flow_uuids - db_uuids)
     in_db_not_in_flows = sorted(db_uuids - flow_uuids)
 
     return {
-        "flows_unique_uuids": len(flow_uuids),
-        "db_cohort_unique_uuids": len(db_uuids),
-        "in_flows_not_in_db_cohort_count": len(in_flows_not_in_db),
-        "in_db_cohort_not_in_flows_count": len(in_db_not_in_flows),
-        "sample_flows_not_in_db_cohort": in_flows_not_in_db[:uuid_sample_limit],
-        "sample_db_not_in_flows": in_db_not_in_flows[:uuid_sample_limit],
+        "unique_ids_in_flows_cohort": len(flow_uuids),
+        "unique_ids_in_database_cohort": len(db_uuids),
+        "count_only_in_flows": len(in_flows_not_in_db),
+        "count_only_in_database": len(in_db_not_in_flows),
+        "example_ids_only_in_flows": in_flows_not_in_db[:uuid_sample_limit],
+        "example_ids_only_in_database": in_db_not_in_flows[:uuid_sample_limit],
     }
 
 
 def run_flows_db_cohort_reconcile(cfg: dict[str, Any]) -> dict[str, Any]:
     """
-    Run full reconcile: Flows fetch, DB cohort, detail compare, bidirectional UUID sets.
+    Run full reconcile: Flows fetch, DB cohort, detail compare, id cross-check.
 
     ``cfg`` must include: project, flows_api_token, date_start, date_end (if use_date_end).
     Optional: use_date_end, apply_terminal_cohort_filter, key,
@@ -413,22 +414,25 @@ def run_flows_db_cohort_reconcile(cfg: dict[str, Any]) -> dict[str, Any]:
     uuid_sample_limit = int(cfg.get("uuid_sample_limit", 20))
 
     cohort, fetch_stats = fetch_flows_cohort(cfg)
-    db_in, _db_out, db_summary = build_db_cohort_documents(cfg)
+    db_in, _db_out, database_totals = build_db_cohort_documents(cfg)
     stats, mismatches = detail_compare_flows_to_db(cohort, cfg, mismatch_sample_limit)
     bidir = bidirectional_uuid_sets(cohort, db_in, uuid_sample_limit)
 
+    selected_date_range = {
+        "from_inclusive": cfg["date_start"],
+        "to_inclusive": cfg["date_end"] if cfg.get("use_date_end", True) else None,
+        "applies_end_date_cutoff": bool(cfg.get("use_date_end", True)),
+    }
+    project_id = str(cfg["project"])
+
     return {
-        "project": str(cfg["project"]),
-        "window": {
-            "date_start": cfg["date_start"],
-            "date_end": cfg["date_end"] if cfg.get("use_date_end", True) else None,
-            "use_date_end": bool(cfg.get("use_date_end", True)),
+        "project_id": project_id,
+        "selected_date_range": selected_date_range,
+        "flows_service_results": fetch_stats,
+        "database_results": database_totals,
+        "timestamp_comparison": {
+            "totals": stats,
+            "examples_where_timestamps_differ": mismatches,
         },
-        "fetch": fetch_stats,
-        "db_cohort": db_summary,
-        "detail_compare": {
-            "stats": stats,
-            "mismatch_sample": mismatches,
-        },
-        "bidirectional": bidir,
+        "id_comparison_between_flows_and_database": bidir,
     }

@@ -1,6 +1,10 @@
 from django.urls import path
 
-from conversation_ms.views import ConversationViewSet, ExternalConversationWindowView
+from conversation_ms.views import (
+    ConversationViewSet,
+    ExternalConversationWindowView,
+    FlowsDbCohortReconcileView,
+)
 
 conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
@@ -20,5 +24,10 @@ urlpatterns = [
         "projects/<uuid:project_uuid>/external-conversations/",
         ExternalConversationWindowView.as_view(),
         name="external-conversation-window",
+    ),
+    path(
+        "projects/<uuid:project_uuid>/flows-db-cohort/",
+        FlowsDbCohortReconcileView.as_view(),
+        name="project-flows-db-cohort-reconcile",
     ),
 ]

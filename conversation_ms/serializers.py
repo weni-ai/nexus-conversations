@@ -340,6 +340,7 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     and ``id_comparison_between_flows_and_database``).
 
     ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
+    The window must span at most one day (24 hours). ``date_end`` is required.
     DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
     """
 
@@ -359,25 +360,32 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
-        if attrs.get("use_date_end", True) and not (attrs.get("date_end") or "").strip():
-            raise serializers.ValidationError({"date_end": "This field is required when use_date_end is true."})
+        if not attrs.get("use_date_end", True):
+            raise serializers.ValidationError(
+                {"use_date_end": "Must be true; reconciliation supports at most a one-day window with date_end."}
+            )
+        if not (attrs.get("date_end") or "").strip():
+            raise serializers.ValidationError({"date_end": "This field is required."})
 
-        from conversation_ms.services.flows_db_cohort_service import parse_api_utc
+        from conversation_ms.services.flows_db_cohort_service import (
+            parse_api_utc,
+            validate_reconcile_window_seconds,
+        )
 
         try:
             start_bound = parse_api_utc(str(attrs["date_start"]).strip())
         except ValueError as e:
             raise serializers.ValidationError({"date_start": str(e)}) from e
 
-        if attrs.get("use_date_end", True):
-            end_raw = (attrs.get("date_end") or "").strip()
-            try:
-                end_bound = parse_api_utc(end_raw)
-            except ValueError as e:
-                raise serializers.ValidationError({"date_end": str(e)}) from e
-            if start_bound > end_bound:
-                raise serializers.ValidationError(
-                    {"date_end": "Must represent an instant on or after date_start for the same window."}
-                )
+        end_raw = (attrs.get("date_end") or "").strip()
+        try:
+            end_bound = parse_api_utc(end_raw)
+        except ValueError as e:
+            raise serializers.ValidationError({"date_end": str(e)}) from e
+
+        try:
+            validate_reconcile_window_seconds(start_bound, end_bound)
+        except ValueError as e:
+            raise serializers.ValidationError({"date_end": str(e)}) from e
 
         return attrs

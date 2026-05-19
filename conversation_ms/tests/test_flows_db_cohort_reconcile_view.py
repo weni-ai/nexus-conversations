@@ -49,7 +49,7 @@ class TestFlowsDbCohortReconcileView:
             {
                 "flows_api_token": "tok",
                 "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-20T23:59:59Z",
+                "date_end": "2026-01-10T23:59:59Z",
             },
             format="json",
             **auth_headers,
@@ -64,6 +64,21 @@ class TestFlowsDbCohortReconcileView:
                 "flows_api_token": "tok",
                 "date_start": "2026-01-10T00:00:00Z",
                 "use_date_end": True,
+            },
+            format="json",
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "date_end" in response.data
+
+    def test_validation_rejects_window_longer_than_one_day(self, api_client, project, auth_headers):
+        url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
+        response = api_client.post(
+            url,
+            {
+                "flows_api_token": "tok",
+                "date_start": "2026-01-10T00:00:00Z",
+                "date_end": "2026-01-12T00:00:00Z",
             },
             format="json",
             **auth_headers,
@@ -109,8 +124,8 @@ class TestFlowsDbCohortReconcileView:
             url,
             {
                 "flows_api_token": "flows-secret",
-                "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-20T23:59:59Z",
+                "date_start": "2026-01-15T00:00:00Z",
+                "date_end": "2026-01-15T23:59:59Z",
                 "flows_max_pages": 1,
             },
             format="json",
@@ -120,6 +135,8 @@ class TestFlowsDbCohortReconcileView:
         assert response.status_code == status.HTTP_200_OK
         body = response.data
         assert body["project_id"] == str(project.uuid)
+        assert "flows_events_outside_selected_dates" not in body["flows_service_results"]
+        assert "conversations_outside_date_rules" not in body["database_results"]
         assert body["flows_service_results"]["flows_events_inside_selected_dates"] == 1
         assert body["database_results"]["conversations_inside_date_rules"] == 1
         assert body["timestamp_comparison"]["totals"]["matching_start_and_end_times"] == 1
@@ -140,7 +157,7 @@ class TestFlowsDbCohortReconcileView:
             {
                 "flows_api_token": "bad",
                 "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-20T23:59:59Z",
+                "date_end": "2026-01-10T23:59:59Z",
             },
             format="json",
             **auth_headers,

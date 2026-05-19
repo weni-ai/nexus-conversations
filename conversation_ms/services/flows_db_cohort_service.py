@@ -19,6 +19,7 @@ from conversation_ms.models import Conversation
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLOWS_BASE_URL = "https://flows.weni.ai/api/v2/events.json"
+MAX_RECONCILE_WINDOW_SECONDS = 86_400
 
 
 def _flows_base_url() -> str:
@@ -27,6 +28,17 @@ def _flows_base_url() -> str:
 
 def terminal_classification_q() -> Q:
     return ~Q(resolution__in=("2", "3")) & (Q(resolution__in=("0", "1", "4")) | Q(has_chats_room=True))
+
+
+def validate_reconcile_window_seconds(start_bound: dj_tz.datetime, end_bound: dj_tz.datetime) -> None:
+    """Reject windows longer than 24 hours (inclusive bounds)."""
+    span_seconds = (end_bound - start_bound).total_seconds()
+    if span_seconds < 0:
+        raise ValueError("date_end must be on or after date_start")
+    if span_seconds > MAX_RECONCILE_WINDOW_SECONDS:
+        raise ValueError(
+            f"Date window must not exceed {MAX_RECONCILE_WINDOW_SECONDS} seconds (one day); got {int(span_seconds)}"
+        )
 
 
 def parse_api_utc(s: str) -> dj_tz.datetime:
@@ -76,6 +88,50 @@ def event_metadata_both_in_window(ev: dict[str, Any], cfg: dict[str, Any]) -> bo
         return False
     su, eu = window_pendulum(cfg)
     return pendulum_in_window(ms, su, eu) and pendulum_in_window(me, su, eu)
+
+
+def _db_cohort_queryset(cfg: dict[str, Any]):
+    pu = UUID(str(cfg["project"]))
+    qs = Conversation.objects.filter(project_id=pu)
+    if cfg.get("apply_terminal_cohort_filter", True):
+        qs = qs.filter(terminal_classification_q())
+    return qs.filter(date_window_q(cfg))
+
+
+def _flow_uuids_from_events(events: list[dict[str, Any]]) -> set[str]:
+    flow_uuids: set[str] = set()
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        meta = ev.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        u = meta.get("conversation_uuid")
+        if u:
+            flow_uuids.add(str(u).lower())
+    return flow_uuids
+
+
+def load_db_cohort(
+    cfg: dict[str, Any],
+    *,
+    flow_uuids_for_timestamps: set[str] | None = None,
+) -> tuple[set[str], dict[str, tuple[dj_tz.datetime | None, dj_tz.datetime | None]]]:
+    """
+    One query for in-window cohort: all UUIDs for id comparison; start/end only for Flows ids.
+    """
+    qs = _db_cohort_queryset(cfg).values_list("uuid", "start_date", "end_date")
+    db_uuids: set[str] = set()
+    conv_by_lower: dict[str, tuple[dj_tz.datetime | None, dj_tz.datetime | None]] = {}
+    need_dates = flow_uuids_for_timestamps or set()
+
+    for uid, start_date, end_date in qs.iterator(chunk_size=500):
+        key = str(uid).lower()
+        db_uuids.add(key)
+        if key in need_dates:
+            conv_by_lower[key] = (start_date, end_date)
+
+    return db_uuids, conv_by_lower
 
 
 def date_window_q(cfg: dict[str, Any]) -> Q:
@@ -206,7 +262,6 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     key_name = cfg.get("key", "conversation_classification")
     by_key = [e for e in all_events if isinstance(e, dict) and e.get("key") == key_name]
     cohort = [e for e in by_key if event_metadata_both_in_window(e, cfg)]
-    metadata_outside_window_count = sum(1 for e in by_key if not event_metadata_both_in_window(e, cfg))
 
     stats: dict[str, Any] = {
         "flows_api_pages_read": page_idx,
@@ -214,7 +269,6 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
         "flows_event_type": key_name,
         "flows_events_with_this_type": len(by_key),
         "flows_events_inside_selected_dates": len(cohort),
-        "flows_events_outside_selected_dates": metadata_outside_window_count,
         "flows_request_url_base": flows_base_url,
     }
     if key_name == "conversation_classification":
@@ -222,65 +276,20 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     return cohort, stats
 
 
-def _rows_from_qs(qs) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for c in qs.iterator(chunk_size=500):
-        rows.append(
-            {
-                "uuid": str(c.uuid),
-                "start_date": c.start_date.isoformat() if c.start_date else None,
-                "end_date": c.end_date.isoformat() if c.end_date else None,
-                "resolution": c.resolution,
-                "has_chats_room": c.has_chats_room,
-            }
-        )
-    return rows
-
-
-def build_db_cohort_documents(cfg: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    pu = UUID(str(cfg["project"]))
-    date_in = date_window_q(cfg)
-
-    base = Conversation.objects.filter(project_id=pu).only(
-        "uuid", "start_date", "end_date", "resolution", "has_chats_room"
-    )
-    if cfg.get("apply_terminal_cohort_filter", True):
-        base = base.filter(terminal_classification_q())
-
-    qs_in = base.filter(date_in)
-    qs_out = base.filter(~date_in)
-
-    rows_in = _rows_from_qs(qs_in)
-    outside_count = qs_out.count()
-
-    common_meta = {
-        "project": str(pu),
-        "date_start": cfg["date_start"],
-        "date_end": cfg["date_end"] if cfg.get("use_date_end", True) else None,
-        "use_date_end": bool(cfg.get("use_date_end", True)),
-        "cohort_definition": "both_conversation_start_and_end_inside_config_window",
-        "apply_terminal_cohort_filter": bool(cfg.get("apply_terminal_cohort_filter", True)),
+def build_db_cohort_summary(cfg: dict[str, Any], db_uuids: set[str]) -> dict[str, Any]:
+    return {
+        "conversations_inside_date_rules": len(db_uuids),
+        "date_matching_rule_description": "both_conversation_start_and_end_inside_config_window",
+        "resolution_filter_applied": bool(cfg.get("apply_terminal_cohort_filter", True)),
     }
-    out_in = {**common_meta, "count": len(rows_in), "conversation_rows": rows_in}
-    out_out = {
-        **common_meta,
-        "subset": "outside_date_window_same_terminal_base",
-        "count": outside_count,
-        "conversation_rows": [],
-    }
-    database_totals = {
-        "conversations_inside_date_rules": len(rows_in),
-        "conversations_outside_date_rules": outside_count,
-        "date_matching_rule_description": common_meta["cohort_definition"],
-        "resolution_filter_applied": common_meta["apply_terminal_cohort_filter"],
-    }
-    return out_in, out_out, database_totals
 
 
 def detail_compare_flows_to_db(  # noqa: C901
     events: list[dict[str, Any]],
     cfg: dict[str, Any],
     mismatch_sample_limit: int,
+    *,
+    conv_by_lower: dict[str, tuple[dj_tz.datetime | None, dj_tz.datetime | None]],
 ) -> tuple[dict[str, int], list[dict[str, Any]]]:
     stats: dict[str, int] = {
         "conversations_compared": len(events),
@@ -295,7 +304,6 @@ def detail_compare_flows_to_db(  # noqa: C901
         "missing_conversation_id_in_flows": 0,
     }
     mismatches: list[dict[str, Any]] = []
-    project_pk = UUID(str(cfg["project"]))
 
     rows: list[tuple[dict[str, Any], dict[str, Any], UUID]] = []
     for ev in events:
@@ -318,27 +326,20 @@ def detail_compare_flows_to_db(  # noqa: C901
             continue
         rows.append((ev, meta, uid))
 
-    conv_by_lower: dict[str, Conversation] = {}
-    if rows:
-        unique_ids = list({str(r[2]).lower(): r[2] for r in rows}.values())
-        for c in Conversation.objects.filter(project_id=project_pk, uuid__in=unique_ids).only(
-            "uuid", "start_date", "end_date"
-        ):
-            conv_by_lower[str(c.uuid).lower()] = c
-
     for _ev, meta, uid in rows:
-        conv = conv_by_lower.get(str(uid).lower())
-        if conv is None:
+        conv_dates = conv_by_lower.get(str(uid).lower())
+        if conv_dates is None:
             stats["not_found_in_database"] += 1
             if len(mismatches) < mismatch_sample_limit:
                 mismatches.append({"conversation_id": str(uid), "reason": "not_found_in_database"})
             continue
 
+        db_start_raw, db_end_raw = conv_dates
         u = str(uid)
         api_start = parse_meta_dt(meta.get("conversation_start_date"))
         api_end = parse_meta_dt(meta.get("conversation_end_date"))
-        db_start = pendulum.instance(conv.start_date).in_timezone("UTC") if conv.start_date else None
-        db_end = pendulum.instance(conv.end_date).in_timezone("UTC") if conv.end_date else None
+        db_start = pendulum.instance(db_start_raw).in_timezone("UTC") if db_start_raw else None
+        db_end = pendulum.instance(db_end_raw).in_timezone("UTC") if db_end_raw else None
 
         sm = api_start is not None and db_start is not None and api_start == db_start
         em = api_end is not None and db_end is not None and api_end == db_end
@@ -362,9 +363,9 @@ def detail_compare_flows_to_db(  # noqa: C901
                     {
                         "conversation_id": u,
                         "flows_start_time": meta.get("conversation_start_date"),
-                        "database_start_time": conv.start_date.isoformat() if conv.start_date else None,
+                        "database_start_time": db_start_raw.isoformat() if db_start_raw else None,
                         "flows_end_time": meta.get("conversation_end_date"),
-                        "database_end_time": conv.end_date.isoformat() if conv.end_date else None,
+                        "database_end_time": db_end_raw.isoformat() if db_end_raw else None,
                     }
                 )
 
@@ -373,20 +374,10 @@ def detail_compare_flows_to_db(  # noqa: C901
 
 def bidirectional_uuid_sets(
     events: list[dict[str, Any]],
-    dbdoc: dict[str, Any],
+    db_uuids: set[str],
     uuid_sample_limit: int,
 ) -> dict[str, Any]:
-    flow_uuids = set()
-    for ev in events:
-        meta = ev.get("metadata")
-        if not isinstance(meta, dict):
-            continue
-        u = meta.get("conversation_uuid")
-        if u:
-            flow_uuids.add(str(u).lower())
-
-    db_rows = dbdoc.get("conversation_rows") or dbdoc.get("conversations") or []
-    db_uuids = {str(r["uuid"]).lower() for r in db_rows}
+    flow_uuids = _flow_uuids_from_events(events)
 
     in_flows_not_in_db = sorted(flow_uuids - db_uuids)
     in_db_not_in_flows = sorted(db_uuids - flow_uuids)
@@ -414,9 +405,11 @@ def run_flows_db_cohort_reconcile(cfg: dict[str, Any]) -> dict[str, Any]:
     uuid_sample_limit = int(cfg.get("uuid_sample_limit", 20))
 
     cohort, fetch_stats = fetch_flows_cohort(cfg)
-    db_in, _db_out, database_totals = build_db_cohort_documents(cfg)
-    stats, mismatches = detail_compare_flows_to_db(cohort, cfg, mismatch_sample_limit)
-    bidir = bidirectional_uuid_sets(cohort, db_in, uuid_sample_limit)
+    flow_uuids = _flow_uuids_from_events(cohort)
+    db_uuids, conv_by_lower = load_db_cohort(cfg, flow_uuids_for_timestamps=flow_uuids)
+    database_totals = build_db_cohort_summary(cfg, db_uuids)
+    stats, mismatches = detail_compare_flows_to_db(cohort, cfg, mismatch_sample_limit, conv_by_lower=conv_by_lower)
+    bidir = bidirectional_uuid_sets(cohort, db_uuids, uuid_sample_limit)
 
     selected_date_range = {
         "from_inclusive": cfg["date_start"],

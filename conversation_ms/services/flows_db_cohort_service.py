@@ -26,6 +26,10 @@ def _flows_base_url() -> str:
     return getattr(settings, "FLOWS_EVENTS_API_URL", DEFAULT_FLOWS_BASE_URL)
 
 
+def _flows_http_timeout() -> int:
+    return int(getattr(settings, "FLOWS_DB_COHORT_FLOWS_HTTP_TIMEOUT", 300))
+
+
 def terminal_classification_q() -> Q:
     return ~Q(resolution__in=("2", "3")) & (Q(resolution__in=("0", "1", "4")) | Q(has_chats_room=True))
 
@@ -178,7 +182,7 @@ def _validate_flows_pagination_params(cfg: dict[str, Any]) -> tuple[str, int, in
 
 def _read_flows_events_page(url: str, req: Request) -> list[Any]:
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=_flows_http_timeout()) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
         try:
             payload = json.loads(raw)

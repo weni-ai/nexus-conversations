@@ -340,14 +340,13 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     and ``id_comparison_between_flows_and_database``).
 
     ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
-    The window must span at most one day (24 hours). ``date_end`` is required.
+    The window must span at most one day (24 hours).
     DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
     """
 
     flows_api_token = serializers.CharField(write_only=True, trim_whitespace=False)
     date_start = serializers.CharField()
-    date_end = serializers.CharField(required=False, allow_blank=True, default="")
-    use_date_end = serializers.BooleanField(default=True)
+    date_end = serializers.CharField()
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
     key = serializers.CharField(required=False, default="conversation_classification")
     authorization_prefix = serializers.CharField(required=False, default="Token")
@@ -360,13 +359,6 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
-        if not attrs.get("use_date_end", True):
-            raise serializers.ValidationError(
-                {"use_date_end": "Must be true; reconciliation supports at most a one-day window with date_end."}
-            )
-        if not (attrs.get("date_end") or "").strip():
-            raise serializers.ValidationError({"date_end": "This field is required."})
-
         from conversation_ms.services.flows_db_cohort_service import (
             parse_api_utc,
             validate_reconcile_window_seconds,
@@ -377,7 +369,7 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
         except ValueError as e:
             raise serializers.ValidationError({"date_start": str(e)}) from e
 
-        end_raw = (attrs.get("date_end") or "").strip()
+        end_raw = str(attrs["date_end"]).strip()
         try:
             end_bound = parse_api_utc(end_raw)
         except ValueError as e:

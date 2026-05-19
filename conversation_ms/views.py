@@ -295,8 +295,8 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
         "project": project_uuid,
         "flows_api_token": data["flows_api_token"],
         "date_start": data["date_start"],
-        "date_end": (data.get("date_end") or "").strip(),
-        "use_date_end": data["use_date_end"],
+        "date_end": str(data["date_end"]).strip(),
+        "use_date_end": True,
         "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
         "key": data.get("key", "conversation_classification"),
         "authorization_prefix": data.get("authorization_prefix", "Token"),
@@ -343,11 +343,15 @@ class FlowsDbCohortReconcileView(APIView):
         data = ser.validated_data
 
         cfg = _flows_db_cohort_build_cfg(str(project_uuid), data)
-        http_timeout = getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 900)
         celery_soft = getattr(settings, "FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", 880)
         celery_hard = getattr(settings, "FLOWS_DB_COHORT_CELERY_TIME_LIMIT", 960)
+        http_timeout = max(
+            getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 960),
+            celery_hard,
+        )
         via_celery = getattr(settings, "FLOWS_DB_COHORT_SYNC_VIA_CELERY", True)
 
+        async_res = None
         try:
             if via_celery:
                 async_res = reconcile_flows_db_cohort_task.apply_async(
@@ -359,6 +363,8 @@ class FlowsDbCohortReconcileView(APIView):
             else:
                 result = run_flows_db_cohort_reconcile(cfg)
         except (CeleryTimeoutError, SoftTimeLimitExceeded):
+            if async_res is not None:
+                async_res.revoke(terminate=True)
             return Response(
                 {"error": "Reconciliation timed out"},
                 status=status.HTTP_504_GATEWAY_TIMEOUT,

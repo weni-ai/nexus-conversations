@@ -184,10 +184,11 @@ CELERY_TASK_SERIALIZER = "json"
 
 # Flows API (classification events vs DB cohort reconciliation)
 FLOWS_EVENTS_API_URL = env.str("FLOWS_EVENTS_API_URL", default="https://flows.weni.ai/api/v2/events.json")
-# AsyncResult.get timeout (seconds); should be >= typical run; Celery soft limit should be <= this.
-FLOWS_DB_COHORT_TASK_TIMEOUT = env.int("FLOWS_DB_COHORT_TASK_TIMEOUT", default=900)
+# Reconcile timeouts: soft <= hard <= HTTP AsyncResult.get (avoids 504 while the worker keeps running).
 FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", default=880)
 FLOWS_DB_COHORT_CELERY_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_TIME_LIMIT", default=960)
+FLOWS_DB_COHORT_TASK_TIMEOUT = env.int("FLOWS_DB_COHORT_TASK_TIMEOUT", default=960)
+FLOWS_DB_COHORT_FLOWS_HTTP_TIMEOUT = env.int("FLOWS_DB_COHORT_FLOWS_HTTP_TIMEOUT", default=300)
 FLOWS_DB_COHORT_SYNC_VIA_CELERY = env.bool("FLOWS_DB_COHORT_SYNC_VIA_CELERY", default=True)
 
 # SQS Configuration for Conversation MS

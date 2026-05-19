@@ -56,14 +56,13 @@ class TestFlowsDbCohortReconcileView:
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_validation_requires_date_end_when_use_date_end(self, api_client, project, auth_headers):
+    def test_validation_requires_date_end(self, api_client, project, auth_headers):
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
         response = api_client.post(
             url,
             {
                 "flows_api_token": "tok",
                 "date_start": "2026-01-10T00:00:00Z",
-                "use_date_end": True,
             },
             format="json",
             **auth_headers,

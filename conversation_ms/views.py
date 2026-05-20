@@ -24,6 +24,7 @@ from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import (
     ConversationDetailSerializer,
+    ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
     FlowsDbCohortReconcileRequestSerializer,
@@ -32,7 +33,11 @@ from conversation_ms.serializers import (
 )
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
-from conversation_ms.tasks import create_external_billing_ticket_task, reconcile_flows_db_cohort_task
+from conversation_ms.tasks import (
+    create_external_billing_ticket_task,
+    export_conversations_csv_task,
+    reconcile_flows_db_cohort_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +293,80 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
             {"ticket_uuid": ticket_uuid},
             status=status.HTTP_201_CREATED,
         )
+
+
+@extend_schema(
+    summary="Export project conversations to CSV",
+    description=(
+        "Builds a CSV for conversations on the given calendar day (project timezone), "
+        "including messages from Postgres and DynamoDB, uploads to S3, and returns a "
+        "presigned download URL for the frontend."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID (must match JWT project_uuid)",
+        ),
+    ],
+    request=ConversationExportCsvRequestSerializer,
+)
+class ConversationExportCsvView(JWTModuleMixin, APIView):
+    def post(self, request, project_uuid):
+        if str(self.project_uuid) != str(project_uuid):
+            return Response(
+                {"error": "Project UUID does not match token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not Project.objects.filter(uuid=project_uuid).exists():
+            raise NotFound(detail="Project not found")
+
+        ser = ConversationExportCsvRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        target_date = ser.validated_data.get("target_date")
+
+        http_timeout = getattr(settings, "CONVERSATION_EXPORT_TASK_TIMEOUT", 900)
+        celery_soft = getattr(settings, "CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT", 880)
+        celery_hard = getattr(settings, "CONVERSATION_EXPORT_CELERY_TIME_LIMIT", 960)
+        via_celery = getattr(settings, "CONVERSATION_EXPORT_VIA_CELERY", True)
+
+        try:
+            if via_celery:
+                async_res = export_conversations_csv_task.apply_async(
+                    args=[str(project_uuid), target_date],
+                    soft_time_limit=celery_soft,
+                    time_limit=celery_hard,
+                )
+                result = async_res.get(timeout=http_timeout)
+            else:
+                from conversation_ms.services.conversation_csv_export_runner import run_conversation_csv_export
+
+                result = run_conversation_csv_export(str(project_uuid), target_date=target_date)
+        except (CeleryTimeoutError, SoftTimeLimitExceeded):
+            return Response(
+                {"error": "Export timed out"},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except Exception as exc:
+            from conversation_ms.adapters.s3_export import ConversationExportS3Error
+
+            if isinstance(exc, ConversationExportS3Error):
+                return Response(
+                    {"error": "export_storage_not_configured", "detail": str(exc)},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            logger.exception(
+                "[ConversationExportCsvView] Export failed project_uuid=%s",
+                project_uuid,
+            )
+            return Response(
+                {"error": "export_failed", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
 
 
 def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:

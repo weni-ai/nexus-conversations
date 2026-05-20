@@ -331,6 +331,22 @@ class SubTopicsSerializer(serializers.ModelSerializer):
         return obj.topic.name
 
 
+class ConversationExportCsvRequestSerializer(serializers.Serializer):
+    """
+    Body for POST ``/api/v1/projects/<uuid>/conversations/export/``.
+
+    ``target_date`` is optional (YYYY-MM-DD in the project's timezone). When omitted, uses today.
+    """
+
+    target_date = serializers.RegexField(
+        regex=r"^\d{4}-\d{2}-\d{2}$",
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="Calendar day in project timezone (YYYY-MM-DD). Defaults to today.",
+    )
+
+
 class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     """
     Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort/`` (see ``conversation_ms.urls``).

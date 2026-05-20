@@ -627,3 +627,13 @@ def reconcile_flows_db_cohort_task(cfg: dict):
     from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
 
     return run_flows_db_cohort_reconcile(cfg)
+
+
+@celery_app.task(name="conversation_ms.tasks.export_conversations_csv_task")
+def export_conversations_csv_task(project_uuid: str, target_date: str | None = None):
+    """
+    Build conversation CSV for one project/day, upload to S3, return presigned download URL.
+    """
+    from conversation_ms.services.conversation_csv_export_runner import run_conversation_csv_export
+
+    return run_conversation_csv_export(project_uuid, target_date=target_date)

@@ -1,5 +1,6 @@
 import logging
 import signal
+import socket
 import time
 from typing import Callable
 
@@ -69,7 +70,10 @@ class AMQPConnectionBackend:
                 backoff = 1
                 logger.info("Entering drain_events loop")
                 while self.running:
-                    self.connection.drain_events(timeout=1.0)
+                    try:
+                        self.connection.drain_events(timeout=1.0)
+                    except socket.timeout:
+                        continue
             except KeyboardInterrupt:
                 self.running = False
             except (AMQPError, OSError) as exc:

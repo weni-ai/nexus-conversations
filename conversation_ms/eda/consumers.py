@@ -15,7 +15,7 @@ class ProjectConsumer:
             body = json.loads(message.body)
         except (json.JSONDecodeError, TypeError) as exc:
             logger.error("ProjectConsumer failed to decode message body: %s", exc)
-            message.ack()
+            message.channel.basic_ack(message.delivery_tag)
             return
 
         project_uuid = body.get("uuid")
@@ -23,7 +23,7 @@ class ProjectConsumer:
 
         if not project_uuid:
             logger.warning("ProjectConsumer received message without uuid, skipping: %s", body)
-            message.ack()
+            message.channel.basic_ack(message.delivery_tag)
             return
 
         try:
@@ -33,13 +33,13 @@ class ProjectConsumer:
             )
             action = "created" if created else "updated"
             logger.info("ProjectConsumer %s project uuid=%s name=%s", action, project_uuid, project_name)
-            message.ack()
+            message.channel.basic_ack(message.delivery_tag)
         except OperationalError:
             logger.exception("ProjectConsumer DB error processing uuid=%s, requeueing", project_uuid)
-            message.reject(requeue=True)
+            message.channel.basic_reject(message.delivery_tag, requeue=True)
         except Exception:
             logger.exception("ProjectConsumer unexpected error processing uuid=%s, requeueing", project_uuid)
-            message.reject(requeue=True)
+            message.channel.basic_reject(message.delivery_tag, requeue=True)
 
 
 def handle_consumers(channel: Channel) -> None:

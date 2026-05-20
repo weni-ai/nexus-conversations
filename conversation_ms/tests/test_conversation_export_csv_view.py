@@ -106,9 +106,9 @@ class TestConversationExportCsvView:
 
     @patch("conversation_ms.services.conversation_csv_export_runner.run_conversation_csv_export")
     def test_s3_not_configured_returns_503(self, mock_run, api_client, project, _bypass_jwt, auth_headers):
-        from conversation_ms.adapters.s3_export import ConversationExportS3Error
+        from conversation_ms.adapters.s3_storage import S3StorageError
 
-        mock_run.side_effect = ConversationExportS3Error("AWS_S3_BUCKET_NAME is not configured")
+        mock_run.side_effect = S3StorageError("AWS_S3_BUCKET_NAME is not configured")
         url = reverse("project-conversations-export", kwargs={"project_uuid": project.uuid})
         response = api_client.post(url, {}, format="json", **auth_headers)
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE

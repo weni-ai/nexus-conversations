@@ -1,26 +1,36 @@
-"""Orchestrates CSV build + S3 upload + presigned URL (shared by Celery task and sync HTTP path)."""
+"""Orchestrates CSV build + S3 upload + presigned URL for the conversation export feature."""
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from django.conf import settings
 
-from conversation_ms.adapters.s3_export import create_presigned_download_url, upload_conversation_export_csv
-from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
+from conversation_ms.adapters.s3_storage import create_presigned_get_url, presigned_expiry_seconds, upload_bytes
+from conversation_ms.services.conversation_csv_export_service import (
+    DEFAULT_EXPORT_ITERATOR_CHUNK_SIZE,
+    export_conversations_csv_bytes,
+)
+
+
+def build_conversation_export_s3_key(project_uuid: str, target_date: str) -> str:
+    prefix = (getattr(settings, "CONVERSATION_EXPORT_S3_PREFIX", "exports/conversations") or "").strip().rstrip("/")
+    export_id = uuid4()
+    return f"{prefix}/{project_uuid}/{target_date}/conversations_{target_date}_{export_id}.csv"
 
 
 def run_conversation_csv_export(project_uuid: str, target_date: str | None = None) -> dict:
-    chunk = int(getattr(settings, "CONVERSATION_EXPORT_ITERATOR_CHUNK_SIZE", 500))
     body, row_count, day = export_conversations_csv_bytes(
         project_uuid,
         target_date=target_date,
-        iterator_chunk_size=chunk,
+        iterator_chunk_size=DEFAULT_EXPORT_ITERATOR_CHUNK_SIZE,
     )
-    key = upload_conversation_export_csv(project_uuid, day, body)
-    download_url = create_presigned_download_url(key)
-    expires_in = int(getattr(settings, "CONVERSATION_EXPORT_PRESIGNED_EXPIRY", 3600))
+    key = build_conversation_export_s3_key(project_uuid, day)
+    upload_bytes(key, body, content_type="text/csv; charset=utf-8")
+    download_url = create_presigned_get_url(key)
     return {
         "download_url": download_url,
         "row_count": row_count,
         "target_date": day,
-        "expires_in": expires_in,
+        "expires_in": presigned_expiry_seconds(),
     }

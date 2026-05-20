@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 IN_PROGRESS = ResolutionEntities.IN_PROGRESS
 
+DEFAULT_EXPORT_ITERATOR_CHUNK_SIZE = 500
+
 CSV_HEADERS = [
     "conversation_uuid",
     "contact_urn",
@@ -139,7 +141,7 @@ def conversations_queryset(project_uuid: str, start_utc: pendulum.DateTime, end_
 def export_conversations_csv_bytes(
     project_uuid: str,
     target_date: str | None = None,
-    iterator_chunk_size: int = 500,
+    iterator_chunk_size: int = DEFAULT_EXPORT_ITERATOR_CHUNK_SIZE,
 ) -> tuple[bytes, int, str]:
     """
     Build UTF-8 CSV for one project and local calendar day.

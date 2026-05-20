@@ -237,6 +237,11 @@ def _process_with_retry(service, event_data):
 
 EXTERNAL_BILLING_CACHE_TIMEOUT = 86400
 
+# Conversation CSV export (Celery limits; not env-specific — tune in code if needed)
+CONVERSATION_EXPORT_HTTP_TIMEOUT_SECONDS = 900
+CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT = 880
+CONVERSATION_EXPORT_CELERY_TIME_LIMIT = 960
+
 
 class ExternalConversationWindowView(JWTModuleMixin, APIView):
     def post(self, request, project_uuid):
@@ -327,32 +332,22 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
         ser.is_valid(raise_exception=True)
         target_date = ser.validated_data.get("target_date")
 
-        http_timeout = getattr(settings, "CONVERSATION_EXPORT_TASK_TIMEOUT", 900)
-        celery_soft = getattr(settings, "CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT", 880)
-        celery_hard = getattr(settings, "CONVERSATION_EXPORT_CELERY_TIME_LIMIT", 960)
-        via_celery = getattr(settings, "CONVERSATION_EXPORT_VIA_CELERY", True)
-
         try:
-            if via_celery:
-                async_res = export_conversations_csv_task.apply_async(
-                    args=[str(project_uuid), target_date],
-                    soft_time_limit=celery_soft,
-                    time_limit=celery_hard,
-                )
-                result = async_res.get(timeout=http_timeout)
-            else:
-                from conversation_ms.services.conversation_csv_export_runner import run_conversation_csv_export
-
-                result = run_conversation_csv_export(str(project_uuid), target_date=target_date)
+            async_res = export_conversations_csv_task.apply_async(
+                args=[str(project_uuid), target_date],
+                soft_time_limit=CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT,
+                time_limit=CONVERSATION_EXPORT_CELERY_TIME_LIMIT,
+            )
+            result = async_res.get(timeout=CONVERSATION_EXPORT_HTTP_TIMEOUT_SECONDS)
         except (CeleryTimeoutError, SoftTimeLimitExceeded):
             return Response(
                 {"error": "Export timed out"},
                 status=status.HTTP_504_GATEWAY_TIMEOUT,
             )
         except Exception as exc:
-            from conversation_ms.adapters.s3_export import ConversationExportS3Error
+            from conversation_ms.adapters.s3_storage import S3StorageError
 
-            if isinstance(exc, ConversationExportS3Error):
+            if isinstance(exc, S3StorageError):
                 return Response(
                     {"error": "export_storage_not_configured", "detail": str(exc)},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,

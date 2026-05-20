@@ -41,4 +41,10 @@ env = environ.Env(
     PIKA_EDA_HEARTBEAT=(int, 600),
     PIKA_EDA_BLOCKED_CONNECTION_TIMEOUT=(int, 300),
     JWT_PUBLIC_KEY=(str, ""),
+    # EDA / AMQP broker
+    EDA_BROKER_HOST=(str, "localhost"),
+    EDA_BROKER_PORT=(int, 5672),
+    EDA_BROKER_USER=(str, "guest"),
+    EDA_BROKER_PASSWORD=(str, "guest"),
+    EDA_VIRTUAL_HOST=(str, "/"),
 )

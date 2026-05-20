@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timezone as stdlib_utc
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -12,7 +13,6 @@ import pendulum
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone as dj_tz
-from django.utils.dateparse import parse_datetime
 
 from conversation_ms.models import Conversation
 
@@ -34,9 +34,9 @@ def terminal_classification_q() -> Q:
     return ~Q(resolution__in=("2", "3")) & (Q(resolution__in=("0", "1", "4")) | Q(has_chats_room=True))
 
 
-def validate_reconcile_window_seconds(start_bound: dj_tz.datetime, end_bound: dj_tz.datetime) -> None:
+def validate_reconcile_window_seconds(start_bound: pendulum.DateTime, end_bound: pendulum.DateTime) -> None:
     """Reject windows longer than 24 hours (inclusive bounds)."""
-    span_seconds = (end_bound - start_bound).total_seconds()
+    span_seconds = end_bound.diff(start_bound).in_seconds()
     if span_seconds < 0:
         raise ValueError("date_end must be on or after date_start")
     if span_seconds > MAX_RECONCILE_WINDOW_SECONDS:
@@ -45,32 +45,36 @@ def validate_reconcile_window_seconds(start_bound: dj_tz.datetime, end_bound: dj
         )
 
 
-def parse_api_utc(s: str) -> dj_tz.datetime:
-    if not s:
+def parse_api_utc(s: str) -> pendulum.DateTime:
+    """Parse request/API ISO-8601 instants to UTC (pendulum accepts Z and offsets)."""
+    raw = str(s).strip()
+    if not raw:
         raise ValueError("empty datetime")
-    d = parse_datetime(str(s).replace("Z", "+00:00"))
-    if d is None:
-        raise ValueError(f"bad datetime: {s}")
-    if dj_tz.is_naive(d):
-        d = dj_tz.make_aware(d, dj_tz.utc)
-    return d
+    try:
+        return pendulum.parse(raw).in_timezone("UTC")
+    except Exception as e:
+        raise ValueError(f"bad datetime: {s}") from e
+
+
+def django_utc_from_pendulum(dt: pendulum.DateTime) -> dj_tz.datetime:
+    """Aware stdlib UTC datetime for Django ORM filters (pendulum for parsing only)."""
+    return dj_tz.datetime.fromtimestamp(dt.timestamp(), tz=stdlib_utc.utc)
 
 
 def parse_meta_dt(s: str | None) -> pendulum.DateTime | None:
     if not s:
         return None
     try:
-        return pendulum.parse(s).in_timezone("UTC")
-    except Exception:
+        return parse_api_utc(str(s))
+    except ValueError:
         logger.warning("[flows_db_cohort] Malformed Flows metadata datetime: %r", s)
         return None
 
 
 def window_pendulum(cfg: dict[str, Any]) -> tuple[pendulum.DateTime, pendulum.DateTime | None]:
-    su = pendulum.instance(parse_api_utc(cfg["date_start"])).in_timezone("UTC")
+    su = parse_api_utc(cfg["date_start"])
     if cfg.get("use_date_end", True):
-        eu = pendulum.instance(parse_api_utc(cfg["date_end"])).in_timezone("UTC")
-        return su, eu
+        return su, parse_api_utc(cfg["date_end"])
     return su, None
 
 
@@ -139,7 +143,7 @@ def load_db_cohort(
 
 
 def date_window_q(cfg: dict[str, Any]) -> Q:
-    start_utc = parse_api_utc(cfg["date_start"])
+    start_utc = django_utc_from_pendulum(parse_api_utc(cfg["date_start"]))
     q = (
         Q(start_date__isnull=False)
         & Q(end_date__isnull=False)
@@ -147,7 +151,7 @@ def date_window_q(cfg: dict[str, Any]) -> Q:
         & Q(end_date__gte=start_utc)
     )
     if cfg.get("use_date_end", True):
-        end_utc = parse_api_utc(cfg["date_end"])
+        end_utc = django_utc_from_pendulum(parse_api_utc(cfg["date_end"]))
         q &= Q(start_date__lte=end_utc) & Q(end_date__lte=end_utc)
     return q
 
@@ -342,8 +346,8 @@ def detail_compare_flows_to_db(  # noqa: C901
         u = str(uid)
         api_start = parse_meta_dt(meta.get("conversation_start_date"))
         api_end = parse_meta_dt(meta.get("conversation_end_date"))
-        db_start = pendulum.instance(db_start_raw).in_timezone("UTC") if db_start_raw else None
-        db_end = pendulum.instance(db_end_raw).in_timezone("UTC") if db_end_raw else None
+        db_start = pendulum.instance(db_start_raw, tz="UTC") if db_start_raw else None
+        db_end = pendulum.instance(db_end_raw, tz="UTC") if db_end_raw else None
 
         sm = api_start is not None and db_start is not None and api_start == db_start
         em = api_end is not None and db_end is not None and api_end == db_end

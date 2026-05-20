@@ -14,9 +14,13 @@ from conversation_ms.services.conversation_csv_export_service import (
 
 
 def build_conversation_export_s3_key(project_uuid: str, target_date: str) -> str:
-    prefix = (getattr(settings, "CONVERSATION_EXPORT_S3_PREFIX", "exports/conversations") or "").strip().rstrip("/")
+    prefix = (getattr(settings, "CONVERSATION_EXPORT_S3_PREFIX", "exports/conversations") or "").strip().strip("/")
     export_id = uuid4()
-    return f"{prefix}/{project_uuid}/{target_date}/conversations_{target_date}_{export_id}.csv"
+    filename = f"conversations_{target_date}_{export_id}.csv"
+    key_parts = [project_uuid, target_date, filename]
+    if prefix:
+        key_parts.insert(0, prefix)
+    return "/".join(key_parts)
 
 
 def run_conversation_csv_export(project_uuid: str, target_date: str | None = None) -> dict:

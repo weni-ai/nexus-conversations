@@ -3,7 +3,7 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pendulum
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.conf import settings
 from django.core.cache import cache
@@ -339,7 +339,7 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
                 time_limit=CONVERSATION_EXPORT_CELERY_TIME_LIMIT,
             )
             result = async_res.get(timeout=CONVERSATION_EXPORT_HTTP_TIMEOUT_SECONDS)
-        except (CeleryTimeoutError, SoftTimeLimitExceeded):
+        except (CeleryTimeoutError, SoftTimeLimitExceeded, TimeLimitExceeded):
             return Response(
                 {"error": "Export timed out"},
                 status=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -349,7 +349,7 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
 
             if isinstance(exc, S3StorageError):
                 return Response(
-                    {"error": "export_storage_not_configured", "detail": str(exc)},
+                    {"error": "export_storage_not_configured"},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
             logger.exception(
@@ -357,7 +357,10 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
                 project_uuid,
             )
             return Response(
-                {"error": "export_failed", "detail": str(exc)},
+                {
+                    "error": "export_failed",
+                    "detail": "An unexpected error occurred while exporting conversations.",
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 
 from conversation_ms.adapters.aws import get_boto3_client
@@ -28,7 +29,10 @@ def bucket_name() -> str:
 
 
 def region_name() -> str:
-    return getattr(settings, "AWS_S3_REGION_NAME", None) or getattr(settings, "AWS_REGION", "us-east-1")
+    explicit = (getattr(settings, "AWS_S3_REGION_NAME", None) or "").strip()
+    if explicit:
+        return explicit
+    return getattr(settings, "AWS_REGION", "sa-east-1")
 
 
 def presigned_expiry_seconds() -> int:
@@ -42,22 +46,28 @@ def upload_bytes(
     content_type: str = "application/octet-stream",
 ) -> str:
     """Upload bytes to the configured bucket. Returns the object key."""
-    client = get_boto3_client("s3", region_name=region_name())
-    client.put_object(
-        Bucket=bucket_name(),
-        Key=key,
-        Body=body,
-        ContentType=content_type,
-    )
+    try:
+        client = get_boto3_client("s3", region_name=region_name())
+        client.put_object(
+            Bucket=bucket_name(),
+            Key=key,
+            Body=body,
+            ContentType=content_type,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise S3StorageError("S3 upload failed") from exc
     logger.info("[s3_storage] Uploaded object key=%s", key)
     return key
 
 
 def create_presigned_get_url(key: str, expiration: int | None = None) -> str:
     expires = expiration if expiration is not None else presigned_expiry_seconds()
-    client = get_boto3_client("s3", region_name=region_name())
-    return client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket_name(), "Key": key},
-        ExpiresIn=expires,
-    )
+    try:
+        client = get_boto3_client("s3", region_name=region_name())
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket_name(), "Key": key},
+            ExpiresIn=expires,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise S3StorageError("S3 presigned URL failed") from exc

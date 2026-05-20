@@ -20,6 +20,17 @@ class TestConversationCsvExportService:
     def project(self):
         return Project.objects.create(name="TokStok", timezone="America/Sao_Paulo")
 
+    def test_resolve_target_date_invalid_timezone_uses_fallback(self):
+        project = Project.objects.create(name="Bad TZ", timezone="Invalid/X")
+        with patch("conversation_ms.services.conversation_csv_export_service.pendulum") as mock_pendulum:
+            mock_now = MagicMock()
+            mock_now.format.return_value = "2026-05-20"
+            mock_pendulum.now.return_value = mock_now
+            assert resolve_target_date(project, None) == "2026-05-20"
+            mock_pendulum.now.assert_called_once()
+            tz_arg = mock_pendulum.now.call_args[0][0]
+            assert tz_arg != "Invalid/X"
+
     def test_resolve_target_date_explicit(self, project):
         assert resolve_target_date(project, "2026-05-13") == "2026-05-13"
 
@@ -38,6 +49,24 @@ class TestConversationCsvExportService:
             channel_uuid="afa615d7-932a-4803-b3ba-00c069e602b2",
         )
         assert format_reason_cell(conv) == ""
+
+    @patch("conversation_ms.services.conversation_csv_export_service._dynamo_messages")
+    def test_format_msgs_cell_resolved_skips_dynamo_when_postgres_has_messages(self, mock_dynamo, project):
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511999999999",
+            channel_uuid="afa615d7-932a-4803-b3ba-00c069e602b2",
+            resolution=ResolutionEntities.RESOLVED,
+        )
+        from conversation_ms.models import ConversationMessages
+
+        ConversationMessages.objects.create(
+            conversation=conv,
+            messages=[{"text": "Oi", "source": "incoming", "created_at": "2026-05-13T10:00:00"}],
+        )
+        cell = format_msgs_cell(conv)
+        assert "i:Oi" in cell
+        mock_dynamo.assert_not_called()
 
     def test_format_msgs_cell_from_postgres(self, project):
         conv = Conversation.objects.create(

@@ -211,9 +211,9 @@ CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexu
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
 DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="NexusMessages")
 
-# S3
+# S3 (same env names as nexus-ai; region falls back to AWS_REGION when unset)
 AWS_S3_BUCKET_NAME = env.str("AWS_S3_BUCKET_NAME", default="")
-AWS_S3_REGION_NAME = env.str("AWS_S3_REGION_NAME", default="us-east-1")
+AWS_S3_REGION_NAME = env.str("AWS_S3_REGION_NAME", default="")
 AWS_S3_PRESIGNED_EXPIRY_SECONDS = env.int("AWS_S3_PRESIGNED_EXPIRY_SECONDS", default=3600)
 
 # Conversation CSV export (feature-only: object key prefix in the shared bucket)

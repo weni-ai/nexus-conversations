@@ -18,6 +18,7 @@ from django.db.models import Q
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, Project
+from conversation_ms.utils.date_helpers import resolve_effective_project_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +40,18 @@ CSV_HEADERS = [
 ]
 
 
+def _project_timezone(project: Project) -> str:
+    return resolve_effective_project_timezone(project.timezone)
+
+
 def resolve_target_date(project: Project, target_date: str | None) -> str:
-    tz_name = (project.timezone or "").strip() or "UTC"
     if target_date:
         return target_date.strip()
-    return pendulum.now(tz_name).format("YYYY-MM-DD")
+    return pendulum.now(_project_timezone(project)).format("YYYY-MM-DD")
 
 
 def _day_bounds_utc(project: Project, day: str) -> tuple[pendulum.DateTime, pendulum.DateTime]:
-    tz_name = (project.timezone or "").strip() or "UTC"
+    tz_name = _project_timezone(project)
     start_local = pendulum.parse(day, tz=tz_name).start_of("day")
     end_local = start_local.end_of("day")
     return start_local.in_timezone("UTC"), end_local.in_timezone("UTC")
@@ -56,7 +60,15 @@ def _day_bounds_utc(project: Project, day: str) -> tuple[pendulum.DateTime, pend
 def _postgres_messages(conv: Conversation) -> list:
     try:
         return list(conv.messages_data.messages or [])
+    except ObjectDoesNotExist:
+        return []
+    except AttributeError:
+        return []
     except Exception:
+        logger.exception(
+            "[conversation_csv_export] Postgres messages fetch failed conversation_uuid=%s",
+            conv.uuid,
+        )
         return []
 
 
@@ -91,10 +103,12 @@ def _dynamo_messages(conv: Conversation) -> list:
 
 def _merged_raw_messages(conv: Conversation) -> list:
     pg = _postgres_messages(conv)
-    dyn = _dynamo_messages(conv)
     if str(conv.resolution) == IN_PROGRESS:
+        dyn = _dynamo_messages(conv)
         return dyn if dyn else pg
-    return pg if pg else dyn
+    if pg:
+        return pg
+    return _dynamo_messages(conv)
 
 
 def format_msgs_cell(conv: Conversation) -> str:

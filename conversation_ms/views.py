@@ -328,15 +328,14 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if not Project.objects.filter(uuid=project_uuid).exists():
-            raise NotFound(detail="Project not found")
-
         ser = ConversationExportCsvRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         target_date = ser.validated_data.get("target_date")
 
         try:
             body, row_count, day = export_conversations_csv_bytes(str(project_uuid), target_date=target_date)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
         except Exception:
             logger.exception(
                 "[ConversationExportCsvView] Export failed project_uuid=%s",

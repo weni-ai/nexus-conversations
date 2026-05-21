@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from datetime import date
 
 import pendulum
 from django.core.exceptions import ObjectDoesNotExist
@@ -18,7 +19,7 @@ from django.db.models import Q
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, Project
-from conversation_ms.utils.date_helpers import resolve_effective_project_timezone
+from conversation_ms.utils.date_helpers import ProjectDay, resolve_effective_project_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +45,17 @@ def _project_timezone(project: Project) -> str:
     return resolve_effective_project_timezone(project.timezone)
 
 
-def resolve_target_date(project: Project, target_date: str | None) -> str:
-    if target_date:
-        return target_date.strip()
+def resolve_target_date(project: Project, target_date: str | date | None) -> str:
+    if target_date is not None:
+        if isinstance(target_date, date):
+            return target_date.isoformat()
+        return str(target_date).strip()
     return pendulum.now(_project_timezone(project)).format("YYYY-MM-DD")
 
 
 def _day_bounds_utc(project: Project, day: str) -> tuple[pendulum.DateTime, pendulum.DateTime]:
     tz_name = _project_timezone(project)
-    start_local = pendulum.parse(day, tz=tz_name).start_of("day")
-    end_local = start_local.end_of("day")
-    return start_local.in_timezone("UTC"), end_local.in_timezone("UTC")
+    return ProjectDay.for_date(day, tz_name).get_utc_range()
 
 
 def _postgres_messages(conv: Conversation) -> list:
@@ -154,7 +155,7 @@ def conversations_queryset(project_uuid: str, start_utc: pendulum.DateTime, end_
 
 def export_conversations_csv_bytes(
     project_uuid: str,
-    target_date: str | None = None,
+    target_date: str | date | None = None,
     iterator_chunk_size: int = DEFAULT_EXPORT_ITERATOR_CHUNK_SIZE,
 ) -> tuple[bytes, int, str]:
     """

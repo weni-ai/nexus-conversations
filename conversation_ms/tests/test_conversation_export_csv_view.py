@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -77,6 +78,16 @@ class TestConversationExportCsvView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_invalid_calendar_date_returns_400(self, api_client, project, _bypass_jwt, auth_headers):
+        url = reverse("project-conversations-export", kwargs={"project_uuid": project.uuid})
+        response = api_client.post(
+            url,
+            {"target_date": "2026-99-99"},
+            format="json",
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     @patch("conversation_ms.views.export_conversations_csv_bytes")
     def test_success_returns_csv_attachment(self, mock_export, api_client, project, _bypass_jwt, auth_headers):
         header = "conversation_uuid,contact_urn\n"
@@ -95,7 +106,7 @@ class TestConversationExportCsvView:
         assert response["X-Export-Row-Count"] == "0"
         assert response["X-Export-Target-Date"] == "2026-05-13"
         assert response.content == header.encode("utf-8")
-        mock_export.assert_called_once_with(str(project.uuid), target_date="2026-05-13")
+        mock_export.assert_called_once_with(str(project.uuid), target_date=date(2026, 5, 13))
 
     @patch("conversation_ms.views.export_conversations_csv_bytes", side_effect=RuntimeError("boom"))
     def test_export_failure_returns_json_error(self, mock_export, api_client, project, _bypass_jwt, auth_headers):

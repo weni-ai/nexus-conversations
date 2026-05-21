@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pendulum
@@ -33,6 +34,7 @@ class TestConversationCsvExportService:
 
     def test_resolve_target_date_explicit(self, project):
         assert resolve_target_date(project, "2026-05-13") == "2026-05-13"
+        assert resolve_target_date(project, date(2026, 5, 13)) == "2026-05-13"
 
     @patch("conversation_ms.services.conversation_csv_export_service.pendulum")
     def test_resolve_target_date_defaults_to_today(self, mock_pendulum, project):

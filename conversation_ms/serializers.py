@@ -338,8 +338,7 @@ class ConversationExportCsvRequestSerializer(serializers.Serializer):
     ``target_date`` is optional (YYYY-MM-DD in the project's timezone). When omitted, uses today.
     """
 
-    target_date = serializers.RegexField(
-        regex=r"^\d{4}-\d{2}-\d{2}$",
+    target_date = serializers.DateField(
         required=False,
         allow_null=True,
         default=None,

@@ -315,19 +315,16 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
             name="project_uuid",
             type=str,
             location=OpenApiParameter.PATH,
-            description="Project UUID (must match JWT project_uuid)",
+            description="Project UUID",
         ),
     ],
     request=ConversationExportCsvRequestSerializer,
 )
-class ConversationExportCsvView(JWTModuleMixin, APIView):
-    def post(self, request, project_uuid):
-        if str(self.project_uuid) != str(project_uuid):
-            return Response(
-                {"error": "Project UUID does not match token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+class ConversationExportCsvView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
 
+    def post(self, request, project_uuid):
         ser = ConversationExportCsvRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         target_date = ser.validated_data.get("target_date")

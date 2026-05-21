@@ -8,6 +8,7 @@ from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
+from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
@@ -24,12 +25,14 @@ from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import (
     ConversationDetailSerializer,
+    ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
     FlowsDbCohortReconcileRequestSerializer,
     SubTopicsSerializer,
     TopicsSerializer,
 )
+from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
 from conversation_ms.tasks import create_external_billing_ticket_task, reconcile_flows_db_cohort_task
@@ -233,6 +236,15 @@ def _process_with_retry(service, event_data):
 EXTERNAL_BILLING_CACHE_TIMEOUT = 86400
 
 
+def _conversation_export_csv_response(body: bytes, target_date: str, row_count: int) -> HttpResponse:
+    filename = f"conversations_{target_date}.csv"
+    response = HttpResponse(body, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["X-Export-Row-Count"] = str(row_count)
+    response["X-Export-Target-Date"] = target_date
+    return response
+
+
 class ExternalConversationWindowView(JWTModuleMixin, APIView):
     def post(self, request, project_uuid):
         contact_urn = request.data.get("contact_urn")
@@ -290,6 +302,56 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
         )
 
 
+@extend_schema(
+    summary="Export project conversations to CSV",
+    description=(
+        "Builds a CSV for conversations on the given calendar day (project timezone), "
+        "including messages from Postgres and DynamoDB, and returns the file in the "
+        "response body (Content-Disposition: attachment). Works for browser download, "
+        "curl (-OJ), and Postman."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID (must match JWT project_uuid)",
+        ),
+    ],
+    request=ConversationExportCsvRequestSerializer,
+)
+class ConversationExportCsvView(JWTModuleMixin, APIView):
+    def post(self, request, project_uuid):
+        if str(self.project_uuid) != str(project_uuid):
+            return Response(
+                {"error": "Project UUID does not match token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = ConversationExportCsvRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        target_date = ser.validated_data.get("target_date")
+
+        try:
+            body, row_count, day = export_conversations_csv_bytes(str(project_uuid), target_date=target_date)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+        except Exception:
+            logger.exception(
+                "[ConversationExportCsvView] Export failed project_uuid=%s",
+                project_uuid,
+            )
+            return Response(
+                {
+                    "error": "export_failed",
+                    "detail": "An unexpected error occurred while exporting conversations.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return _conversation_export_csv_response(body, day, row_count)
+
+
 def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
     cfg: dict = {
         "project": project_uuid,
@@ -312,9 +374,11 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
 @extend_schema(
     summary="Reconcile Flows cohort with DB",
     description=(
+        "Returns JSON with plain English field names describing Flows fetch stats, database cohort counts, "
+        "per-conversation timestamp comparison, and conversation-id overlap between Flows and the database. "
         "Fetches conversation_classification events from Flows for the time window, "
         "builds the matching DB cohort (same inclusive window on start_date and end_date), "
-        "compares metadata to Conversation rows, and reports bidirectional UUID gaps. "
+        "compares metadata to Conversation rows, and reports id gaps. "
         "Runs inside a Celery task by default; the HTTP request blocks until completion."
     ),
     parameters=[

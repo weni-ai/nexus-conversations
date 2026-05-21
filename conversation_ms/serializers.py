@@ -331,9 +331,28 @@ class SubTopicsSerializer(serializers.ModelSerializer):
         return obj.topic.name
 
 
+class ConversationExportCsvRequestSerializer(serializers.Serializer):
+    """
+    Body for POST ``/api/v1/projects/<uuid>/conversations/export/``.
+
+    ``target_date`` is optional (YYYY-MM-DD in the project's timezone). When omitted, uses today.
+    """
+
+    target_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="Calendar day in project timezone (YYYY-MM-DD). Defaults to today.",
+    )
+
+
 class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     """
-    Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort-reconcile/`` (see ``conversation_ms.urls``).
+    Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort/`` (see ``conversation_ms.urls``).
+
+    Response fields use plain English names (for example ``project_id``, ``selected_date_range``,
+    ``flows_service_results``, ``database_results``, ``timestamp_comparison``,
+    and ``id_comparison_between_flows_and_database``).
 
     ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
     DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.

@@ -3,11 +3,12 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pendulum
-from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
+from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
@@ -31,13 +32,10 @@ from conversation_ms.serializers import (
     SubTopicsSerializer,
     TopicsSerializer,
 )
+from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
-from conversation_ms.tasks import (
-    create_external_billing_ticket_task,
-    export_conversations_csv_task,
-    reconcile_flows_db_cohort_task,
-)
+from conversation_ms.tasks import create_external_billing_ticket_task, reconcile_flows_db_cohort_task
 
 logger = logging.getLogger(__name__)
 
@@ -237,10 +235,14 @@ def _process_with_retry(service, event_data):
 
 EXTERNAL_BILLING_CACHE_TIMEOUT = 86400
 
-# Conversation CSV export (Celery limits; not env-specific — tune in code if needed)
-CONVERSATION_EXPORT_HTTP_TIMEOUT_SECONDS = 900
-CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT = 880
-CONVERSATION_EXPORT_CELERY_TIME_LIMIT = 960
+
+def _conversation_export_csv_response(body: bytes, target_date: str, row_count: int) -> HttpResponse:
+    filename = f"conversations_{target_date}.csv"
+    response = HttpResponse(body, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["X-Export-Row-Count"] = str(row_count)
+    response["X-Export-Target-Date"] = target_date
+    return response
 
 
 class ExternalConversationWindowView(JWTModuleMixin, APIView):
@@ -304,8 +306,9 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
     summary="Export project conversations to CSV",
     description=(
         "Builds a CSV for conversations on the given calendar day (project timezone), "
-        "including messages from Postgres and DynamoDB, uploads to S3, and returns a "
-        "presigned download URL for the frontend."
+        "including messages from Postgres and DynamoDB, and returns the file in the "
+        "response body (Content-Disposition: attachment). Works for browser download, "
+        "curl (-OJ), and Postman."
     ),
     parameters=[
         OpenApiParameter(
@@ -333,25 +336,8 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
         target_date = ser.validated_data.get("target_date")
 
         try:
-            async_res = export_conversations_csv_task.apply_async(
-                args=[str(project_uuid), target_date],
-                soft_time_limit=CONVERSATION_EXPORT_CELERY_SOFT_TIME_LIMIT,
-                time_limit=CONVERSATION_EXPORT_CELERY_TIME_LIMIT,
-            )
-            result = async_res.get(timeout=CONVERSATION_EXPORT_HTTP_TIMEOUT_SECONDS)
-        except (CeleryTimeoutError, SoftTimeLimitExceeded, TimeLimitExceeded):
-            return Response(
-                {"error": "Export timed out"},
-                status=status.HTTP_504_GATEWAY_TIMEOUT,
-            )
-        except Exception as exc:
-            from conversation_ms.adapters.s3_storage import S3StorageError
-
-            if isinstance(exc, S3StorageError):
-                return Response(
-                    {"error": "export_storage_not_configured"},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
+            body, row_count, day = export_conversations_csv_bytes(str(project_uuid), target_date=target_date)
+        except Exception:
             logger.exception(
                 "[ConversationExportCsvView] Export failed project_uuid=%s",
                 project_uuid,
@@ -364,7 +350,7 @@ class ConversationExportCsvView(JWTModuleMixin, APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        return Response(result, status=status.HTTP_200_OK)
+        return _conversation_export_csv_response(body, day, row_count)
 
 
 def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:

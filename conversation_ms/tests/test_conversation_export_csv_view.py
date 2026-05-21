@@ -42,12 +42,6 @@ def auth_headers():
 
 @pytest.mark.django_db
 class TestConversationExportCsvView:
-    @pytest.fixture(autouse=True)
-    def _celery_eager(self, settings):
-        settings.CELERY_TASK_ALWAYS_EAGER = True
-        settings.CELERY_TASK_EAGER_PROPAGATES = True
-        settings.AWS_S3_BUCKET_NAME = "test-bucket"
-
     def test_requires_auth(self, api_client, project):
         url = reverse("project-conversations-export", kwargs={"project_uuid": project.uuid})
         response = api_client.post(url, {}, format="json")
@@ -83,14 +77,10 @@ class TestConversationExportCsvView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    @patch("conversation_ms.services.conversation_csv_export_runner.run_conversation_csv_export")
-    def test_success_returns_presigned_url(self, mock_run, api_client, project, _bypass_jwt, auth_headers):
-        mock_run.return_value = {
-            "download_url": "https://example.com/presigned.csv",
-            "row_count": 3,
-            "target_date": "2026-05-13",
-            "expires_in": 3600,
-        }
+    @patch("conversation_ms.views.export_conversations_csv_bytes")
+    def test_success_returns_csv_attachment(self, mock_export, api_client, project, _bypass_jwt, auth_headers):
+        header = "conversation_uuid,contact_urn\n"
+        mock_export.return_value = (header.encode("utf-8"), 0, "2026-05-13")
         url = reverse("project-conversations-export", kwargs={"project_uuid": project.uuid})
         response = api_client.post(
             url,
@@ -99,17 +89,17 @@ class TestConversationExportCsvView:
             **auth_headers,
         )
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["download_url"] == "https://example.com/presigned.csv"
-        assert response.data["row_count"] == 3
-        assert response.data["target_date"] == "2026-05-13"
-        mock_run.assert_called_once_with(str(project.uuid), target_date="2026-05-13")
+        assert response["Content-Type"] == "text/csv; charset=utf-8"
+        assert "attachment" in response["Content-Disposition"]
+        assert "conversations_2026-05-13.csv" in response["Content-Disposition"]
+        assert response["X-Export-Row-Count"] == "0"
+        assert response["X-Export-Target-Date"] == "2026-05-13"
+        assert response.content == header.encode("utf-8")
+        mock_export.assert_called_once_with(str(project.uuid), target_date="2026-05-13")
 
-    @patch("conversation_ms.services.conversation_csv_export_runner.run_conversation_csv_export")
-    def test_s3_not_configured_returns_503(self, mock_run, api_client, project, _bypass_jwt, auth_headers):
-        from conversation_ms.adapters.s3_storage import S3StorageError
-
-        mock_run.side_effect = S3StorageError("AWS_S3_BUCKET_NAME is not configured")
+    @patch("conversation_ms.views.export_conversations_csv_bytes", side_effect=RuntimeError("boom"))
+    def test_export_failure_returns_json_error(self, mock_export, api_client, project, _bypass_jwt, auth_headers):
         url = reverse("project-conversations-export", kwargs={"project_uuid": project.uuid})
         response = api_client.post(url, {}, format="json", **auth_headers)
-        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        assert response.data["error"] == "export_storage_not_configured"
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        assert response.data["error"] == "export_failed"

@@ -1,8 +1,7 @@
-"""DB cohort export for Flows vs DB reconcile (consumed by nexus-ai)."""
+"""DB reconcile cohort export for nexus-ai (no Flows calls)."""
 
 from __future__ import annotations
 
-import logging
 from datetime import timezone as stdlib_utc
 from typing import Any
 from uuid import UUID
@@ -13,10 +12,7 @@ from django.utils import timezone as dj_tz
 
 from conversation_ms.models import Conversation
 
-logger = logging.getLogger(__name__)
-
 MAX_RECONCILE_DAY_SECONDS = 86_400
-DEFAULT_MAX_RECONCILE_RANGE_DAYS = 31
 
 
 def terminal_classification_q() -> Q:
@@ -28,7 +24,7 @@ def parse_api_utc(s: str) -> pendulum.DateTime:
     if not raw:
         raise ValueError("empty datetime")
     try:
-        return pendulum.parse(raw).in_timezone("UTC")
+        return pendulum.parse(raw, tz="UTC").in_timezone("UTC")
     except Exception as e:
         raise ValueError(f"bad datetime: {s}") from e
 

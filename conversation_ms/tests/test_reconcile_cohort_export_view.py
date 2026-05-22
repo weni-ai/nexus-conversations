@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timezone as dt_tz
+from uuid import uuid4
 
 import pytest
 from django.conf import settings
@@ -38,6 +39,15 @@ class TestReconcileCohortExportView:
             {"date_start": "2026-01-10T00:00:00Z", "date_end": "2026-01-10T23:59:59Z"},
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_returns_404_for_missing_project(self, api_client, auth_headers):
+        url = reverse("project-reconcile-cohort-export", kwargs={"project_uuid": uuid4()})
+        response = api_client.get(
+            url,
+            {"date_start": "2026-01-10T00:00:00Z", "date_end": "2026-01-10T23:59:59Z"},
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_returns_cohort_for_window(self, api_client, project, auth_headers):
         start = datetime(2026, 1, 15, 12, 0, 0, tzinfo=dt_tz.utc)
@@ -88,3 +98,8 @@ class TestReconcileCohortExportHelpers:
         end = parse_api_utc("2026-01-01T00:00:00Z")
         with pytest.raises(ValueError, match="date_end must be on or after"):
             validate_reconcile_window_seconds(start, end)
+
+    def test_parse_api_utc_treats_naive_as_utc(self):
+        dt = parse_api_utc("2026-01-15T12:00:00")
+        assert dt.timezone_name == "UTC"
+        assert dt.hour == 12

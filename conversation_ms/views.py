@@ -286,11 +286,11 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
 
 
 @extend_schema(
-    summary="Export DB cohort for Flows reconcile",
+    summary="Export DB reconcile cohort",
     description=(
-        "Internal endpoint for nexus-ai: conversations whose start and end fall inside the "
-        "requested window, with optional terminal-classification filter. One window per request "
-        "(at most 24 hours)."
+        "Internal read-only export for nexus-ai. Returns conversation UUIDs with start_date and "
+        "end_date for rows whose bounds fall inside the requested window (optional terminal-classification "
+        "filter). Does not call Flows. One window per request (at most 24 hours, UTC)."
     ),
     parameters=[
         OpenApiParameter(

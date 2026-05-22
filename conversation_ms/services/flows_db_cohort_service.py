@@ -41,9 +41,9 @@ def _format_api_instant(dt: pendulum.DateTime) -> str:
 
 def validate_reconcile_window_seconds(start_bound: pendulum.DateTime, end_bound: pendulum.DateTime) -> None:
     """Reject a single-day slice longer than 24 hours (inclusive bounds)."""
-    span_seconds = end_bound.diff(start_bound).in_seconds()
-    if span_seconds < 0:
+    if end_bound < start_bound:
         raise ValueError("date_end must be on or after date_start")
+    span_seconds = end_bound.diff(start_bound).in_seconds()
     if span_seconds > MAX_RECONCILE_DAY_SECONDS:
         raise ValueError(
             f"Date window must not exceed {MAX_RECONCILE_DAY_SECONDS} seconds (one day); got {int(span_seconds)}"
@@ -221,8 +221,9 @@ def _read_flows_events_page(url: str, req: Request) -> list[Any]:
     return events_list_from_payload(payload)
 
 
-def _collect_flow_events_pages(
+def _collect_flow_cohort_pages(
     *,
+    cfg: dict[str, Any],
     base_params: dict[str, Any],
     flows_base_url: str,
     auth_prefix: str,
@@ -230,8 +231,12 @@ def _collect_flow_events_pages(
     limit: int,
     offset: int,
     max_pages: int | None,
-) -> tuple[list[Any], int]:
-    all_events: list[Any] = []
+    key_name: str,
+) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    """Paginate Flows API and keep only in-window cohort events (avoid holding all pages in memory)."""
+    cohort: list[dict[str, Any]] = []
+    total_from_api = 0
+    events_with_key = 0
     page_idx = 0
     cur_offset = offset
     while True:
@@ -252,21 +257,33 @@ def _collect_flow_events_pages(
         chunk = _read_flows_events_page(url, req)
         if not chunk:
             break
-        all_events.extend(chunk)
+        for event in chunk:
+            total_from_api += 1
+            if not isinstance(event, dict) or event.get("key") != key_name:
+                continue
+            events_with_key += 1
+            if event_metadata_both_in_window(event, cfg):
+                cohort.append(event)
         page_idx += 1
         if len(chunk) < limit:
             break
         cur_offset += limit
-    return all_events, page_idx
+    counts = {
+        "flows_events_total_from_api": total_from_api,
+        "flows_events_with_this_type": events_with_key,
+        "flows_events_inside_selected_dates": len(cohort),
+    }
+    return cohort, page_idx, counts
 
 
 def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     token, limit, offset, max_pages = _validate_flows_pagination_params(cfg)
 
+    key_name = cfg.get("key", "conversation_classification")
     base_params: dict[str, Any] = {
         "date_start": cfg["date_start"],
         "project": str(cfg["project"]),
-        "key": cfg.get("key", "conversation_classification"),
+        "key": key_name,
         "limit": limit,
     }
     if cfg.get("use_date_end", True):
@@ -275,7 +292,8 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     flows_base_url = _flows_base_url()
     auth_prefix = (cfg.get("authorization_prefix") or "Token").strip()
 
-    all_events, page_idx = _collect_flow_events_pages(
+    cohort, page_idx, counts = _collect_flow_cohort_pages(
+        cfg=cfg,
         base_params=base_params,
         flows_base_url=flows_base_url,
         auth_prefix=auth_prefix,
@@ -283,22 +301,19 @@ def fetch_flows_cohort(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
         limit=limit,
         offset=offset,
         max_pages=max_pages,
+        key_name=key_name,
     )
-
-    key_name = cfg.get("key", "conversation_classification")
-    by_key = [e for e in all_events if isinstance(e, dict) and e.get("key") == key_name]
-    cohort = [e for e in by_key if event_metadata_both_in_window(e, cfg)]
 
     stats: dict[str, Any] = {
         "flows_api_pages_read": page_idx,
-        "flows_events_total_from_api": len(all_events),
+        "flows_events_total_from_api": counts["flows_events_total_from_api"],
         "flows_event_type": key_name,
-        "flows_events_with_this_type": len(by_key),
-        "flows_events_inside_selected_dates": len(cohort),
+        "flows_events_with_this_type": counts["flows_events_with_this_type"],
+        "flows_events_inside_selected_dates": counts["flows_events_inside_selected_dates"],
         "flows_request_url_base": flows_base_url,
     }
     if key_name == "conversation_classification":
-        stats["flows_classification_event_count"] = len(by_key)
+        stats["flows_classification_event_count"] = counts["flows_events_with_this_type"]
     return cohort, stats
 
 

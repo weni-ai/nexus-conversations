@@ -386,4 +386,11 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
         except ValueError as e:
             raise serializers.ValidationError({"date_end": str(e)}) from e
 
+        token = str(attrs.get("flows_api_token", "")).strip()
+        if not token:
+            raise serializers.ValidationError({"flows_api_token": "This field may not be blank."})
+        attrs["flows_api_token"] = token
+        attrs["date_start"] = str(attrs["date_start"]).strip()
+        attrs["date_end"] = end_raw
+
         return attrs

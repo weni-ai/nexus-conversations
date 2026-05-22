@@ -292,8 +292,8 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
 def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
     return {
         "project": project_uuid,
-        "flows_api_token": data["flows_api_token"],
-        "date_start": data["date_start"],
+        "flows_api_token": str(data["flows_api_token"]).strip(),
+        "date_start": str(data["date_start"]).strip(),
         "date_end": str(data["date_end"]).strip(),
         "use_date_end": True,
         "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],

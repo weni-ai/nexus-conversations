@@ -19,7 +19,8 @@ from conversation_ms.models import Conversation
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLOWS_BASE_URL = "https://flows.weni.ai/api/v2/events.json"
-MAX_RECONCILE_WINDOW_SECONDS = 86_400
+MAX_RECONCILE_DAY_SECONDS = 86_400
+DEFAULT_MAX_RECONCILE_RANGE_DAYS = 31
 
 
 def _flows_base_url() -> str:
@@ -34,15 +35,32 @@ def terminal_classification_q() -> Q:
     return ~Q(resolution__in=("2", "3")) & (Q(resolution__in=("0", "1", "4")) | Q(has_chats_room=True))
 
 
+def _format_api_instant(dt: pendulum.DateTime) -> str:
+    return dt.in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss[Z]")
+
+
 def validate_reconcile_window_seconds(start_bound: pendulum.DateTime, end_bound: pendulum.DateTime) -> None:
-    """Reject windows longer than 24 hours (inclusive bounds)."""
+    """Reject a single-day slice longer than 24 hours (inclusive bounds)."""
     span_seconds = end_bound.diff(start_bound).in_seconds()
     if span_seconds < 0:
         raise ValueError("date_end must be on or after date_start")
-    if span_seconds > MAX_RECONCILE_WINDOW_SECONDS:
+    if span_seconds > MAX_RECONCILE_DAY_SECONDS:
         raise ValueError(
-            f"Date window must not exceed {MAX_RECONCILE_WINDOW_SECONDS} seconds (one day); got {int(span_seconds)}"
+            f"Date window must not exceed {MAX_RECONCILE_DAY_SECONDS} seconds (one day); got {int(span_seconds)}"
         )
+
+
+def validate_reconcile_date_range(
+    start_bound: pendulum.DateTime,
+    end_bound: pendulum.DateTime,
+    max_days: int,
+) -> None:
+    """Reject ranges spanning more than ``max_days`` calendar days (UTC)."""
+    if end_bound < start_bound:
+        raise ValueError("date_end must be on or after date_start")
+    day_count = end_bound.start_of("day").diff(start_bound.start_of("day")).in_days() + 1
+    if day_count > max_days:
+        raise ValueError(f"Date range spans {day_count} days; maximum is {max_days}")
 
 
 def parse_api_utc(s: str) -> pendulum.DateTime:
@@ -397,6 +415,112 @@ def bidirectional_uuid_sets(
         "count_only_in_database": len(in_db_not_in_flows),
         "example_ids_only_in_flows": in_flows_not_in_db[:uuid_sample_limit],
         "example_ids_only_in_database": in_db_not_in_flows[:uuid_sample_limit],
+    }
+
+
+def iter_daily_reconcile_cfgs(base_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Split ``date_start``..``date_end`` into per-day configs (each at most 24h)."""
+    range_start = parse_api_utc(base_cfg["date_start"])
+    range_end = parse_api_utc(base_cfg["date_end"])
+    cfgs: list[dict[str, Any]] = []
+    day = range_start.start_of("day")
+    last_day = range_end.start_of("day")
+    while day <= last_day:
+        day_start = max(day, range_start)
+        day_end = min(day.end_of("day"), range_end)
+        cfg = dict(base_cfg)
+        cfg["date_start"] = _format_api_instant(day_start)
+        cfg["date_end"] = _format_api_instant(day_end)
+        cfg["use_date_end"] = True
+        validate_reconcile_window_seconds(parse_api_utc(cfg["date_start"]), parse_api_utc(cfg["date_end"]))
+        cfgs.append(cfg)
+        day = day.add(days=1)
+    return cfgs
+
+
+def classify_day_result(day_result: dict[str, Any]) -> str:
+    """Return ``aligned``, ``needs_review``, or ``no_data`` for one day."""
+    ts = day_result.get("timestamp_comparison", {}).get("totals", {})
+    ids = day_result.get("id_comparison_between_flows_and_database", {})
+    compared = int(ts.get("conversations_compared", 0))
+    db_in = int(day_result.get("database_results", {}).get("conversations_inside_date_rules", 0))
+    if compared == 0 and db_in == 0:
+        return "no_data"
+    both_match = int(ts.get("matching_start_and_end_times", 0))
+    if (
+        compared > 0
+        and both_match == compared
+        and int(ids.get("count_only_in_flows", 0)) == 0
+        and int(ids.get("count_only_in_database", 0)) == 0
+        and int(ts.get("not_found_in_database", 0)) == 0
+        and int(ts.get("invalid_conversation_id_in_flows", 0)) == 0
+        and len(day_result.get("timestamp_comparison", {}).get("examples_where_timestamps_differ", [])) == 0
+    ):
+        return "aligned"
+    return "needs_review"
+
+
+def run_flows_db_cohort_reconcile_range(base_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Run reconcile once per calendar day in the range and aggregate summaries."""
+    daily_cfgs = iter_daily_reconcile_cfgs(base_cfg)
+    day_reports: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for day_cfg in daily_cfgs:
+        day_label = day_cfg["date_start"][:10]
+        try:
+            result = run_flows_db_cohort_reconcile(day_cfg)
+            status = classify_day_result(result)
+            day_reports.append(
+                {
+                    "day": day_label,
+                    "status": status,
+                    "from_inclusive": day_cfg["date_start"],
+                    "to_inclusive": day_cfg["date_end"],
+                    "flows_events_inside_selected_dates": result["flows_service_results"][
+                        "flows_events_inside_selected_dates"
+                    ],
+                    "conversations_inside_date_rules": result["database_results"]["conversations_inside_date_rules"],
+                    "matching_start_and_end_times": result["timestamp_comparison"]["totals"][
+                        "matching_start_and_end_times"
+                    ],
+                    "count_only_in_flows": result["id_comparison_between_flows_and_database"]["count_only_in_flows"],
+                    "count_only_in_database": result["id_comparison_between_flows_and_database"][
+                        "count_only_in_database"
+                    ],
+                }
+            )
+        except Exception as exc:
+            logger.exception("[flows_db_cohort] Day %s failed", day_label)
+            errors.append({"day": day_label, "error": str(exc)})
+            day_reports.append(
+                {
+                    "day": day_label,
+                    "status": "error",
+                    "from_inclusive": day_cfg["date_start"],
+                    "to_inclusive": day_cfg["date_end"],
+                    "error": str(exc),
+                }
+            )
+
+    statuses = {r["status"] for r in day_reports}
+    if errors:
+        overall = "partial_failure" if len(errors) < len(daily_cfgs) else "failed"
+    elif statuses <= {"aligned", "no_data"}:
+        overall = "aligned"
+    else:
+        overall = "needs_review"
+
+    return {
+        "project_id": str(base_cfg["project"]),
+        "requested_range": {
+            "from_inclusive": base_cfg["date_start"],
+            "to_inclusive": base_cfg["date_end"],
+        },
+        "days_in_range": len(daily_cfgs),
+        "overall_status": overall,
+        "day_summaries": day_reports,
+        "day_errors": errors,
     }
 
 

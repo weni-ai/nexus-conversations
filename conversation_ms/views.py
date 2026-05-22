@@ -1,10 +1,7 @@
 import logging
-from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pendulum
-from celery.exceptions import SoftTimeLimitExceeded
-from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
@@ -31,8 +28,10 @@ from conversation_ms.serializers import (
     TopicsSerializer,
 )
 from conversation_ms.services.conversation_window_service import ConversationWindowService
-from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
-from conversation_ms.tasks import create_external_billing_ticket_task, reconcile_flows_db_cohort_task
+from conversation_ms.tasks import (
+    create_external_billing_ticket_task,
+    reconcile_flows_db_cohort_email_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +290,7 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
 
 
 def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
-    cfg: dict = {
+    return {
         "project": project_uuid,
         "flows_api_token": data["flows_api_token"],
         "date_start": data["date_start"],
@@ -306,19 +305,16 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
         "mismatch_sample_limit": data.get("mismatch_sample_limit", 20),
         "uuid_sample_limit": data.get("uuid_sample_limit", 20),
     }
-    return cfg
 
 
 @extend_schema(
-    summary="Reconcile Flows cohort with DB",
+    summary="Queue Flows vs DB cohort reconcile (email report)",
     description=(
-        "Returns JSON with plain English field names describing Flows fetch stats, database cohort counts, "
-        "per-conversation timestamp comparison, and conversation-id overlap between Flows and the database. "
-        "The request window must span at most one day (24 hours); use separate calls for multiple days. "
-        "Fetches conversation_classification events from Flows for the time window, "
-        "builds the matching DB cohort (same inclusive window on start_date and end_date), "
-        "compares metadata to Conversation rows, and reports id gaps. "
-        "Runs inside a Celery task by default; the HTTP request blocks until completion."
+        "Queues an asynchronous job that reconciles Flows classification events with the database "
+        "for each calendar day in the requested range (inclusive), then emails the aggregated JSON report "
+        "to ``recipient_email``. Returns 202 with a Celery job id. "
+        "Nexus-ai sets ``recipient_email`` from the logged-in user via the v2 proxy. "
+        "Configure SMTP via EMAIL_HOST (see weni-engine/connect settings pattern)."
     ),
     parameters=[
         OpenApiParameter(
@@ -343,48 +339,26 @@ class FlowsDbCohortReconcileView(APIView):
         data = ser.validated_data
 
         cfg = _flows_db_cohort_build_cfg(str(project_uuid), data)
-        celery_soft = getattr(settings, "FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", 880)
-        celery_hard = getattr(settings, "FLOWS_DB_COHORT_CELERY_TIME_LIMIT", 960)
-        http_timeout = max(
-            getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 960),
-            celery_hard,
+        recipient_email = data["recipient_email"]
+        celery_soft = getattr(settings, "FLOWS_DB_COHORT_EMAIL_CELERY_SOFT_TIME_LIMIT", 3500)
+        celery_hard = getattr(settings, "FLOWS_DB_COHORT_EMAIL_CELERY_TIME_LIMIT", 3600)
+
+        async_res = reconcile_flows_db_cohort_email_task.apply_async(
+            args=[cfg, recipient_email],
+            soft_time_limit=celery_soft,
+            time_limit=celery_hard,
         )
-        via_celery = getattr(settings, "FLOWS_DB_COHORT_SYNC_VIA_CELERY", True)
 
-        async_res = None
-        try:
-            if via_celery:
-                async_res = reconcile_flows_db_cohort_task.apply_async(
-                    args=[cfg],
-                    soft_time_limit=celery_soft,
-                    time_limit=celery_hard,
-                )
-                result = async_res.get(timeout=http_timeout)
-            else:
-                result = run_flows_db_cohort_reconcile(cfg)
-        except (CeleryTimeoutError, SoftTimeLimitExceeded):
-            if async_res is not None:
-                async_res.revoke(terminate=True)
-            return Response(
-                {"error": "Reconciliation timed out"},
-                status=status.HTTP_504_GATEWAY_TIMEOUT,
-            )
-        except HTTPError as e:
-            return Response(
-                {
-                    "error": "flows_api_error",
-                    "status_code": e.code,
-                    "detail": getattr(e, "reason", None) or str(e),
+        return Response(
+            {
+                "status": "queued",
+                "job_id": async_res.id,
+                "project_id": str(project_uuid),
+                "recipient_email": recipient_email,
+                "requested_range": {
+                    "from_inclusive": cfg["date_start"],
+                    "to_inclusive": cfg["date_end"],
                 },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        except URLError as e:
-            reason = getattr(e, "reason", e)
-            return Response(
-                {"error": "flows_api_unreachable", "detail": str(reason)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(result, status=status.HTTP_200_OK)
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )

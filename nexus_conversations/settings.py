@@ -184,12 +184,26 @@ CELERY_TASK_SERIALIZER = "json"
 
 # Flows API (classification events vs DB cohort reconciliation)
 FLOWS_EVENTS_API_URL = env.str("FLOWS_EVENTS_API_URL", default="https://flows.weni.ai/api/v2/events.json")
-# Reconcile timeouts: soft <= hard <= HTTP AsyncResult.get (avoids 504 while the worker keeps running).
-FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", default=880)
-FLOWS_DB_COHORT_CELERY_TIME_LIMIT = env.int("FLOWS_DB_COHORT_CELERY_TIME_LIMIT", default=960)
-FLOWS_DB_COHORT_TASK_TIMEOUT = env.int("FLOWS_DB_COHORT_TASK_TIMEOUT", default=960)
+FLOWS_DB_COHORT_MAX_RANGE_DAYS = env.int("FLOWS_DB_COHORT_MAX_RANGE_DAYS", default=31)
 FLOWS_DB_COHORT_FLOWS_HTTP_TIMEOUT = env.int("FLOWS_DB_COHORT_FLOWS_HTTP_TIMEOUT", default=300)
-FLOWS_DB_COHORT_SYNC_VIA_CELERY = env.bool("FLOWS_DB_COHORT_SYNC_VIA_CELERY", default=True)
+FLOWS_DB_COHORT_EMAIL_CELERY_SOFT_TIME_LIMIT = env.int("FLOWS_DB_COHORT_EMAIL_CELERY_SOFT_TIME_LIMIT", default=3500)
+FLOWS_DB_COHORT_EMAIL_CELERY_TIME_LIMIT = env.int("FLOWS_DB_COHORT_EMAIL_CELERY_TIME_LIMIT", default=3600)
+
+# Email (Flows reconcile reports; same pattern as weni-engine/connect)
+envvar_EMAIL_HOST = env.str("EMAIL_HOST", default="")
+EMAIL_SUBJECT_PREFIX = env.str("EMAIL_SUBJECT_PREFIX", default="[Nexus Conversations] ")
+DEFAULT_FROM_EMAIL = env.str("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
+SERVER_EMAIL = env.str("SERVER_EMAIL", default="root@localhost")
+if envvar_EMAIL_HOST:
+    EMAIL_HOST = envvar_EMAIL_HOST
+    EMAIL_PORT = env.int("EMAIL_PORT", default=25)
+    EMAIL_HOST_USER = env.str("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env.str("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+    EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+SEND_EMAILS = env.bool("SEND_EMAILS", default=True)
 
 # SQS Configuration for Conversation MS
 SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")

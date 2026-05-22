@@ -340,11 +340,13 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     and ``id_comparison_between_flows_and_database``).
 
     ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
-    The window must span at most one day (24 hours).
+    The job runs asynchronously and emails ``recipient_email`` when finished (one reconcile pass per calendar day).
+    Nexus-ai proxy sets ``recipient_email`` from the authenticated user; direct callers must send it explicitly.
     DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
     """
 
     flows_api_token = serializers.CharField(write_only=True, trim_whitespace=False)
+    recipient_email = serializers.EmailField()
     date_start = serializers.CharField()
     date_end = serializers.CharField()
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
@@ -359,10 +361,14 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
     uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
+        from django.conf import settings as django_settings
+
         from conversation_ms.services.flows_db_cohort_service import (
             parse_api_utc,
-            validate_reconcile_window_seconds,
+            validate_reconcile_date_range,
         )
+
+        max_days = int(getattr(django_settings, "FLOWS_DB_COHORT_MAX_RANGE_DAYS", 31))
 
         try:
             start_bound = parse_api_utc(str(attrs["date_start"]).strip())
@@ -376,7 +382,7 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({"date_end": str(e)}) from e
 
         try:
-            validate_reconcile_window_seconds(start_bound, end_bound)
+            validate_reconcile_date_range(start_bound, end_bound, max_days)
         except ValueError as e:
             raise serializers.ValidationError({"date_end": str(e)}) from e
 

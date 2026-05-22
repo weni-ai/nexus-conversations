@@ -12,6 +12,11 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from conversation_ms.models import Conversation, Project
+from conversation_ms.services.flows_db_cohort_service import (
+    iter_daily_reconcile_cfgs,
+    parse_api_utc,
+    validate_reconcile_date_range,
+)
 
 
 @pytest.mark.django_db
@@ -20,6 +25,7 @@ class TestFlowsDbCohortReconcileView:
     def _celery_eager(self, settings):
         settings.CELERY_TASK_ALWAYS_EAGER = True
         settings.CELERY_TASK_EAGER_PROPAGATES = True
+        settings.SEND_EMAILS = False
 
     @pytest.fixture
     def api_client(self):
@@ -35,6 +41,16 @@ class TestFlowsDbCohortReconcileView:
         settings.INTERNAL_API_TOKENS = {"TestTeam": token}
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
+    def _post_payload(self, **overrides):
+        payload = {
+            "flows_api_token": "tok",
+            "recipient_email": "analyst@example.com",
+            "date_start": "2026-01-10T00:00:00Z",
+            "date_end": "2026-01-10T23:59:59Z",
+        }
+        payload.update(overrides)
+        return payload
+
     def test_requires_auth(self, api_client, project):
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
         response = api_client.post(url, {}, format="json")
@@ -46,11 +62,7 @@ class TestFlowsDbCohortReconcileView:
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": uuid4()})
         response = api_client.post(
             url,
-            {
-                "flows_api_token": "tok",
-                "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-10T23:59:59Z",
-            },
+            self._post_payload(),
             format="json",
             **auth_headers,
         )
@@ -62,6 +74,7 @@ class TestFlowsDbCohortReconcileView:
             url,
             {
                 "flows_api_token": "tok",
+                "recipient_email": "analyst@example.com",
                 "date_start": "2026-01-10T00:00:00Z",
             },
             format="json",
@@ -70,25 +83,41 @@ class TestFlowsDbCohortReconcileView:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "date_end" in response.data
 
-    def test_validation_rejects_window_longer_than_one_day(self, api_client, project, auth_headers):
+    def test_validation_requires_recipient_email(self, api_client, project, auth_headers):
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
         response = api_client.post(
             url,
             {
                 "flows_api_token": "tok",
                 "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-12T00:00:00Z",
+                "date_end": "2026-01-10T23:59:59Z",
             },
+            format="json",
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "recipient_email" in response.data
+
+    def test_validation_rejects_range_over_max_days(self, api_client, project, auth_headers):
+        url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
+        response = api_client.post(
+            url,
+            self._post_payload(
+                date_start="2026-01-01T00:00:00Z",
+                date_end="2026-03-01T00:00:00Z",
+            ),
             format="json",
             **auth_headers,
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "date_end" in response.data
 
+    @patch("conversation_ms.services.flows_db_cohort_email.send_reconcile_success_email")
     @patch("conversation_ms.services.flows_db_cohort_service.urlopen")
-    def test_success_aligned_flows_and_db(
+    def test_queues_and_emails_on_success(
         self,
         mock_urlopen,
+        mock_send_success,
         api_client,
         project,
         auth_headers,
@@ -121,47 +150,88 @@ class TestFlowsDbCohortReconcileView:
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
         response = api_client.post(
             url,
-            {
-                "flows_api_token": "flows-secret",
-                "date_start": "2026-01-15T00:00:00Z",
-                "date_end": "2026-01-15T23:59:59Z",
-                "flows_max_pages": 1,
-            },
+            self._post_payload(
+                flows_api_token="flows-secret",
+                date_start="2026-01-15T00:00:00Z",
+                date_end="2026-01-15T23:59:59Z",
+                flows_max_pages=1,
+            ),
             format="json",
             **auth_headers,
         )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_202_ACCEPTED
         body = response.data
-        assert body["project_id"] == str(project.uuid)
-        assert "flows_events_outside_selected_dates" not in body["flows_service_results"]
-        assert "conversations_outside_date_rules" not in body["database_results"]
-        assert body["flows_service_results"]["flows_events_inside_selected_dates"] == 1
-        assert body["database_results"]["conversations_inside_date_rules"] == 1
-        assert body["timestamp_comparison"]["totals"]["matching_start_and_end_times"] == 1
-        assert body["id_comparison_between_flows_and_database"]["unique_ids_in_flows_cohort"] == 1
-        assert body["id_comparison_between_flows_and_database"]["unique_ids_in_database_cohort"] == 1
-        assert body["id_comparison_between_flows_and_database"]["count_only_in_flows"] == 0
-        assert body["id_comparison_between_flows_and_database"]["count_only_in_database"] == 0
-        assert body["timestamp_comparison"]["examples_where_timestamps_differ"] == []
+        assert body["status"] == "queued"
+        assert body["job_id"]
+        assert body["recipient_email"] == "analyst@example.com"
+        mock_send_success.assert_called_once()
+        report = mock_send_success.call_args[0][1]
+        assert report["overall_status"] == "aligned"
+        assert len(report["day_summaries"]) == 1
 
-    @patch("conversation_ms.services.flows_db_cohort_service.urlopen")
-    def test_flows_http_error_returns_502(self, mock_urlopen, api_client, project, auth_headers):
-        err = HTTPError("https://flows.example/api", 401, "Unauthorized", None, BytesIO(b"{}"))
-        mock_urlopen.side_effect = err
+    @patch("conversation_ms.tasks.reconcile_flows_db_cohort_email_task.apply_async")
+    def test_returns_202_without_blocking(self, mock_apply_async, api_client, project, auth_headers):
+        mock_apply_async.return_value = MagicMock(id="celery-job-123")
 
         url = reverse("project-flows-db-cohort-reconcile", kwargs={"project_uuid": project.uuid})
         response = api_client.post(
             url,
-            {
-                "flows_api_token": "bad",
-                "date_start": "2026-01-10T00:00:00Z",
-                "date_end": "2026-01-10T23:59:59Z",
-            },
+            self._post_payload(),
             format="json",
             **auth_headers,
         )
 
-        assert response.status_code == status.HTTP_502_BAD_GATEWAY
-        assert response.data["error"] == "flows_api_error"
-        assert response.data["status_code"] == 401
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        assert response.data["job_id"] == "celery-job-123"
+        mock_apply_async.assert_called_once()
+
+    @patch("conversation_ms.services.flows_db_cohort_email.send_reconcile_failure_email")
+    @patch("conversation_ms.services.flows_db_cohort_service.urlopen")
+    def test_task_sends_failure_email_on_flows_error(self, mock_urlopen, mock_send_failure):
+        from conversation_ms.tasks import reconcile_flows_db_cohort_email_task
+
+        err = HTTPError("https://flows.example/api", 401, "Unauthorized", None, BytesIO(b"{}"))
+        mock_urlopen.side_effect = err
+
+        cfg = {
+            "project": "385c8443-249e-462e-a287-f4a0dc292915",
+            "flows_api_token": "bad",
+            "date_start": "2026-01-10T00:00:00Z",
+            "date_end": "2026-01-10T23:59:59Z",
+            "use_date_end": True,
+            "apply_terminal_cohort_filter": True,
+            "key": "conversation_classification",
+            "authorization_prefix": "Token",
+            "flows_page_limit": 10000,
+            "flows_offset_start": 0,
+            "flows_max_pages": 1,
+            "mismatch_sample_limit": 20,
+            "uuid_sample_limit": 20,
+        }
+
+        report = reconcile_flows_db_cohort_email_task(cfg, "analyst@example.com")
+
+        assert report["overall_status"] == "failed"
+        mock_send_failure.assert_called_once()
+
+
+class TestFlowsDbCohortDateRange:
+    def test_iter_daily_reconcile_cfgs_splits_range(self):
+        base = {
+            "project": "00000000-0000-0000-0000-000000000001",
+            "flows_api_token": "x",
+            "date_start": "2026-01-10T00:00:00Z",
+            "date_end": "2026-01-12T23:59:59Z",
+            "use_date_end": True,
+        }
+        cfgs = iter_daily_reconcile_cfgs(base)
+        assert len(cfgs) == 3
+        assert cfgs[0]["date_start"].startswith("2026-01-10")
+        assert cfgs[2]["date_end"].startswith("2026-01-12")
+
+    def test_validate_reconcile_date_range_max_days(self):
+        start = parse_api_utc("2026-01-01T00:00:00Z")
+        end = parse_api_utc("2026-02-15T00:00:00Z")
+        with pytest.raises(ValueError, match="maximum is 31"):
+            validate_reconcile_date_range(start, end, 31)

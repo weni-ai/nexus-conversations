@@ -2,7 +2,6 @@ import logging
 from uuid import uuid4
 
 import pendulum
-from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
 from django_filters.rest_framework import DjangoFilterBackend
@@ -23,15 +22,12 @@ from conversation_ms.serializers import (
     ConversationDetailSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
-    FlowsDbCohortReconcileRequestSerializer,
+    ReconcileCohortExportQuerySerializer,
     SubTopicsSerializer,
     TopicsSerializer,
 )
 from conversation_ms.services.conversation_window_service import ConversationWindowService
-from conversation_ms.tasks import (
-    create_external_billing_ticket_task,
-    reconcile_flows_db_cohort_email_task,
-)
+from conversation_ms.tasks import create_external_billing_ticket_task
 
 logger = logging.getLogger(__name__)
 
@@ -289,32 +285,12 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
         )
 
 
-def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
-    return {
-        "project": project_uuid,
-        "flows_api_token": str(data["flows_api_token"]).strip(),
-        "date_start": str(data["date_start"]).strip(),
-        "date_end": str(data["date_end"]).strip(),
-        "use_date_end": True,
-        "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
-        "key": data.get("key", "conversation_classification"),
-        "authorization_prefix": data.get("authorization_prefix", "Token"),
-        "flows_page_limit": data.get("flows_page_limit", 10_000),
-        "flows_offset_start": data.get("flows_offset_start", 0),
-        "flows_max_pages": data.get("flows_max_pages"),
-        "mismatch_sample_limit": data.get("mismatch_sample_limit", 20),
-        "uuid_sample_limit": data.get("uuid_sample_limit", 20),
-    }
-
-
 @extend_schema(
-    summary="Queue Flows vs DB cohort reconcile (email report)",
+    summary="Export DB cohort for Flows reconcile",
     description=(
-        "Queues an asynchronous job that reconciles Flows classification events with the database "
-        "for each calendar day in the requested range (inclusive), then emails the aggregated JSON report "
-        "to ``recipient_email``. Returns 202 with a Celery job id. "
-        "Nexus-ai sets ``recipient_email`` from the logged-in user via the v2 proxy. "
-        "Configure SMTP via EMAIL_HOST (see weni-engine/connect settings pattern)."
+        "Internal endpoint for nexus-ai: conversations whose start and end fall inside the "
+        "requested window, with optional terminal-classification filter. One window per request "
+        "(at most 24 hours)."
     ),
     parameters=[
         OpenApiParameter(
@@ -323,42 +299,40 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
             location=OpenApiParameter.PATH,
             description="Project UUID",
         ),
+        OpenApiParameter(name="date_start", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(name="date_end", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(
+            name="apply_terminal_cohort_filter",
+            type=bool,
+            location=OpenApiParameter.QUERY,
+            required=False,
+        ),
     ],
-    request=FlowsDbCohortReconcileRequestSerializer,
 )
-class FlowsDbCohortReconcileView(APIView):
+class ReconcileCohortExportView(APIView):
     authentication_classes = [InternalTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, project_uuid):
+    def get(self, request, project_uuid):
         if not Project.objects.filter(uuid=project_uuid).exists():
             raise NotFound(detail="Project not found")
 
-        ser = FlowsDbCohortReconcileRequestSerializer(data=request.data)
+        ser = ReconcileCohortExportQuerySerializer(data=request.query_params)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
 
-        cfg = _flows_db_cohort_build_cfg(str(project_uuid), data)
-        recipient_email = data["recipient_email"]
-        celery_soft = getattr(settings, "FLOWS_DB_COHORT_EMAIL_CELERY_SOFT_TIME_LIMIT", 3500)
-        celery_hard = getattr(settings, "FLOWS_DB_COHORT_EMAIL_CELERY_TIME_LIMIT", 3600)
+        from conversation_ms.services.reconcile_cohort_export import export_reconcile_cohort
 
-        async_res = reconcile_flows_db_cohort_email_task.apply_async(
-            args=[cfg, recipient_email],
-            soft_time_limit=celery_soft,
-            time_limit=celery_hard,
-        )
+        cfg = {
+            "project": str(project_uuid),
+            "date_start": data["date_start"],
+            "date_end": data["date_end"],
+            "use_date_end": True,
+            "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
+        }
+        try:
+            payload = export_reconcile_cohort(cfg)
+        except ValueError as e:
+            return Response({"date_end": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(
-            {
-                "status": "queued",
-                "job_id": async_res.id,
-                "project_id": str(project_uuid),
-                "recipient_email": recipient_email,
-                "requested_range": {
-                    "from_inclusive": cfg["date_start"],
-                    "to_inclusive": cfg["date_end"],
-                },
-            },
-            status=status.HTTP_202_ACCEPTED,
-        )
+        return Response(payload, status=status.HTTP_200_OK)

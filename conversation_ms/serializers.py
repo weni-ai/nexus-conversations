@@ -331,44 +331,22 @@ class SubTopicsSerializer(serializers.ModelSerializer):
         return obj.topic.name
 
 
-class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
+class ReconcileCohortExportQuerySerializer(serializers.Serializer):
     """
-    Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort/`` (see ``conversation_ms.urls``).
+    Query params for GET ``/api/v1/projects/<uuid>/reconcile-cohort/`` (internal, nexus-ai).
 
-    Response fields use plain English names (for example ``project_id``, ``selected_date_range``,
-    ``flows_service_results``, ``database_results``, ``timestamp_comparison``,
-    and ``id_comparison_between_flows_and_database``).
-
-    ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
-    The job runs asynchronously and emails ``recipient_email`` when finished (one reconcile pass per calendar day).
-    Nexus-ai proxy sets ``recipient_email`` from the authenticated user; direct callers must send it explicitly.
-    DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
+    Returns DB conversations matching reconcile cohort rules for the window.
     """
 
-    flows_api_token = serializers.CharField(write_only=True, trim_whitespace=False)
-    recipient_email = serializers.EmailField()
     date_start = serializers.CharField()
     date_end = serializers.CharField()
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
-    key = serializers.CharField(required=False, default="conversation_classification")
-    authorization_prefix = serializers.CharField(required=False, default="Token")
-    flows_page_limit = serializers.IntegerField(required=False, default=10_000, min_value=1, max_value=10_000)
-    flows_offset_start = serializers.IntegerField(required=False, default=0, min_value=0)
-    flows_max_pages = serializers.IntegerField(
-        required=False, allow_null=True, default=None, min_value=1, max_value=200
-    )
-    mismatch_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
-    uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
-        from django.conf import settings as django_settings
-
-        from conversation_ms.services.flows_db_cohort_service import (
+        from conversation_ms.services.reconcile_cohort_export import (
             parse_api_utc,
-            validate_reconcile_date_range,
+            validate_reconcile_window_seconds,
         )
-
-        max_days = int(getattr(django_settings, "FLOWS_DB_COHORT_MAX_RANGE_DAYS", 31))
 
         try:
             start_bound = parse_api_utc(str(attrs["date_start"]).strip())
@@ -382,15 +360,10 @@ class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({"date_end": str(e)}) from e
 
         try:
-            validate_reconcile_date_range(start_bound, end_bound, max_days)
+            validate_reconcile_window_seconds(start_bound, end_bound)
         except ValueError as e:
             raise serializers.ValidationError({"date_end": str(e)}) from e
 
-        token = str(attrs.get("flows_api_token", "")).strip()
-        if not token:
-            raise serializers.ValidationError({"flows_api_token": "This field may not be blank."})
-        attrs["flows_api_token"] = token
         attrs["date_start"] = str(attrs["date_start"]).strip()
         attrs["date_end"] = end_raw
-
         return attrs

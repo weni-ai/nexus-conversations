@@ -611,19 +611,3 @@ def create_external_billing_ticket_task(self, auth_token: str, urn: str, created
         )
         sentry_sdk.capture_exception(exc)
         raise self.retry(exc=exc)
-
-
-@celery_app.task(name="conversation_ms.tasks.reconcile_flows_db_cohort_task")
-def reconcile_flows_db_cohort_task(cfg: dict):
-    """
-    Reconcile Flows classification events with the DB cohort for one project and time window.
-
-    ``soft_time_limit`` / ``time_limit`` are passed by the HTTP view via ``apply_async`` so they stay aligned
-    with ``FLOWS_DB_COHORT_*`` settings.
-
-    ``cfg`` is JSON-serializable and is passed to
-    :func:`conversation_ms.services.flows_db_cohort_service.run_flows_db_cohort_reconcile`.
-    """
-    from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
-
-    return run_flows_db_cohort_reconcile(cfg)

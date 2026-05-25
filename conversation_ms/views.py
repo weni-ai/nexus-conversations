@@ -1,11 +1,7 @@
 import logging
-from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pendulum
-from celery.exceptions import SoftTimeLimitExceeded
-from celery.exceptions import TimeoutError as CeleryTimeoutError
-from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
 from django.http import HttpResponse
@@ -28,14 +24,13 @@ from conversation_ms.serializers import (
     ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
-    FlowsDbCohortReconcileRequestSerializer,
+    ReconcileCohortExportQuerySerializer,
     SubTopicsSerializer,
     TopicsSerializer,
 )
 from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
-from conversation_ms.services.flows_db_cohort_service import run_flows_db_cohort_reconcile
-from conversation_ms.tasks import create_external_billing_ticket_task, reconcile_flows_db_cohort_task
+from conversation_ms.tasks import create_external_billing_ticket_task
 
 logger = logging.getLogger(__name__)
 
@@ -349,34 +344,12 @@ class ConversationExportCsvView(APIView):
         return _conversation_export_csv_response(body, day, row_count)
 
 
-def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
-    cfg: dict = {
-        "project": project_uuid,
-        "flows_api_token": data["flows_api_token"],
-        "date_start": data["date_start"],
-        "date_end": (data.get("date_end") or "").strip(),
-        "use_date_end": data["use_date_end"],
-        "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
-        "key": data.get("key", "conversation_classification"),
-        "authorization_prefix": data.get("authorization_prefix", "Token"),
-        "flows_page_limit": data.get("flows_page_limit", 10_000),
-        "flows_offset_start": data.get("flows_offset_start", 0),
-        "flows_max_pages": data.get("flows_max_pages"),
-        "mismatch_sample_limit": data.get("mismatch_sample_limit", 20),
-        "uuid_sample_limit": data.get("uuid_sample_limit", 20),
-    }
-    return cfg
-
-
 @extend_schema(
-    summary="Reconcile Flows cohort with DB",
+    summary="Export DB reconcile cohort",
     description=(
-        "Returns JSON with plain English field names describing Flows fetch stats, database cohort counts, "
-        "per-conversation timestamp comparison, and conversation-id overlap between Flows and the database. "
-        "Fetches conversation_classification events from Flows for the time window, "
-        "builds the matching DB cohort (same inclusive window on start_date and end_date), "
-        "compares metadata to Conversation rows, and reports id gaps. "
-        "Runs inside a Celery task by default; the HTTP request blocks until completion."
+        "Internal read-only export for nexus-ai. Returns conversation UUIDs with start_date and "
+        "end_date for rows whose bounds fall inside the requested window (optional terminal-classification "
+        "filter). Does not call Flows. One window per request (at most 24 hours, UTC)."
     ),
     parameters=[
         OpenApiParameter(
@@ -385,58 +358,40 @@ def _flows_db_cohort_build_cfg(project_uuid: str, data: dict) -> dict:
             location=OpenApiParameter.PATH,
             description="Project UUID",
         ),
+        OpenApiParameter(name="date_start", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(name="date_end", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(
+            name="apply_terminal_cohort_filter",
+            type=bool,
+            location=OpenApiParameter.QUERY,
+            required=False,
+        ),
     ],
-    request=FlowsDbCohortReconcileRequestSerializer,
 )
-class FlowsDbCohortReconcileView(APIView):
+class ReconcileCohortExportView(APIView):
     authentication_classes = [InternalTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, project_uuid):
+    def get(self, request, project_uuid):
         if not Project.objects.filter(uuid=project_uuid).exists():
             raise NotFound(detail="Project not found")
 
-        ser = FlowsDbCohortReconcileRequestSerializer(data=request.data)
+        ser = ReconcileCohortExportQuerySerializer(data=request.query_params)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
 
-        cfg = _flows_db_cohort_build_cfg(str(project_uuid), data)
-        http_timeout = getattr(settings, "FLOWS_DB_COHORT_TASK_TIMEOUT", 900)
-        celery_soft = getattr(settings, "FLOWS_DB_COHORT_CELERY_SOFT_TIME_LIMIT", 880)
-        celery_hard = getattr(settings, "FLOWS_DB_COHORT_CELERY_TIME_LIMIT", 960)
-        via_celery = getattr(settings, "FLOWS_DB_COHORT_SYNC_VIA_CELERY", True)
+        from conversation_ms.services.reconcile_cohort_export import export_reconcile_cohort
 
+        cfg = {
+            "project": str(project_uuid),
+            "date_start": data["date_start"],
+            "date_end": data["date_end"],
+            "use_date_end": True,
+            "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
+        }
         try:
-            if via_celery:
-                async_res = reconcile_flows_db_cohort_task.apply_async(
-                    args=[cfg],
-                    soft_time_limit=celery_soft,
-                    time_limit=celery_hard,
-                )
-                result = async_res.get(timeout=http_timeout)
-            else:
-                result = run_flows_db_cohort_reconcile(cfg)
-        except (CeleryTimeoutError, SoftTimeLimitExceeded):
-            return Response(
-                {"error": "Reconciliation timed out"},
-                status=status.HTTP_504_GATEWAY_TIMEOUT,
-            )
-        except HTTPError as e:
-            return Response(
-                {
-                    "error": "flows_api_error",
-                    "status_code": e.code,
-                    "detail": getattr(e, "reason", None) or str(e),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        except URLError as e:
-            reason = getattr(e, "reason", e)
-            return Response(
-                {"error": "flows_api_unreachable", "detail": str(reason)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            payload = export_reconcile_cohort(cfg)
         except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"date_end": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(result, status=status.HTTP_200_OK)
+        return Response(payload, status=status.HTTP_200_OK)

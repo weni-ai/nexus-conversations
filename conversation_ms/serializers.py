@@ -346,53 +346,39 @@ class ConversationExportCsvRequestSerializer(serializers.Serializer):
     )
 
 
-class FlowsDbCohortReconcileRequestSerializer(serializers.Serializer):
+class ReconcileCohortExportQuerySerializer(serializers.Serializer):
     """
-    Body for POST ``/api/v1/projects/<uuid>/flows-db-cohort/`` (see ``conversation_ms.urls``).
+    Query params for GET ``/api/v1/projects/<uuid>/reconcile-cohort/`` (internal, nexus-ai).
 
-    Response fields use plain English names (for example ``project_id``, ``selected_date_range``,
-    ``flows_service_results``, ``database_results``, ``timestamp_comparison``,
-    and ``id_comparison_between_flows_and_database``).
-
-    ``date_start`` / ``date_end`` are inclusive bounds of the analysis window (ISO-8601, UTC recommended).
-    DB cohort uses the same window for both ``Conversation.start_date`` and ``Conversation.end_date``.
+    Returns DB conversations matching reconcile cohort rules for the window.
     """
 
-    flows_api_token = serializers.CharField(write_only=True, trim_whitespace=False)
     date_start = serializers.CharField()
-    date_end = serializers.CharField(required=False, allow_blank=True, default="")
-    use_date_end = serializers.BooleanField(default=True)
+    date_end = serializers.CharField()
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
-    key = serializers.CharField(required=False, default="conversation_classification")
-    authorization_prefix = serializers.CharField(required=False, default="Token")
-    flows_page_limit = serializers.IntegerField(required=False, default=10_000, min_value=1, max_value=10_000)
-    flows_offset_start = serializers.IntegerField(required=False, default=0, min_value=0)
-    flows_max_pages = serializers.IntegerField(
-        required=False, allow_null=True, default=None, min_value=1, max_value=200
-    )
-    mismatch_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
-    uuid_sample_limit = serializers.IntegerField(required=False, default=20, min_value=0, max_value=500)
 
     def validate(self, attrs):
-        if attrs.get("use_date_end", True) and not (attrs.get("date_end") or "").strip():
-            raise serializers.ValidationError({"date_end": "This field is required when use_date_end is true."})
-
-        from conversation_ms.services.flows_db_cohort_service import parse_api_utc
+        from conversation_ms.services.reconcile_cohort_export import (
+            parse_api_utc,
+            validate_reconcile_window_seconds,
+        )
 
         try:
             start_bound = parse_api_utc(str(attrs["date_start"]).strip())
         except ValueError as e:
             raise serializers.ValidationError({"date_start": str(e)}) from e
 
-        if attrs.get("use_date_end", True):
-            end_raw = (attrs.get("date_end") or "").strip()
-            try:
-                end_bound = parse_api_utc(end_raw)
-            except ValueError as e:
-                raise serializers.ValidationError({"date_end": str(e)}) from e
-            if start_bound > end_bound:
-                raise serializers.ValidationError(
-                    {"date_end": "Must represent an instant on or after date_start for the same window."}
-                )
+        end_raw = str(attrs["date_end"]).strip()
+        try:
+            end_bound = parse_api_utc(end_raw)
+        except ValueError as e:
+            raise serializers.ValidationError({"date_end": str(e)}) from e
 
+        try:
+            validate_reconcile_window_seconds(start_bound, end_bound)
+        except ValueError as e:
+            raise serializers.ValidationError({"date_end": str(e)}) from e
+
+        attrs["date_start"] = str(attrs["date_start"]).strip()
+        attrs["date_end"] = end_raw
         return attrs

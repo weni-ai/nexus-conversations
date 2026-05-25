@@ -4,7 +4,7 @@ from conversation_ms.views import (
     ConversationExportCsvView,
     ConversationViewSet,
     ExternalConversationWindowView,
-    FlowsDbCohortReconcileView,
+    ReconcileCohortExportView,
 )
 
 conversation_list = ConversationViewSet.as_view({"get": "list"})
@@ -32,8 +32,8 @@ urlpatterns = [
         name="external-conversation-window",
     ),
     path(
-        "projects/<uuid:project_uuid>/flows-db-cohort/",
-        FlowsDbCohortReconcileView.as_view(),
-        name="project-flows-db-cohort-reconcile",
+        "projects/<uuid:project_uuid>/reconcile-cohort/",
+        ReconcileCohortExportView.as_view(),
+        name="project-reconcile-cohort-export",
     ),
 ]

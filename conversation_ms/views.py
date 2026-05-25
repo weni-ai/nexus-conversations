@@ -4,6 +4,7 @@ from uuid import uuid4
 import pendulum
 from django.core.cache import cache
 from django.db.models import Count
+from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
@@ -20,12 +21,14 @@ from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import (
     ConversationDetailSerializer,
+    ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
     ReconcileCohortExportQuerySerializer,
     SubTopicsSerializer,
     TopicsSerializer,
 )
+from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.tasks import create_external_billing_ticket_task
 
@@ -228,6 +231,15 @@ def _process_with_retry(service, event_data):
 EXTERNAL_BILLING_CACHE_TIMEOUT = 86400
 
 
+def _conversation_export_csv_response(body: bytes, target_date: str, row_count: int) -> HttpResponse:
+    filename = f"conversations_{target_date}.csv"
+    response = HttpResponse(body, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["X-Export-Row-Count"] = str(row_count)
+    response["X-Export-Target-Date"] = target_date
+    return response
+
+
 class ExternalConversationWindowView(JWTModuleMixin, APIView):
     def post(self, request, project_uuid):
         contact_urn = request.data.get("contact_urn")
@@ -283,6 +295,53 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
             {"ticket_uuid": ticket_uuid},
             status=status.HTTP_201_CREATED,
         )
+
+
+@extend_schema(
+    summary="Export project conversations to CSV",
+    description=(
+        "Builds a CSV for conversations on the given calendar day (project timezone), "
+        "including messages from Postgres and DynamoDB, and returns the file in the "
+        "response body (Content-Disposition: attachment). Works for browser download, "
+        "curl (-OJ), and Postman."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+    ],
+    request=ConversationExportCsvRequestSerializer,
+)
+class ConversationExportCsvView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, project_uuid):
+        ser = ConversationExportCsvRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        target_date = ser.validated_data.get("target_date")
+
+        try:
+            body, row_count, day = export_conversations_csv_bytes(str(project_uuid), target_date=target_date)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+        except Exception:
+            logger.exception(
+                "[ConversationExportCsvView] Export failed project_uuid=%s",
+                project_uuid,
+            )
+            return Response(
+                {
+                    "error": "export_failed",
+                    "detail": "An unexpected error occurred while exporting conversations.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return _conversation_export_csv_response(body, day, row_count)
 
 
 @extend_schema(

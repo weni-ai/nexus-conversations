@@ -1,6 +1,7 @@
 from django.urls import path
 
 from conversation_ms.views import (
+    ConversationExportCsvView,
     ConversationViewSet,
     ExternalConversationWindowView,
     ReconcileCohortExportView,
@@ -19,6 +20,11 @@ urlpatterns = [
         "projects/<uuid:project_uuid>/conversations/<uuid:pk>/",
         conversation_detail,
         name="project-conversations-detail",
+    ),
+    path(
+        "projects/<uuid:project_uuid>/conversations/export/",
+        ConversationExportCsvView.as_view(),
+        name="project-conversations-export",
     ),
     path(
         "projects/<uuid:project_uuid>/external-conversations/",

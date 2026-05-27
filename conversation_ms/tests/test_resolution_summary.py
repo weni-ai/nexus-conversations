@@ -239,6 +239,17 @@ class TestProjectsResolutionSummaryView:
         response = api_client.get(url, {"start_date": "2026-05-01"}, **auth_headers)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_start_after_end_returns_400_on_both_fields(self, api_client, auth_headers):
+        url = reverse("projects-resolution-summary")
+        response = api_client.get(
+            url,
+            {"start_date": "2026-05-10", "end_date": "2026-05-01"},
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "start_date" in response.data
+        assert "end_date" in response.data
+
     @freeze_time("2026-05-26T12:00:00Z")
     def test_success_response_shape(self, api_client, project, auth_headers):
         Conversation.objects.create(

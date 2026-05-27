@@ -36,13 +36,6 @@ class ProjectUtcWindow:
     calendar_end: date
 
 
-def parse_calendar_date(value: str, field_name: str) -> date:
-    try:
-        return pendulum.parse(str(value).strip(), exact=True).date()
-    except Exception as e:
-        raise ValueError(f"Invalid {field_name} format. Use YYYY-MM-DD") from e
-
-
 def default_calendar_range_for_timezone(tz_name: str) -> tuple[date, date]:
     """Last 7 calendar days ending yesterday in the given IANA timezone."""
     end_day = ProjectDay.for_yesterday(tz_name)
@@ -50,12 +43,21 @@ def default_calendar_range_for_timezone(tz_name: str) -> tuple[date, date]:
     return start, end_day.target_date
 
 
-def response_envelope_dates(calendar: CalendarRange) -> tuple[date, date]:
-    """Dates echoed in the API response metadata."""
+def response_envelope_dates(calendar: CalendarRange, windows: list[ProjectUtcWindow]) -> tuple[date, date]:
+    """
+    Dates echoed in the API response metadata.
+
+    When the client omits dates, each project may use a different timezone-derived window;
+    the envelope uses the min start and max end calendar day across those windows.
+    """
     if calendar.start is not None and calendar.end is not None:
         return calendar.start, calendar.end
-    fallback_tz = resolve_effective_project_timezone(None)
-    return default_calendar_range_for_timezone(fallback_tz)
+    if windows:
+        return (
+            min(window.calendar_start for window in windows),
+            max(window.calendar_end for window in windows),
+        )
+    return default_calendar_range_for_timezone(resolve_effective_project_timezone(None))
 
 
 def resolve_calendar_range(start_date: date | None, end_date: date | None) -> CalendarRange:
@@ -150,13 +152,21 @@ def _conversation_queryset(windows: list[ProjectUtcWindow]) -> QuerySet[Conversa
     if not windows:
         return Conversation.objects.none()
 
-    scope = Q()
+    # Group projects that share the same UTC bounds to avoid one OR branch per project.
+    grouped: dict[tuple[str, str], tuple[pendulum.DateTime, pendulum.DateTime, list[UUID]]] = {}
     for window in windows:
+        key = (window.start_utc.isoformat(), window.end_utc.isoformat())
+        if key not in grouped:
+            grouped[key] = (window.start_utc, window.end_utc, [])
+        grouped[key][2].append(window.project_uuid)
+
+    scope = Q()
+    for start_utc, end_utc, project_ids in grouped.values():
         scope |= Q(
-            project_id=window.project_uuid,
+            project_id__in=project_ids,
             start_date__isnull=False,
-            start_date__gte=window.start_utc,
-            start_date__lte=window.end_utc,
+            start_date__gte=start_utc,
+            start_date__lte=end_utc,
         )
     return Conversation.objects.filter(scope)
 
@@ -201,6 +211,7 @@ def _row_from_aggregation(project_uuid: UUID, row: dict[str, Any]) -> dict[str, 
 
 
 def _period_averages(project_rows: list[dict[str, Any]], global_row: dict[str, Any]) -> dict[str, Any]:
+    # FDD: arithmetic mean of per-project resolution_rate (not total_resolved / total_conversations).
     rates = [row["resolution_rate"] for row in project_rows]
     average_resolution_rate = float(sum(rates) / len(rates)) if rates else 0.0
 
@@ -229,7 +240,8 @@ def aggregate_resolution_summary(
     Build per-project metrics and period-level averages for the filtered conversation set.
 
     Calendar dates are interpreted in each project's timezone (Project.timezone / fallback).
-    Period averages are computed on the full filtered set (not paginated).
+    Period averages are computed on the full filtered set before consumer pagination.
+    average_resolution_rate is the unweighted mean of per-project rates (FDD).
     """
     uuids = project_uuids or []
     calendar = resolve_calendar_range(start_date, end_date)
@@ -249,6 +261,7 @@ def aggregate_resolution_summary(
             conversation_count=Count("uuid"),
             resolved_count=Count("uuid", filter=Q(resolution="0")),
             unresolved_count=Count("uuid", filter=Q(resolution="1")),
+            # FDD: human support only via resolution="4" (not has_chats_room alone).
             human_support_count=Count("uuid", filter=Q(resolution="4")),
             csat_responses_count=Count("uuid", filter=VALID_CSAT_Q),
             csat_avg=Avg(Cast("csat", IntegerField()), filter=VALID_CSAT_Q),
@@ -275,7 +288,7 @@ def aggregate_resolution_summary(
     )
 
     period = _period_averages(project_rows, global_row)
-    envelope_start, envelope_end = response_envelope_dates(calendar)
+    envelope_start, envelope_end = response_envelope_dates(calendar, windows)
 
     return {
         "start_date": envelope_start.isoformat(),

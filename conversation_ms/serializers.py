@@ -401,7 +401,7 @@ class ProjectsResolutionSummaryQuerySerializer(serializers.Serializer):
             resolve_calendar_range(start_date, end_date)
         except ValueError as e:
             message = str(e)
-            if "both be provided" in message:
+            if "both be provided" in message or "before or equal" in message:
                 raise serializers.ValidationError(
                     {"start_date": message, "end_date": message},
                 ) from e

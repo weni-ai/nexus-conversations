@@ -316,6 +316,50 @@ class TestProjectsResolutionSummaryView:
         assert len(response.data["projects"]) == 1
         assert response.data["projects"][0]["project_uuid"] == str(project.uuid)
 
+    def test_response_contract_for_nexus_ai_consumer(self, api_client, project, auth_headers):
+        """Fields required by nexus-ai projects_resolution_rate merge."""
+        Conversation.objects.create(
+            project=project,
+            resolution="0",
+            start_date=self._dt(2026, 5, 20, 10),
+            csat="4",
+            nps=8,
+        )
+        url = reverse("projects-resolution-summary")
+        response = api_client.get(
+            url,
+            {
+                "project_uuids": str(project.uuid),
+                "start_date": "2026-05-19",
+                "end_date": "2026-05-25",
+            },
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        for key in (
+            "start_date",
+            "end_date",
+            "average_resolution_rate",
+            "average_csat",
+            "average_nps",
+            "projects",
+        ):
+            assert key in response.data
+        row = response.data["projects"][0]
+        for key in (
+            "project_uuid",
+            "conversation_count",
+            "resolved_count",
+            "unresolved_count",
+            "human_support_count",
+            "resolution_rate",
+            "csat",
+            "csat_responses_count",
+            "nps",
+            "nps_responses_count",
+        ):
+            assert key in row
+
     def test_comma_separated_project_uuids(self, api_client, auth_headers, project):
         other = Project.objects.create(name="Other")
         Conversation.objects.create(

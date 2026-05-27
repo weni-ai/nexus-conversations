@@ -24,6 +24,8 @@ from conversation_ms.serializers import (
     ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
     ConversationSerializer,
+    ProjectsResolutionSummaryQuerySerializer,
+    ProjectsResolutionSummaryResponseSerializer,
     ReconcileCohortExportQuerySerializer,
     SubTopicsSerializer,
     TopicsSerializer,
@@ -395,3 +397,54 @@ class ReconcileCohortExportView(APIView):
             return Response({"date_end": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(payload, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    summary="Aggregated resolution summary for multiple projects",
+    description=(
+        "Internal endpoint for nexus-ai. Returns per-project conversation counts, resolution rate, "
+        "CSAT and NPS for a calendar date window interpreted in each project's timezone "
+        "(default: last 7 days ending yesterday in that timezone), plus period averages "
+        "computed on the full filtered set before any consumer-side pagination."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuids",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            many=True,
+            description="Optional project UUIDs (repeat param or comma-separated).",
+        ),
+        OpenApiParameter(name="start_date", type=str, location=OpenApiParameter.QUERY, required=False),
+        OpenApiParameter(name="end_date", type=str, location=OpenApiParameter.QUERY, required=False),
+    ],
+    responses={200: ProjectsResolutionSummaryResponseSerializer},
+)
+class ProjectsResolutionSummaryView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        ser = ProjectsResolutionSummaryQuerySerializer(data=request.query_params)
+        ser.is_valid(raise_exception=True)
+
+        from conversation_ms.services.resolution_summary import (
+            aggregate_resolution_summary,
+            parse_project_uuids,
+        )
+
+        raw_uuids = request.query_params.getlist("project_uuids")
+        try:
+            project_uuids = parse_project_uuids(raw_uuids)
+        except ValueError as e:
+            return Response({"project_uuids": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = aggregate_resolution_summary(
+            project_uuids=project_uuids or None,
+            start_date=ser.validated_data.get("start_date"),
+            end_date=ser.validated_data.get("end_date"),
+        )
+        response_ser = ProjectsResolutionSummaryResponseSerializer(data=payload)
+        response_ser.is_valid(raise_exception=True)
+        return Response(response_ser.data, status=status.HTTP_200_OK)

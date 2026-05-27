@@ -4,6 +4,7 @@ from conversation_ms.views import (
     ConversationExportCsvView,
     ConversationViewSet,
     ExternalConversationWindowView,
+    ProjectsResolutionSummaryView,
     ReconcileCohortExportView,
 )
 
@@ -11,6 +12,11 @@ conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
 
 urlpatterns = [
+    path(
+        "projects/resolution-summary/",
+        ProjectsResolutionSummaryView.as_view(),
+        name="projects-resolution-summary",
+    ),
     path(
         "projects/<uuid:project_uuid>/conversations/",
         conversation_list,

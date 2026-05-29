@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from conversation_ms.models import Conversation, ConversationMessages, Project
+from conversation_ms.models import Conversation, ConversationClassification, ConversationMessages, Project, Topic
 
 
 @pytest.mark.django_db
@@ -90,6 +90,19 @@ class TestConversationEndpoint:
         assert response.data["total_count"] == 2
         assert response.data["status_summary"]["0"] == 1
         assert response.data["status_summary"]["3"] == 1
+
+    def test_list_conversations_returns_flat_topic(self, api_client, project, auth_headers):
+        topic = Topic.objects.create(project=project, name="General")
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        ConversationClassification.objects.create(conversation=conversation, topic=topic)
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        item = response.data["results"][0]
+        assert item["topic"] == "General"
+        assert "classification" not in item
 
     def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution="0")

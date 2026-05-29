@@ -137,12 +137,37 @@ def _utc_window_for_unknown_project(project_uuid: UUID, calendar: CalendarRange)
     )
 
 
-def _load_projects(project_uuids: list[UUID]) -> dict[UUID, Project]:
+def _discover_project_ids_in_calendar_range(calendar: CalendarRange) -> list[UUID]:
+    """
+    Project IDs with at least one conversation in the calendar range.
+
+    Uses the default platform timezone envelope for discovery; per-project windows
+    still apply during aggregation.
+    """
+    cal_start, cal_end = _calendar_range_for_project(calendar, resolve_effective_project_timezone(None))
+    tz_name = resolve_effective_project_timezone(None)
+    start_day = ProjectDay(cal_start, tz_name)
+    end_day = ProjectDay(cal_end, tz_name)
+    start_utc = start_day.start_of_day_utc
+    end_utc = end_day.end_of_day_utc
+    ids = (
+        Conversation.objects.filter(
+            start_date__isnull=False,
+            start_date__gte=start_utc,
+            start_date__lte=end_utc,
+        )
+        .values_list("project_id", flat=True)
+        .distinct()
+    )
+    return list(ids)
+
+
+def _load_projects(project_uuids: list[UUID], calendar: CalendarRange) -> dict[UUID, Project]:
     if project_uuids:
         rows = Project.objects.filter(uuid__in=project_uuids)
     else:
-        ids = Conversation.objects.filter(start_date__isnull=False).values_list("project_id", flat=True).distinct()
-        rows = Project.objects.filter(uuid__in=ids)
+        ids = _discover_project_ids_in_calendar_range(calendar)
+        rows = Project.objects.filter(uuid__in=ids) if ids else Project.objects.none()
     return {project.uuid: project for project in rows}
 
 
@@ -258,7 +283,8 @@ def aggregate_resolution_summary(
     """
     uuids = project_uuids or []
     calendar = resolve_calendar_range(start_date, end_date)
-    projects_by_uuid = _load_projects(uuids)
+    projects_by_uuid = _load_projects(uuids, calendar)
+    include_empty_project_rows = bool(uuids)
 
     if uuids:
         target_project_ids = uuids
@@ -286,12 +312,19 @@ def aggregate_resolution_summary(
 
     aggregated_by_project = {row["project_id"]: row for row in per_project_qs}
 
-    project_rows = [
-        _row_from_aggregation(project_uuid, aggregated_by_project.get(project_uuid, {}))
-        if project_uuid in aggregated_by_project
-        else _empty_project_row(project_uuid)
-        for project_uuid in target_project_ids
-    ]
+    if include_empty_project_rows:
+        project_rows = [
+            _row_from_aggregation(project_uuid, aggregated_by_project.get(project_uuid, {}))
+            if project_uuid in aggregated_by_project
+            else _empty_project_row(project_uuid)
+            for project_uuid in target_project_ids
+        ]
+    else:
+        project_rows = [
+            _row_from_aggregation(project_uuid, aggregated_by_project[project_uuid])
+            for project_uuid in target_project_ids
+            if project_uuid in aggregated_by_project
+        ]
 
     global_row = base_qs.aggregate(
         csat_responses_count=Count("uuid", filter=VALID_CSAT_Q),

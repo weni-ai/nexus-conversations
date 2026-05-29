@@ -4,13 +4,19 @@ from conversation_ms.views import (
     ConversationExportCsvView,
     ConversationViewSet,
     ExternalConversationWindowView,
-    FlowsDbCohortReconcileView,
+    ProjectsResolutionSummaryView,
+    ReconcileCohortExportView,
 )
 
 conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
 
 urlpatterns = [
+    path(
+        "projects/resolution-summary/",
+        ProjectsResolutionSummaryView.as_view(),
+        name="projects-resolution-summary",
+    ),
     path(
         "projects/<uuid:project_uuid>/conversations/",
         conversation_list,
@@ -32,8 +38,8 @@ urlpatterns = [
         name="external-conversation-window",
     ),
     path(
-        "projects/<uuid:project_uuid>/flows-db-cohort/",
-        FlowsDbCohortReconcileView.as_view(),
-        name="project-flows-db-cohort-reconcile",
+        "projects/<uuid:project_uuid>/reconcile-cohort/",
+        ReconcileCohortExportView.as_view(),
+        name="project-reconcile-cohort-export",
     ),
 ]

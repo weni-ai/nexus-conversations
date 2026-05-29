@@ -176,6 +176,14 @@ class TestResolutionSummaryService:
         with pytest.raises(ValueError, match="both be provided"):
             resolve_calendar_range(date(2026, 5, 1), None)
 
+    def test_resolve_calendar_range_rejects_start_date_before_go_live(self):
+        with pytest.raises(ValueError, match="start_date must be on or after 2026-03-28"):
+            resolve_calendar_range(date(2026, 3, 27), date(2026, 5, 25))
+
+    def test_resolve_calendar_range_rejects_end_date_before_go_live(self):
+        with pytest.raises(ValueError, match="end_date must be on or after 2026-03-28"):
+            resolve_calendar_range(date(2026, 4, 1), date(2026, 3, 27))
+
     def test_filters_by_project_timezone_not_utc_midnight(self):
         project = Project.objects.create(
             name="TZ Project",
@@ -248,6 +256,26 @@ class TestProjectsResolutionSummaryView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "start_date" in response.data
+        assert "end_date" in response.data
+
+    def test_start_date_before_go_live_returns_400(self, api_client, auth_headers):
+        url = reverse("projects-resolution-summary")
+        response = api_client.get(
+            url,
+            {"start_date": "2026-03-27", "end_date": "2026-05-25"},
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "start_date" in response.data
+
+    def test_end_date_before_go_live_returns_400(self, api_client, auth_headers):
+        url = reverse("projects-resolution-summary")
+        response = api_client.get(
+            url,
+            {"start_date": "2026-04-01", "end_date": "2026-03-27"},
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "end_date" in response.data
 
     @freeze_time("2026-05-26T12:00:00Z")

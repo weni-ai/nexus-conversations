@@ -439,7 +439,11 @@ class ProjectsResolutionSummaryQuerySerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     {"start_date": message, "end_date": message},
                 ) from e
-            raise serializers.ValidationError({"end_date": message}) from e
+            if message.startswith("start_date"):
+                raise serializers.ValidationError({"start_date": message}) from e
+            if message.startswith("end_date"):
+                raise serializers.ValidationError({"end_date": message}) from e
+            raise serializers.ValidationError({"detail": message}) from e
         return attrs
 
 

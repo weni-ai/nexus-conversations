@@ -114,6 +114,15 @@ class ConversationClassificationSerializer(serializers.ModelSerializer):
         fields = ["topic", "subtopic", "confidence", "created_at", "updated_at"]
 
 
+def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
+    try:
+        if conversation.classification and conversation.classification.topic:
+            return conversation.classification.topic.name
+    except (ConversationClassification.DoesNotExist, AttributeError):
+        pass
+    return None
+
+
 class ConversationMessagesSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConversationMessages
@@ -261,6 +270,36 @@ class ConversationSerializer(serializers.ModelSerializer):
         return None
 
 
+class ConversationListSerializer(ConversationSerializer):
+    """
+    List-only shape: flat ``topic`` (no nested ``classification`` object).
+    Used by GET .../conversations/ only.
+    """
+
+    topic = serializers.SerializerMethodField()
+
+    class Meta(ConversationSerializer.Meta):
+        fields = [
+            "uuid",
+            "contact_urn",
+            "contact_name",
+            "status",
+            "resolution",
+            "start_date",
+            "end_date",
+            "channel_uuid",
+            "has_chats_room",
+            "csat",
+            "nps",
+            "topic",
+            "messages",
+            "created_at",
+        ]
+
+    def get_topic(self, obj):
+        return _conversation_topic_name(obj)
+
+
 class ConversationListCursorResponseSerializer(serializers.Serializer):
     """
     OpenAPI shape for GET .../conversations/ (cursor page + aggregates).
@@ -269,7 +308,7 @@ class ConversationListCursorResponseSerializer(serializers.Serializer):
 
     next = serializers.URLField(allow_null=True, required=False)
     previous = serializers.URLField(allow_null=True, required=False)
-    results = ConversationSerializer(many=True)
+    results = ConversationListSerializer(many=True)
     total_count = serializers.IntegerField()
     status_summary = serializers.DictField()
 
@@ -297,12 +336,7 @@ class ConversationDetailSerializer(ConversationSerializer):
         ]
 
     def get_topic(self, obj):
-        try:
-            if obj.classification and obj.classification.topic:
-                return obj.classification.topic.name
-        except (ConversationClassification.DoesNotExist, AttributeError):
-            pass
-        return None
+        return _conversation_topic_name(obj)
 
 
 class TopicsSerializer(serializers.ModelSerializer):

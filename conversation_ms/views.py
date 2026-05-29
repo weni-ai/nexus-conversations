@@ -23,6 +23,7 @@ from conversation_ms.serializers import (
     ConversationDetailSerializer,
     ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
+    ConversationListSerializer,
     ConversationSerializer,
     ProjectsResolutionSummaryQuerySerializer,
     ProjectsResolutionSummaryResponseSerializer,
@@ -71,6 +72,8 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
     def get_serializer_class(self):
         if self.action == "retrieve":
             return ConversationDetailSerializer
+        if self.action == "list":
+            return ConversationListSerializer
         return ConversationSerializer
 
     authentication_classes = [InternalTokenAuthentication]

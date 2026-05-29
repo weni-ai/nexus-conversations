@@ -76,6 +76,21 @@ class TestResolutionSummaryService:
         )
         assert payload["projects"][0]["conversation_count"] == 1
 
+    def test_without_project_uuids_returns_only_projects_with_conversations_in_range(self, project_a, project_b):
+        Conversation.objects.create(
+            project=project_a,
+            resolution="0",
+            start_date=self._dt(2026, 5, 20),
+        )
+
+        payload = aggregate_resolution_summary(
+            project_uuids=None,
+            start_date=date(2026, 5, 19),
+            end_date=date(2026, 5, 25),
+        )
+        assert len(payload["projects"]) == 1
+        assert payload["projects"][0]["project_uuid"] == str(project_a.uuid)
+
     def test_project_without_conversations_returns_zeros(self, project_a, project_b):
         Conversation.objects.create(
             project=project_a,

@@ -60,11 +60,24 @@ def response_envelope_dates(calendar: CalendarRange, windows: list[ProjectUtcWin
     return default_calendar_range_for_timezone(resolve_effective_project_timezone(None))
 
 
+CONVERSATIONS_METRICS_EARLIEST_DATE = date(2026, 3, 28)
+
+
 def resolve_calendar_range(start_date: date | None, end_date: date | None) -> CalendarRange:
     if start_date is None and end_date is None:
         return CalendarRange(None, None)
     if start_date is None or end_date is None:
         raise ValueError("start_date and end_date must both be provided or both omitted")
+    if start_date < CONVERSATIONS_METRICS_EARLIEST_DATE:
+        raise ValueError(
+            f"start_date must be on or after {CONVERSATIONS_METRICS_EARLIEST_DATE.isoformat()} "
+            "(conversations metrics are only available from that date)"
+        )
+    if end_date < CONVERSATIONS_METRICS_EARLIEST_DATE:
+        raise ValueError(
+            f"end_date must be on or after {CONVERSATIONS_METRICS_EARLIEST_DATE.isoformat()} "
+            "(conversations metrics are only available from that date)"
+        )
     if start_date > end_date:
         raise ValueError("start_date must be before or equal to end_date")
     return CalendarRange(start_date, end_date)

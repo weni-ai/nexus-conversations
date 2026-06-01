@@ -382,3 +382,54 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
         attrs["date_start"] = str(attrs["date_start"]).strip()
         attrs["date_end"] = end_raw
         return attrs
+
+
+class ProjectsResolutionSummaryQuerySerializer(serializers.Serializer):
+    """
+    Query params for GET ``/api/v1/projects/resolution-summary/``.
+    """
+
+    start_date = serializers.DateField(required=False, allow_null=True, default=None)
+    end_date = serializers.DateField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        from conversation_ms.services.resolution_summary import resolve_calendar_range
+
+        start_date = attrs.get("start_date")
+        end_date = attrs.get("end_date")
+        try:
+            resolve_calendar_range(start_date, end_date)
+        except ValueError as e:
+            message = str(e)
+            if "both be provided" in message or "before or equal" in message:
+                raise serializers.ValidationError(
+                    {"start_date": message, "end_date": message},
+                ) from e
+            if message.startswith("start_date"):
+                raise serializers.ValidationError({"start_date": message}) from e
+            if message.startswith("end_date"):
+                raise serializers.ValidationError({"end_date": message}) from e
+            raise serializers.ValidationError({"detail": message}) from e
+        return attrs
+
+
+class ProjectResolutionSummarySerializer(serializers.Serializer):
+    project_uuid = serializers.UUIDField()
+    conversation_count = serializers.IntegerField()
+    resolved_count = serializers.IntegerField()
+    unresolved_count = serializers.IntegerField()
+    human_support_count = serializers.IntegerField()
+    resolution_rate = serializers.FloatField()
+    csat = serializers.FloatField(allow_null=True)
+    csat_responses_count = serializers.IntegerField()
+    nps = serializers.FloatField(allow_null=True)
+    nps_responses_count = serializers.IntegerField()
+
+
+class ProjectsResolutionSummaryResponseSerializer(serializers.Serializer):
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    average_resolution_rate = serializers.FloatField()
+    average_csat = serializers.FloatField(allow_null=True)
+    average_nps = serializers.FloatField(allow_null=True)
+    projects = ProjectResolutionSummarySerializer(many=True)

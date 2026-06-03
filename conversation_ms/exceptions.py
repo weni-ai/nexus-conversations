@@ -12,3 +12,7 @@ class MessageProcessingError(ConversationMSException):
 
 class InvalidEventDataError(ConversationMSException):
     pass
+
+
+class ProjectAuthorizationDenied(ConversationMSException):
+    pass

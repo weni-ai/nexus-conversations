@@ -31,4 +31,15 @@ env = environ.Env(
     EDA_BROKER_USER=(str, "guest"),
     EDA_BROKER_PASSWORD=(str, "guest"),
     EDA_VIRTUAL_HOST=(str, "/"),
+    # OIDC / Keycloak
+    OIDC_RP_SERVER_URL=(str, ""),
+    OIDC_RP_REALM_NAME=(str, ""),
+    OIDC_OP_JWKS_ENDPOINT=(str, ""),
+    OIDC_RP_CLIENT_ID=(str, ""),
+    OIDC_RP_CLIENT_SECRET=(str, ""),
+    OIDC_OP_AUTHORIZATION_ENDPOINT=(str, ""),
+    OIDC_OP_TOKEN_ENDPOINT=(str, ""),
+    OIDC_OP_USER_ENDPOINT=(str, ""),
+    OIDC_RP_SCOPES=(str, "openid email"),
+    OIDC_RP_SIGN_ALGO=(str, "RS256"),
 )

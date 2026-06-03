@@ -19,14 +19,15 @@ class InternalTokenBackend(ModelBackend):
 
         if username in internal_tokens and internal_tokens[username] == password:
             User = get_user_model()
-            # Create or get a user for this internal service
-            user, created = User.objects.get_or_create(username=username)
+            user, created = User.objects.get_or_create(
+                username=username,
+                defaults={"email": f"{username}@internal.service"},
+            )
 
-            # Ensure permissions
             if created or not user.is_superuser or not user.is_staff:
                 user.is_staff = True
                 user.is_superuser = True
-                user.set_unusable_password()  # Prevent login via standard ModelBackend
+                user.set_unusable_password()
                 user.save()
 
             return user

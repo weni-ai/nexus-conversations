@@ -51,9 +51,13 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "django_filters",
+    "mozilla_django_oidc",
     "nexus_conversations.sentry",
-    "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
+    "users",
+    "conversation_ms.apps.ConversationMsConfig",
 ]
+
+AUTH_USER_MODEL = "users.User"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -136,6 +140,7 @@ STATIC_URL = "static/"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 AUTHENTICATION_BACKENDS = [
+    "users.authentication.WeniOIDCBackend",
     "nexus_conversations.backends.InternalTokenBackend",
     "django.contrib.auth.backends.ModelBackend",
 ]
@@ -289,3 +294,19 @@ else:
             JWT_PUBLIC_KEY = f.read()
     except FileNotFoundError:
         JWT_PUBLIC_KEY = None
+
+# OIDC / Keycloak Configuration
+OIDC_RP_SERVER_URL = env.str("OIDC_RP_SERVER_URL", default="")
+OIDC_RP_REALM_NAME = env.str("OIDC_RP_REALM_NAME", default="")
+OIDC_OP_JWKS_ENDPOINT = env.str("OIDC_OP_JWKS_ENDPOINT", default="")
+OIDC_RP_CLIENT_ID = env.str("OIDC_RP_CLIENT_ID", default="")
+OIDC_RP_CLIENT_SECRET = env.str("OIDC_RP_CLIENT_SECRET", default="")
+OIDC_OP_AUTHORIZATION_ENDPOINT = env.str("OIDC_OP_AUTHORIZATION_ENDPOINT", default="")
+OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")
+OIDC_OP_USER_ENDPOINT = env.str("OIDC_OP_USER_ENDPOINT", default="")
+OIDC_RP_SCOPES = env.str("OIDC_RP_SCOPES", default="openid email")
+OIDC_RP_SIGN_ALGO = env.str("OIDC_RP_SIGN_ALGO", default="RS256")
+OIDC_DRF_AUTH_BACKEND = env.str(
+    "OIDC_DRF_AUTH_BACKEND",
+    default="users.authentication.WeniOIDCBackend",
+)

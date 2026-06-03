@@ -28,6 +28,7 @@ drf-spectacular = "^0.26.5"
 django-filter = "^23.5"
 pyjwt = "^2.12.1"
 tenacity = "^9.0.0"
+mozilla-django-oidc = "5.0.2"
 
 [tool.poetry.group.dev.dependencies]
 virtualenv = ">=20.24,<21"  # Pin: 21.x has LogCmd import issue with poetry/pendulum

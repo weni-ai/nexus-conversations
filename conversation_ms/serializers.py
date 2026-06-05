@@ -453,7 +453,7 @@ class ProjectResolutionSummarySerializer(serializers.Serializer):
     resolved_count = serializers.IntegerField()
     unresolved_count = serializers.IntegerField()
     human_support_count = serializers.IntegerField()
-    resolution_rate = serializers.FloatField()
+    resolution_rate = serializers.FloatField(allow_null=True)
     csat = serializers.FloatField(allow_null=True)
     csat_responses_count = serializers.IntegerField()
     nps = serializers.FloatField(allow_null=True)
@@ -463,7 +463,7 @@ class ProjectResolutionSummarySerializer(serializers.Serializer):
 class ProjectsResolutionSummaryResponseSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField()
-    average_resolution_rate = serializers.FloatField()
+    average_resolution_rate = serializers.FloatField(allow_null=True)
     average_csat = serializers.FloatField(allow_null=True)
     average_nps = serializers.FloatField(allow_null=True)
     projects = ProjectResolutionSummarySerializer(many=True)

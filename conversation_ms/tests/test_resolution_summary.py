@@ -55,7 +55,7 @@ class TestResolutionSummaryService:
         assert row["resolved_count"] == 1
         assert row["unresolved_count"] == 1
         assert row["human_support_count"] == 1
-        assert row["resolution_rate"] == pytest.approx(0.2)
+        assert row["resolution_rate"] == pytest.approx(0.5)
 
     def test_excludes_conversations_outside_start_date_window(self, project_a):
         Conversation.objects.create(
@@ -105,7 +105,7 @@ class TestResolutionSummaryService:
         )
         by_uuid = {row["project_uuid"]: row for row in payload["projects"]}
         assert by_uuid[str(project_b.uuid)]["conversation_count"] == 0
-        assert by_uuid[str(project_b.uuid)]["resolution_rate"] == 0.0
+        assert by_uuid[str(project_b.uuid)]["resolution_rate"] is None
 
     def test_csat_valid_range_and_invalid_ignored(self, project_a):
         in_window = self._dt(2026, 5, 20)
@@ -174,6 +174,22 @@ class TestResolutionSummaryService:
             end_date=date(2026, 5, 25),
         )
         assert payload["average_resolution_rate"] == pytest.approx(0.5)
+
+    def test_project_with_only_non_evaluable_resolutions_has_null_rate(self, project_a, project_b):
+        in_window = self._dt(2026, 5, 20)
+        Conversation.objects.create(project=project_a, resolution="0", start_date=in_window)
+        Conversation.objects.create(project=project_b, resolution="2", start_date=in_window)
+        Conversation.objects.create(project=project_b, resolution="3", start_date=in_window)
+
+        payload = aggregate_resolution_summary(
+            project_uuids=[project_a.uuid, project_b.uuid],
+            start_date=date(2026, 5, 19),
+            end_date=date(2026, 5, 25),
+        )
+        by_uuid = {row["project_uuid"]: row for row in payload["projects"]}
+        assert by_uuid[str(project_a.uuid)]["resolution_rate"] == pytest.approx(1.0)
+        assert by_uuid[str(project_b.uuid)]["resolution_rate"] is None
+        assert payload["average_resolution_rate"] == pytest.approx(1.0)
 
     def test_weighted_average_csat_across_projects(self, project_a, project_b):
         in_window = self._dt(2026, 5, 20)

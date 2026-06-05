@@ -209,6 +209,18 @@ def _conversation_queryset(windows: list[ProjectUtcWindow]) -> QuerySet[Conversa
     return Conversation.objects.filter(scope)
 
 
+def resolution_rate_from_counts(*, resolved_count: int, unresolved_count: int) -> float | None:
+    """
+    Resolution rate uses only evaluable conversations (resolved + unresolved).
+
+    In progress, unclassified, human support, and null resolution do not count.
+    """
+    evaluable_count = resolved_count + unresolved_count
+    if evaluable_count < 1:
+        return None
+    return float(resolved_count / evaluable_count)
+
+
 def _empty_project_row(project_uuid: UUID) -> dict[str, Any]:
     return {
         "project_uuid": str(project_uuid),
@@ -216,7 +228,7 @@ def _empty_project_row(project_uuid: UUID) -> dict[str, Any]:
         "resolved_count": 0,
         "unresolved_count": 0,
         "human_support_count": 0,
-        "resolution_rate": 0.0,
+        "resolution_rate": None,
         "csat": None,
         "csat_responses_count": 0,
         "nps": None,
@@ -227,10 +239,14 @@ def _empty_project_row(project_uuid: UUID) -> dict[str, Any]:
 def _row_from_aggregation(project_uuid: UUID, row: dict[str, Any]) -> dict[str, Any]:
     conversation_count = int(row.get("conversation_count") or 0)
     resolved_count = int(row.get("resolved_count") or 0)
+    unresolved_count = int(row.get("unresolved_count") or 0)
     csat_responses_count = int(row.get("csat_responses_count") or 0)
     nps_responses_count = int(row.get("nps_responses_count") or 0)
 
-    resolution_rate = float(resolved_count / conversation_count) if conversation_count > 0 else 0.0
+    resolution_rate = resolution_rate_from_counts(
+        resolved_count=resolved_count,
+        unresolved_count=unresolved_count,
+    )
     csat_avg = row.get("csat_avg")
     nps_avg = row.get("nps_avg")
 
@@ -238,7 +254,7 @@ def _row_from_aggregation(project_uuid: UUID, row: dict[str, Any]) -> dict[str, 
         "project_uuid": str(project_uuid),
         "conversation_count": conversation_count,
         "resolved_count": resolved_count,
-        "unresolved_count": int(row.get("unresolved_count") or 0),
+        "unresolved_count": unresolved_count,
         "human_support_count": int(row.get("human_support_count") or 0),
         "resolution_rate": resolution_rate,
         "csat": round(float(csat_avg), 4) if csat_avg is not None else None,
@@ -249,9 +265,14 @@ def _row_from_aggregation(project_uuid: UUID, row: dict[str, Any]) -> dict[str, 
 
 
 def _period_averages(project_rows: list[dict[str, Any]], global_row: dict[str, Any]) -> dict[str, Any]:
-    # FDD: arithmetic mean of per-project resolution_rate (not total_resolved / total_conversations).
-    rates = [row["resolution_rate"] for row in project_rows]
-    average_resolution_rate = float(sum(rates) / len(rates)) if rates else 0.0
+    # Arithmetic mean of per-project rates with evaluable conversations only.
+    rates = [row["resolution_rate"] for row in project_rows if row.get("resolution_rate") is not None]
+    if rates:
+        average_resolution_rate = round(float(sum(rates) / len(rates)), 4)
+    elif project_rows:
+        average_resolution_rate = None
+    else:
+        average_resolution_rate = 0.0
 
     csat_count = int(global_row.get("csat_responses_count") or 0)
     csat_sum = global_row.get("csat_sum")
@@ -262,7 +283,7 @@ def _period_averages(project_rows: list[dict[str, Any]], global_row: dict[str, A
     average_nps = round(float(nps_sum) / nps_count, 4) if nps_count and nps_sum is not None else None
 
     return {
-        "average_resolution_rate": round(average_resolution_rate, 4),
+        "average_resolution_rate": average_resolution_rate,
         "average_csat": average_csat,
         "average_nps": average_nps,
     }
@@ -279,7 +300,7 @@ def aggregate_resolution_summary(
 
     Calendar dates are interpreted in each project's timezone (Project.timezone / fallback).
     Period averages are computed on the full filtered set before consumer pagination.
-    average_resolution_rate is the unweighted mean of per-project rates (FDD).
+    average_resolution_rate is the unweighted mean of per-project rates with evaluable data.
     """
     uuids = project_uuids or []
     calendar = resolve_calendar_range(start_date, end_date)

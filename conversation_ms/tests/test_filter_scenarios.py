@@ -146,7 +146,7 @@ class TestComplexFilters:
         """Conversations with no topic match topics=unclassified."""
         date = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
 
-        no_classification = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             start_date=date,
             contact_name="No Classification",
@@ -192,7 +192,7 @@ class TestComplexFilters:
         )
         ConversationClassification.objects.create(conversation=atendimento, topic=topics["Atendimento"])
 
-        unclassified = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             start_date=date,
             contact_name="Unclassified Conv",
@@ -221,7 +221,7 @@ class TestComplexFilters:
         """topics=UNCLASSIFIED matches conversations with no topic."""
         date = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
 
-        unclassified = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             start_date=date,
             contact_name="Unclassified Conv",

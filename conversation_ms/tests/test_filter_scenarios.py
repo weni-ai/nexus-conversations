@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from conversation_ms.models import Conversation, ConversationClassification, Project, Topic
+from conversation_ms.models import Conversation, ConversationClassification, Project, SubTopic, Topic
 
 
 @pytest.mark.django_db
@@ -141,3 +141,95 @@ class TestComplexFilters:
         assert "No Match Topic" not in contact_names
         assert "No Match Date" not in contact_names
         assert "No Match CSAT None" not in contact_names
+
+    def test_topics_filter_unclassified_only(self, api_client, project, auth_headers, topics):
+        """Conversations with no topic match topics=unclassified."""
+        date = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
+
+        Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="No Classification",
+        )
+        null_topic = Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Null Topic",
+        )
+        ConversationClassification.objects.create(conversation=null_topic, topic=None)
+
+        subtopic_only = Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Subtopic Only",
+        )
+        subtopic = SubTopic.objects.create(name="Boleto", topic=topics["Atendimento"])
+        ConversationClassification.objects.create(conversation=subtopic_only, topic=None, subtopic=subtopic)
+
+        classified = Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Has Topic",
+        )
+        ConversationClassification.objects.create(conversation=classified, topic=topics["Atendimento"])
+
+        base_url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(base_url, data={"topics": "unclassified"}, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        contact_names = {r["contact_name"] for r in response.data["results"]}
+        assert contact_names == {"No Classification", "Null Topic", "Subtopic Only"}
+        assert "Has Topic" not in contact_names
+
+    def test_topics_filter_mixed_named_and_unclassified(self, api_client, project, auth_headers, topics):
+        """topics=Atendimento,unclassified returns named topics and unclassified conversations."""
+        date = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
+
+        atendimento = Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Atendimento Conv",
+        )
+        ConversationClassification.objects.create(conversation=atendimento, topic=topics["Atendimento"])
+
+        Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Unclassified Conv",
+        )
+
+        other_topic = Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Produto Conv",
+        )
+        ConversationClassification.objects.create(conversation=other_topic, topic=topics["Produto"])
+
+        base_url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(
+            base_url,
+            data={"topics": "Atendimento,unclassified"},
+            **auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        contact_names = {r["contact_name"] for r in response.data["results"]}
+        assert contact_names == {"Atendimento Conv", "Unclassified Conv"}
+        assert "Produto Conv" not in contact_names
+
+    def test_topics_filter_unclassified_case_insensitive(self, api_client, project, auth_headers):
+        """topics=UNCLASSIFIED matches conversations with no topic."""
+        date = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
+
+        Conversation.objects.create(
+            project=project,
+            start_date=date,
+            contact_name="Unclassified Conv",
+        )
+
+        base_url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(base_url, data={"topics": "UNCLASSIFIED"}, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        contact_names = [r["contact_name"] for r in response.data["results"]]
+        assert contact_names == ["Unclassified Conv"]

@@ -57,6 +57,17 @@ logger = logging.getLogger(__name__)
             location=OpenApiParameter.PATH,
             description="UUID of the project to filter conversations",
         ),
+        OpenApiParameter(
+            name="topics",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description=(
+                "Comma-separated topic names. Use the reserved value 'unclassified' (case-insensitive) "
+                "to include conversations with no assigned topic (no classification or topic is null). "
+                "Can be combined with named topics, e.g. topics=Sales,unclassified."
+            ),
+            required=False,
+        ),
     ]
 )
 class ConversationViewSet(viewsets.ReadOnlyModelViewSet):

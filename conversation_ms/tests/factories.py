@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import factory
 
-from conversation_ms.models import Conversation, Project
+from conversation_ms.models import Conversation, Project, SubTopic, Topic
 
 
 class Resolution:
@@ -22,6 +22,47 @@ class ProjectFactory(factory.django.DjangoModelFactory):
     uuid = factory.LazyFunction(uuid4)
     name = factory.Faker("company")
     timezone = None
+
+
+class TopicFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = Topic
+
+    uuid = factory.LazyFunction(uuid4)
+    project = factory.SubFactory(ProjectFactory)
+    name = "Financeiro"
+    description = "Dúvidas sobre pagamentos e boletos"
+    is_active = True
+
+
+class SubTopicFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = SubTopic
+
+    uuid = factory.LazyFunction(uuid4)
+    topic = factory.SubFactory(TopicFactory)
+    name = "Boleto"
+    description = "Emissão e segunda via de boleto"
+    is_active = True
+
+
+def sample_order_status_messages() -> list[dict]:
+    """Messages aligned with the V2 resolution Lambda contract examples."""
+    return [
+        {
+            "text": "Quero saber o status do meu pedido #98765, comprei há 3 dias.",
+            "source": "incoming",
+            "created_at": "2026-06-09T14:00:00Z",
+        },
+        {
+            "text": (
+                "Seu pedido #98765 saiu para entrega ontem e a previsão de chegada "
+                "é hoje até às 18h. Posso ajudar em algo mais?"
+            ),
+            "source": "outgoing",
+            "created_at": "2026-06-09T14:01:00Z",
+        },
+    ]
 
 
 class ConversationFactory(factory.django.DjangoModelFactory):

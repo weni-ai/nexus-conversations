@@ -5,6 +5,7 @@ import pytest
 
 from conversation_ms.utils.resolution_lambda_routing import (
     get_resolution_lambda_name,
+    get_resolution_lambda_region,
     uses_legacy_resolution_lambda,
 )
 
@@ -43,3 +44,21 @@ def test_get_resolution_lambda_name_v2(mock_settings):
     mock_settings.CONVERSATION_RESOLUTION_V2_NAME = "nexus-conversation-resolution-v2-prod"
 
     assert get_resolution_lambda_name(str(V2_PROJECT_UUID)) == "nexus-conversation-resolution-v2-prod"
+
+
+@patch("conversation_ms.utils.resolution_lambda_routing.settings")
+def test_get_resolution_lambda_region_legacy(mock_settings):
+    mock_settings.CONVERSATION_RESOLUTION_LEGACY_PROJECTS = [str(LEGACY_PROJECT_UUID)]
+    mock_settings.LAMBDA_AWS_REGION = "us-east-1"
+    mock_settings.AWS_REGION = "sa-east-1"
+
+    assert get_resolution_lambda_region(str(LEGACY_PROJECT_UUID)) == "us-east-1"
+
+
+@patch("conversation_ms.utils.resolution_lambda_routing.settings")
+def test_get_resolution_lambda_region_v2(mock_settings):
+    mock_settings.CONVERSATION_RESOLUTION_LEGACY_PROJECTS = []
+    mock_settings.LAMBDA_AWS_REGION = "us-east-1"
+    mock_settings.AWS_REGION = "sa-east-1"
+
+    assert get_resolution_lambda_region(str(V2_PROJECT_UUID)) == "sa-east-1"

@@ -15,6 +15,7 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
 from conversation_ms.utils.resolution_lambda_routing import (
     get_resolution_lambda_name,
+    get_resolution_lambda_region,
     uses_legacy_resolution_lambda,
 )
 
@@ -28,8 +29,13 @@ class ClassificationService:
     """
 
     def __init__(self):
-        self.lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
+        self._lambda_clients: Dict[str, Any] = {}
         self.dynamo_repo = DynamoMessageRepository()
+
+    def _get_lambda_client(self, region_name: str):
+        if region_name not in self._lambda_clients:
+            self._lambda_clients[region_name] = get_boto3_client("lambda", region_name=region_name)
+        return self._lambda_clients[region_name]
 
     def classify_conversation(
         self,
@@ -145,7 +151,8 @@ class ClassificationService:
             else:
                 payload = self._format_messages_for_v2_lambda(messages)
 
-            response = self._invoke_lambda(lambda_name, payload)
+            lambda_region = get_resolution_lambda_region(project_uuid)
+            response = self._invoke_lambda(lambda_name, payload, region_name=lambda_region)
             if not response:
                 return str(ResolutionEntities.UNCLASSIFIED)
 
@@ -297,11 +304,17 @@ class ClassificationService:
             )
         return payload
 
-    def _invoke_lambda(self, lambda_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _invoke_lambda(
+        self,
+        lambda_name: str,
+        payload: Dict[str, Any],
+        region_name: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Call the AWS Lambda function.
         """
-        response = self.lambda_client.invoke(
+        region = region_name or settings.LAMBDA_AWS_REGION
+        response = self._get_lambda_client(region).invoke(
             FunctionName=lambda_name, InvocationType="RequestResponse", Payload=json.dumps(payload)
         )
 

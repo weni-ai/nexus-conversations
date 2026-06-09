@@ -13,6 +13,10 @@ from conversation_ms.adapters.data_lake import (
 from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationClassification, SubTopic, Topic
+from conversation_ms.utils.resolution_lambda_routing import (
+    get_resolution_lambda_name,
+    uses_legacy_resolution_lambda,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,19 +130,29 @@ class ClassificationService:
         Invoke resolution lambda to determine conversation status.
         Returns resolution string code (e.g. "0", "1", "2", "3").
         """
-        payload = {"conversation": self._format_messages_for_lambda(messages)}
+        project_uuid = str(conversation.project.uuid)
+        use_legacy = uses_legacy_resolution_lambda(project_uuid)
 
         try:
-            lambda_name = getattr(settings, "CONVERSATION_RESOLUTION_NAME", None)
+            lambda_name = get_resolution_lambda_name(project_uuid)
             if not lambda_name:
-                logger.error("[ClassificationService] CONVERSATION_RESOLUTION_NAME not configured.")
-                return str(ResolutionEntities.UNCLASSIFIED)  # Unclassified
+                setting_name = (
+                    "CONVERSATION_RESOLUTION_NAME"
+                    if use_legacy
+                    else "CONVERSATION_RESOLUTION_V2_NAME"
+                )
+                logger.error(f"[ClassificationService] {setting_name} not configured for project {project_uuid}.")
+                return str(ResolutionEntities.UNCLASSIFIED)
+
+            if use_legacy:
+                payload = {"conversation": self._format_messages_for_legacy_lambda(messages)}
+            else:
+                payload = self._format_messages_for_v2_lambda(messages)
 
             response = self._invoke_lambda(lambda_name, payload)
             if not response:
                 return str(ResolutionEntities.UNCLASSIFIED)
 
-            # _invoke_lambda already extracts 'body' if present
             result = response.get("result")
 
             if result is None:
@@ -149,7 +163,6 @@ class ClassificationService:
 
         except Exception as e:
             logger.error(f"[ClassificationService] Error getting resolution for {conversation.uuid}: {e}")
-            # Default to Unclassified on error
             return str(ResolutionEntities.UNCLASSIFIED)
 
     def _classify_topics(
@@ -176,7 +189,7 @@ class ClassificationService:
             )
             return None
 
-        formatted_messages = self._format_messages_for_lambda(messages)
+        formatted_messages = self._format_messages_for_legacy_lambda(messages)
         payload = {"topics": topics_payload, "conversation": {"messages": formatted_messages}}
 
         try:
@@ -196,10 +209,8 @@ class ClassificationService:
             logger.error(f"[ClassificationService] Error classifying topics for {conversation.uuid}: {e}")
             return None
 
-    def _format_messages_for_lambda(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Format messages list for Lambda input.
-        """
+    def _format_messages_for_legacy_lambda(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Format messages for the legacy resolution Lambda (flat conversation array)."""
         formatted = []
         for msg in messages:
             formatted.append(
@@ -210,6 +221,29 @@ class ClassificationService:
                 }
             )
         return formatted
+
+    def _format_messages_for_v2_lambda(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Format messages for the V2 resolution Lambda (nested conversation.messages)."""
+        formatted_messages = []
+        for msg in messages:
+            formatted_messages.append(
+                {
+                    "sender": self._map_source_to_v2_sender(msg.get("source")),
+                    "content": msg.get("text", ""),
+                }
+            )
+        return {"conversation": {"messages": formatted_messages}}
+
+    @staticmethod
+    def _map_source_to_v2_sender(source: Any) -> str:
+        """Map internal message source values to V2 Lambda sender labels."""
+        if source in ("incoming", "user"):
+            return "user"
+        if source in ("outgoing", "agent", "assistant"):
+            return "agent"
+        if source:
+            logger.debug("[ClassificationService] Unknown message source '%s', defaulting to user", source)
+        return "user"
 
     def _get_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
         """
@@ -275,8 +309,31 @@ class ClassificationService:
             FunctionName=lambda_name, InvocationType="RequestResponse", Payload=json.dumps(payload)
         )
 
+        if response.get("FunctionError"):
+            logger.error(
+                "[ClassificationService] Lambda %s returned FunctionError: %s",
+                lambda_name,
+                response.get("FunctionError"),
+            )
+            return {}
+
         response_payload = response["Payload"].read()
         result = json.loads(response_payload)
+
+        if isinstance(result, dict) and "statusCode" in result:
+            status = result.get("statusCode")
+            body = result.get("body", {})
+            if isinstance(body, str):
+                body = json.loads(body)
+            if status != 200:
+                logger.warning(
+                    "[ClassificationService] Lambda %s error status=%s body=%s",
+                    lambda_name,
+                    status,
+                    body,
+                )
+                return {}
+            return body if isinstance(body, dict) else {}
 
         if isinstance(result, dict) and "body" in result:
             body = result["body"]

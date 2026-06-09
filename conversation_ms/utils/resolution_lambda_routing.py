@@ -17,3 +17,10 @@ def get_resolution_lambda_name(project_uuid: str) -> str | None:
     if uses_legacy_resolution_lambda(project_uuid):
         return settings.CONVERSATION_RESOLUTION_NAME
     return settings.CONVERSATION_RESOLUTION_V2_NAME
+
+
+def get_resolution_lambda_region(project_uuid: str) -> str:
+    """Resolve the AWS region for the resolution Lambda client."""
+    if uses_legacy_resolution_lambda(project_uuid):
+        return settings.LAMBDA_AWS_REGION
+    return settings.AWS_REGION

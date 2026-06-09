@@ -136,11 +136,7 @@ class ClassificationService:
         try:
             lambda_name = get_resolution_lambda_name(project_uuid)
             if not lambda_name:
-                setting_name = (
-                    "CONVERSATION_RESOLUTION_NAME"
-                    if use_legacy
-                    else "CONVERSATION_RESOLUTION_V2_NAME"
-                )
+                setting_name = "CONVERSATION_RESOLUTION_NAME" if use_legacy else "CONVERSATION_RESOLUTION_V2_NAME"
                 logger.error(f"[ClassificationService] {setting_name} not configured for project {project_uuid}.")
                 return str(ResolutionEntities.UNCLASSIFIED)
 

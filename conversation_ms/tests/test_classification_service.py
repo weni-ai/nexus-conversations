@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 from django.test import override_settings
 
-from conversation_ms.models import Conversation, ConversationClassification
+from conversation_ms.models import ConversationClassification
 from conversation_ms.services.classification_service import ClassificationService
 from conversation_ms.tests.factories import (
     ConversationFactory,

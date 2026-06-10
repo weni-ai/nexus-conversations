@@ -20,6 +20,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("", lambda _: HttpResponse("Nexus Conversations Microservice")),
     path("api/v1/", include("conversation_ms.urls")),
+    path("api/v1/", include("improvements.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/docs/",

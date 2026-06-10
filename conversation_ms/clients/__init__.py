@@ -4,9 +4,11 @@ from conversation_ms.clients.dtos import (
     ResolutionCountDTO,
     SendConversationsRequestDTO,
 )
+from conversation_ms.clients.nexus_client import NexusClient
 
 __all__ = [
     "BillingClient",
+    "NexusClient",
     "ResolutionCountDTO",
     "ChannelConversationDTO",
     "SendConversationsRequestDTO",

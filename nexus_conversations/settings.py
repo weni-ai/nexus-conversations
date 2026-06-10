@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "django_filters",
     "nexus_conversations.sentry",
     "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
+    "improvements.apps.ImprovementsConfig",
 ]
 
 MIDDLEWARE = [
@@ -200,6 +201,23 @@ CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=N
 CONVERSATION_RESOLUTION_V2_NAME = env.str("CONVERSATION_RESOLUTION_V2_NAME", default=None)
 CONVERSATION_RESOLUTION_LEGACY_PROJECTS = env.list("CONVERSATION_RESOLUTION_LEGACY_PROJECTS", default=[])
 CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
+GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = env.str("GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN", default=None)
+
+# Nexus API (project customization)
+NEXUS_API_BASE_URL = env.str("NEXUS_API_BASE_URL", default="https://nexus.stg.cloud.weni.ai")
+NEXUS_API_TOKEN = env.str("NEXUS_API_TOKEN", default="")
+
+# Improvements JSON output
+IMPROVEMENTS_S3_BUCKET = env.str("IMPROVEMENTS_S3_BUCKET", default="")
+IMPROVEMENTS_S3_PREFIX = env.str("IMPROVEMENTS_S3_PREFIX", default="improvements")
+IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION = env.int("IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION", default=3600)
+IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = env.str(
+    "IMPROVEMENTS_ANALYSIS_LAMBDA_NAME",
+    default="conversations_improvements_analisys",
+)
+IMPROVEMENTS_SAMPLING_MODE = env.str("IMPROVEMENTS_SAMPLING_MODE", default="stratified_by_time_window")
+IMPROVEMENTS_COMPLETION_WINDOW = env.str("IMPROVEMENTS_COMPLETION_WINDOW", default="24h")
+CONVERSATIONS_IMPROVEMENTS_TRHESHOLD = env.int("CONVERSATIONS_IMPROVEMENTS_TRHESHOLD", default=0)
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")

@@ -93,7 +93,7 @@ def _parse_lambda_sample_size(result: Any) -> int:
                 body = json.loads(body)
             except json.JSONDecodeError:
                 body = body.strip()
-        result = body
+        result = body.get("sample_size")
 
     if isinstance(result, int):
         return result

@@ -25,4 +25,7 @@ env = environ.Env(
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
     JWT_PUBLIC_KEY=(str, ""),
+    OIDC_OP_TOKEN_ENDPOINT=(str, ""),
+    OIDC_RP_CLIENT_ID=(str, ""),
+    OIDC_RP_CLIENT_SECRET=(str, ""),
 )

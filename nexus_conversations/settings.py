@@ -270,6 +270,11 @@ PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
 PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
 
+# Keycloak OIDC (client_credentials for internal service-to-service calls)
+OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")
+OIDC_RP_CLIENT_ID = env.str("OIDC_RP_CLIENT_ID", default="")
+OIDC_RP_CLIENT_SECRET = env.str("OIDC_RP_CLIENT_SECRET", default="")
+
 AWS_REGION = env.str("AWS_REGION", default="sa-east-1")
 LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")
 

@@ -198,14 +198,16 @@ SQS_BILLING_QUEUE_URL = env.str("SQS_BILLING_QUEUE_URL", default="")
 AWS_ASSUME_ROLE_ARN = env.str("AWS_ASSUME_ROLE_ARN", default=None)
 CONVERSATION_TOPIC_CLASSIFIER_NAME = env.str("CONVERSATION_TOPIC_CLASSIFIER_NAME", default=None)
 CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=None)
-CONVERSATION_RESOLUTION_V2_NAME = env.str("CONVERSATION_RESOLUTION_V2_NAME", default=None)
-CONVERSATION_RESOLUTION_LEGACY_PROJECTS = env.list("CONVERSATION_RESOLUTION_LEGACY_PROJECTS", default=[])
 CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
 GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = env.str("GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN", default=None)
 
 # Nexus API (project customization)
 NEXUS_API_BASE_URL = env.str("NEXUS_API_BASE_URL", default="https://nexus.stg.cloud.weni.ai")
-NEXUS_API_TOKEN = env.str("NEXUS_API_TOKEN", default="")
+
+# Keycloak OIDC (InternalAuthentication for outbound Nexus API calls)
+OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")
+OIDC_RP_CLIENT_ID = env.str("OIDC_RP_CLIENT_ID", default="")
+OIDC_RP_CLIENT_SECRET = env.str("OIDC_RP_CLIENT_SECRET", default="")
 
 # Improvements JSON output
 IMPROVEMENTS_S3_BUCKET = env.str("IMPROVEMENTS_S3_BUCKET", default="")
@@ -276,11 +278,6 @@ BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
 PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
 PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
-
-# Keycloak OIDC (client_credentials for internal service-to-service calls)
-OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")
-OIDC_RP_CLIENT_ID = env.str("OIDC_RP_CLIENT_ID", default="")
-OIDC_RP_CLIENT_SECRET = env.str("OIDC_RP_CLIENT_SECRET", default="")
 
 AWS_REGION = env.str("AWS_REGION", default="sa-east-1")
 LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")

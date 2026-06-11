@@ -155,7 +155,8 @@ class TestConversationFormatter:
         assert raw_conversation["traces_by_message_id"]["c80dec64-c98b-41d6-b2a7-b2420d090dc3"]
 
     def test_build_raw_conversations_wraps_list(self, conversation):
-        payload = build_raw_conversations([conversation])
+        with patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[]):
+            payload = build_raw_conversations([conversation])
 
         assert len(payload["raw_conversations"]) == 1
         assert payload["raw_conversations"][0]["detail"]["conversation_uuid"] == str(conversation.uuid)

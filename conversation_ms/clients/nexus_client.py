@@ -5,6 +5,8 @@ import requests
 import sentry_sdk
 from django.conf import settings
 
+from conversation_ms.internals import InternalAuthentication
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,23 +16,41 @@ class NexusClient:
     def __init__(
         self,
         base_url: str | None = None,
-        token: str | None = None,
+        auth: InternalAuthentication | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ):
         configured_base_url = base_url if base_url is not None else getattr(settings, "NEXUS_API_BASE_URL", "")
         self.base_url = configured_base_url.rstrip("/")
-        self.token = token if token is not None else getattr(settings, "NEXUS_API_TOKEN", None)
+        self.auth = auth or InternalAuthentication()
         self.timeout = timeout
-
-    def _get_headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return headers
 
     def _require_base_url(self) -> None:
         if not self.base_url:
             raise ValueError("NEXUS_API_BASE_URL is not configured")
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        log_prefix: str,
+        context: dict[str, Any],
+    ) -> requests.Response:
+        self._require_base_url()
+        url = f"{self.base_url}{path}"
+
+        try:
+            return self.auth.make_request_with_retry(
+                method,
+                url,
+                params=params,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            sentry_sdk.capture_exception(exc)
+            logger.error("[%s] Failed context=%s error=%s", log_prefix, context, exc, exc_info=True)
+            raise
 
     def _get_json(
         self,
@@ -40,22 +60,15 @@ class NexusClient:
         log_prefix: str,
         context: dict[str, Any],
     ) -> Any:
-        self._require_base_url()
-        url = f"{self.base_url}{path}"
-
-        try:
-            response = requests.get(
-                url,
-                headers=self._get_headers(),
-                params=params,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as exc:
-            sentry_sdk.capture_exception(exc)
-            logger.error("[%s] Failed context=%s error=%s", log_prefix, context, exc, exc_info=True)
-            raise
+        response = self._request(
+            "GET",
+            path,
+            params=params,
+            log_prefix=log_prefix,
+            context=context,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def get_project_customization(self, project_uuid: str) -> dict[str, Any]:
         """
@@ -85,37 +98,25 @@ class NexusClient:
         """
         GET {NEXUS_API_BASE_URL}/api/agents/traces/?project_uuid={project_uuid}&log_id={log_id}
         """
-        self._require_base_url()
-        url = f"{self.base_url}/api/agents/traces/"
         params = {"project_uuid": project_uuid, "log_id": log_id}
-
         try:
-            response = requests.get(
-                url,
-                headers=self._get_headers(),
+            response = self._request(
+                "GET",
+                "/api/agents/traces/",
                 params=params,
-                timeout=self.timeout,
+                log_prefix="NexusClient.get_agent_traces",
+                context={"project_uuid": project_uuid, "log_id": log_id},
             )
-            response.raise_for_status()
-            return self._normalize_traces_payload(response.json())
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 404:
+            if response.status_code == 404:
                 logger.info(
                     "[NexusClient.get_agent_traces] No traces found project_uuid=%s log_id=%s",
                     project_uuid,
                     log_id,
                 )
                 return []
-            sentry_sdk.capture_exception(exc)
-            logger.error(
-                "[NexusClient.get_agent_traces] Failed project_uuid=%s log_id=%s error=%s",
-                project_uuid,
-                log_id,
-                exc,
-                exc_info=True,
-            )
-            raise
-        except requests.RequestException as exc:
+            response.raise_for_status()
+            return self._normalize_traces_payload(response.json())
+        except requests.HTTPError as exc:
             sentry_sdk.capture_exception(exc)
             logger.error(
                 "[NexusClient.get_agent_traces] Failed project_uuid=%s log_id=%s error=%s",

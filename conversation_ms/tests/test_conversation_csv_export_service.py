@@ -52,7 +52,7 @@ class TestConversationCsvExportService:
         )
         assert format_reason_cell(conv) == ""
 
-    @patch("conversation_ms.services.conversation_csv_export_service._dynamo_messages")
+    @patch("conversation_ms.services.project_data_transfer_service.fetch_dynamo_messages")
     def test_format_msgs_cell_resolved_skips_dynamo_when_postgres_has_messages(self, mock_dynamo, project):
         conv = Conversation.objects.create(
             project=project,
@@ -89,7 +89,7 @@ class TestConversationCsvExportService:
         assert "o:Olá" in cell
 
     @patch(
-        "conversation_ms.services.conversation_csv_export_service._dynamo_messages",
+        "conversation_ms.services.project_data_transfer_service.fetch_dynamo_messages",
         return_value=[{"text": "From dynamo", "source": "incoming", "created_at": "2026-05-13T11:00:00"}],
     )
     def test_format_msgs_cell_in_progress_prefers_dynamo(self, mock_dynamo, project):

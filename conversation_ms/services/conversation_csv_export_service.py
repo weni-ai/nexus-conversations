@@ -14,11 +14,14 @@ from datetime import date
 
 import pendulum
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Q
 
-from conversation_ms.adapters.dynamo import DynamoMessageRepository
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, Project
+from conversation_ms.services.project_data_transfer_service import (
+    ExportDateRange,
+    build_export_queryset,
+    get_conversation_messages,
+)
 from conversation_ms.utils.date_helpers import ProjectDay, resolve_effective_project_timezone
 
 logger = logging.getLogger(__name__)
@@ -58,62 +61,8 @@ def _day_bounds_utc(project: Project, day: str) -> tuple[pendulum.DateTime, pend
     return ProjectDay.for_date(day, tz_name).get_utc_range()
 
 
-def _postgres_messages(conv: Conversation) -> list:
-    try:
-        return list(conv.messages_data.messages or [])
-    except ObjectDoesNotExist:
-        return []
-    except AttributeError:
-        return []
-    except Exception:
-        logger.exception(
-            "[conversation_csv_export] Postgres messages fetch failed conversation_uuid=%s",
-            conv.uuid,
-        )
-        return []
-
-
-def _dynamo_messages(conv: Conversation) -> list:
-    urn, ch = conv.contact_urn, conv.channel_uuid
-    if not urn or not ch:
-        return []
-    try:
-        repo = DynamoMessageRepository()
-        items, cursor = [], None
-        while True:
-            page = repo.get_messages(
-                project_uuid=str(conv.project_id),
-                contact_urn=urn,
-                channel_uuid=str(ch),
-                limit=500,
-                cursor=cursor,
-            )
-            batch = page.get("items") or []
-            items.extend(batch)
-            cursor = page.get("next_cursor")
-            if not cursor or not batch:
-                break
-        return items
-    except Exception:
-        logger.exception(
-            "[conversation_csv_export] Dynamo fetch failed conversation_uuid=%s",
-            conv.uuid,
-        )
-        return []
-
-
-def _merged_raw_messages(conv: Conversation) -> list:
-    pg = _postgres_messages(conv)
-    if str(conv.resolution) == IN_PROGRESS:
-        dyn = _dynamo_messages(conv)
-        return dyn if dyn else pg
-    if pg:
-        return pg
-    return _dynamo_messages(conv)
-
-
 def format_msgs_cell(conv: Conversation) -> str:
-    raw = _merged_raw_messages(conv)
+    raw = get_conversation_messages(conv, include_dynamo=True)
     parts = []
     for m in sorted(raw, key=lambda x: x.get("created_at") or ""):
         text = (m.get("text") or "").replace("\n", " ")
@@ -136,21 +85,15 @@ def format_reason_cell(conv: Conversation) -> str:
 
 
 def conversations_queryset(project_uuid: str, start_utc: pendulum.DateTime, end_utc: pendulum.DateTime):
-    return (
-        Conversation.objects.filter(project__uuid=project_uuid)
-        .filter(
-            Q(start_date__gte=start_utc, start_date__lte=end_utc)
-            | Q(created_at__gte=start_utc, created_at__lte=end_utc)
-        )
-        .select_related(
-            "project",
-            "classification",
-            "classification__topic",
-            "classification__subtopic",
-            "messages_data",
-        )
-        .order_by("start_date", "created_at")
+    project = Project.objects.get(uuid=project_uuid)
+    date_range = ExportDateRange(
+        start_date=None,
+        end_date=None,
+        timezone=resolve_effective_project_timezone(project.timezone),
+        start_utc=start_utc,
+        end_utc=end_utc,
     )
+    return build_export_queryset(project_uuid, date_range)
 
 
 def export_conversations_csv_bytes(

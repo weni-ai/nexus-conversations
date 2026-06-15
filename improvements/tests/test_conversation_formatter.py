@@ -19,6 +19,7 @@ from improvements.services.conversation_formatter import (
     build_raw_conversation,
     build_raw_conversations,
     get_traces_by_message_id,
+    iter_raw_conversations,
 )
 
 
@@ -160,3 +161,10 @@ class TestConversationFormatter:
 
         assert len(payload["raw_conversations"]) == 1
         assert payload["raw_conversations"][0]["detail"]["conversation_uuid"] == str(conversation.uuid)
+
+    def test_iter_raw_conversations_matches_build_raw_conversations(self, conversation):
+        with patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[]):
+            streamed = list(iter_raw_conversations([conversation]))
+            wrapped = build_raw_conversations([conversation])["raw_conversations"]
+
+        assert streamed == wrapped

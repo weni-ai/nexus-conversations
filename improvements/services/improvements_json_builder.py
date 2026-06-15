@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
+from collections.abc import Iterable
+from io import TextIOWrapper
 from typing import Any
 
 from django.conf import settings
@@ -9,6 +12,8 @@ from django.conf import settings
 from conversation_ms.adapters.aws import get_boto3_client
 
 logger = logging.getLogger(__name__)
+
+JSON_DUMP_KWARGS = {"ensure_ascii": False, "separators": (",", ":")}
 
 DEFAULT_ACTION = "build"
 DEFAULT_SAMPLING_MODE = "stratified_by_time_window"
@@ -111,29 +116,78 @@ def build_improvements_s3_key(payload: dict[str, Any]) -> str:
     return "/".join(key_parts)
 
 
-def upload_improvements_document_to_s3(document: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+def stream_improvements_s3_input_to_file(
+    file_obj,
+    customization: dict[str, Any],
+    raw_conversations: Iterable[dict[str, Any]],
+) -> int:
+    """
+    Write {"raw_conversations":[...],"customization":{...}} incrementally.
+
+    Returns the number of conversations written.
+    """
+    count = 0
+    file_obj.write('{"raw_conversations":[')
+    for raw in raw_conversations:
+        if count:
+            file_obj.write(",")
+        json.dump(raw, file_obj, **JSON_DUMP_KWARGS)
+        count += 1
+    file_obj.write('],"customization":')
+    json.dump(customization, file_obj, **JSON_DUMP_KWARGS)
+    file_obj.write("}")
+    return count
+
+
+def upload_improvements_document_stream_to_s3(
+    customization: dict[str, Any],
+    raw_conversations: Iterable[dict[str, Any]],
+    payload: dict[str, Any],
+) -> dict[str, str]:
     bucket = getattr(settings, "IMPROVEMENTS_S3_BUCKET", "")
     if not bucket:
         raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
 
     key = build_improvements_s3_key(payload)
-    body = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
-
     s3_client = get_boto3_client("s3", region_name=getattr(settings, "AWS_REGION", None))
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=body.encode("utf-8"),
-        ContentType="application/json",
-    )
+
+    with tempfile.NamedTemporaryFile(mode="w+b") as tmp:
+        text_tmp = TextIOWrapper(tmp, encoding="utf-8")
+        try:
+            conversation_count = stream_improvements_s3_input_to_file(text_tmp, customization, raw_conversations)
+            text_tmp.flush()
+        finally:
+            text_tmp.detach()
+        tmp.seek(0)
+        s3_client.upload_fileobj(
+            tmp,
+            bucket,
+            key,
+            ExtraArgs={"ContentType": "application/json"},
+        )
 
     s3_uri = f"s3://{bucket}/{key}"
     logger.info(
-        "[upload_improvements_document_to_s3] Uploaded improvements JSON project_uuid=%s s3_uri=%s",
+        "[upload_improvements_document_stream_to_s3] Uploaded improvements JSON "
+        "project_uuid=%s s3_uri=%s conversation_count=%s",
         payload.get("project_uuid"),
         s3_uri,
+        conversation_count,
     )
-    return {"s3_uri": s3_uri, "bucket": bucket, "key": key}
+    return {"s3_uri": s3_uri, "bucket": bucket, "key": key, "conversation_count": conversation_count}
+
+
+def upload_improvements_document_to_s3(document: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+    bucket = getattr(settings, "IMPROVEMENTS_S3_BUCKET", "")
+    if not bucket:
+        raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
+
+    result = upload_improvements_document_stream_to_s3(
+        document.get("customization") or {},
+        document.get("raw_conversations") or [],
+        payload,
+    )
+    return {key: result[key] for key in ("s3_uri", "bucket", "key")}
 
 
 def generate_presigned_s3_url(bucket: str, key: str) -> str:

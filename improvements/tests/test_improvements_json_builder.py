@@ -1,3 +1,4 @@
+import io
 import json
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,8 @@ from improvements.services.improvements_json_builder import (
     build_improvements_s3_key,
     generate_presigned_s3_url,
     invoke_conversations_improvements_analysis_lambda,
+    stream_improvements_s3_input_to_file,
+    upload_improvements_document_stream_to_s3,
     upload_improvements_document_to_s3,
 )
 
@@ -64,6 +67,30 @@ class TestImprovementsJsonBuilder:
             "customization": {"agent": {"name": "Taina"}},
         }
 
+    def test_stream_improvements_s3_input_matches_build_improvements_s3_input(self):
+        customization = {"agent": {"name": "Taina"}}
+        raw_conversations = [
+            {"detail": {"conversation_uuid": "abc-123"}, "all_messages": []},
+            {"detail": {"conversation_uuid": "def-456"}, "all_messages": [{"text": "Oi"}]},
+        ]
+        expected = build_improvements_s3_input(raw_conversations, customization)
+
+        buffer = io.StringIO()
+        count = stream_improvements_s3_input_to_file(buffer, customization, raw_conversations)
+
+        assert count == 2
+        assert json.loads(buffer.getvalue()) == expected
+
+    def test_stream_improvements_s3_input_empty_array(self):
+        customization = {"agent": {"name": "Taina"}}
+        expected = build_improvements_s3_input([], customization)
+
+        buffer = io.StringIO()
+        count = stream_improvements_s3_input_to_file(buffer, customization, [])
+
+        assert count == 0
+        assert json.loads(buffer.getvalue()) == expected
+
     def test_build_analysis_lambda_payload(self):
         payload = build_analysis_lambda_payload(
             input_url="https://bucket.s3.sa-east-1.amazonaws.com/improvements/u/2026-05-29/build_input.json?X-Amz-",
@@ -102,6 +129,48 @@ class TestImprovementsJsonBuilder:
         )
 
     @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    def test_upload_improvements_document_stream_to_s3(self, mock_get_client):
+        settings.IMPROVEMENTS_S3_BUCKET = "nexus-improvements"
+        settings.IMPROVEMENTS_S3_PREFIX = "improvements"
+        mock_s3 = mock_get_client.return_value
+        document = build_improvements_s3_input(
+            raw_conversations=[{"detail": {"conversation_uuid": "abc-123"}, "all_messages": []}],
+            customization={"agent": {"name": "Taina"}},
+        )
+        payload = {
+            "project_uuid": "37e1e32b-1111-2222-3333-444444444444",
+            "target_date": "2026-05-23",
+        }
+        expected_key = "improvements/37e1e32b-1111-2222-3333-444444444444/2026-05-23/build_input.json"
+        uploaded_payload = {}
+
+        def capture_upload(fileobj, bucket, key, ExtraArgs=None):
+            uploaded_payload["body"] = json.loads(fileobj.read().decode("utf-8"))
+            uploaded_payload["bucket"] = bucket
+            uploaded_payload["key"] = key
+            uploaded_payload["extra_args"] = ExtraArgs
+
+        mock_s3.upload_fileobj.side_effect = capture_upload
+
+        upload_result = upload_improvements_document_stream_to_s3(
+            document["customization"],
+            document["raw_conversations"],
+            payload,
+        )
+
+        assert upload_result == {
+            "s3_uri": f"s3://nexus-improvements/{expected_key}",
+            "bucket": "nexus-improvements",
+            "key": expected_key,
+            "conversation_count": 1,
+        }
+        mock_s3.upload_fileobj.assert_called_once()
+        assert uploaded_payload["bucket"] == "nexus-improvements"
+        assert uploaded_payload["key"] == expected_key
+        assert uploaded_payload["extra_args"] == {"ContentType": "application/json"}
+        assert uploaded_payload["body"] == document
+
+    @patch("improvements.services.improvements_json_builder.get_boto3_client")
     def test_upload_improvements_document_to_s3(self, mock_get_client):
         settings.IMPROVEMENTS_S3_BUCKET = "nexus-improvements"
         settings.IMPROVEMENTS_S3_PREFIX = "improvements"
@@ -114,21 +183,23 @@ class TestImprovementsJsonBuilder:
             "project_uuid": "37e1e32b-1111-2222-3333-444444444444",
             "target_date": "2026-05-23",
         }
+        expected_key = "improvements/37e1e32b-1111-2222-3333-444444444444/2026-05-23/build_input.json"
+        uploaded_payload = {}
+
+        def capture_upload(fileobj, bucket, key, ExtraArgs=None):
+            uploaded_payload["body"] = json.loads(fileobj.read().decode("utf-8"))
+
+        mock_s3.upload_fileobj.side_effect = capture_upload
 
         upload_result = upload_improvements_document_to_s3(document, payload)
 
-        expected_key = "improvements/37e1e32b-1111-2222-3333-444444444444/2026-05-23/build_input.json"
         assert upload_result == {
             "s3_uri": f"s3://nexus-improvements/{expected_key}",
             "bucket": "nexus-improvements",
             "key": expected_key,
         }
-        mock_s3.put_object.assert_called_once()
-        put_kwargs = mock_s3.put_object.call_args.kwargs
-        assert put_kwargs["Bucket"] == "nexus-improvements"
-        assert put_kwargs["Key"] == expected_key
-        assert put_kwargs["ContentType"] == "application/json"
-        assert json.loads(put_kwargs["Body"].decode("utf-8")) == document
+        mock_s3.upload_fileobj.assert_called_once()
+        assert uploaded_payload["body"] == document
 
     @patch("improvements.services.improvements_json_builder.get_boto3_client")
     def test_generate_presigned_s3_url(self, mock_get_client):
@@ -209,7 +280,7 @@ class TestImprovementsJsonBuilder:
         settings.IMPROVEMENTS_S3_BUCKET = ""
 
         with pytest.raises(ValueError, match="IMPROVEMENTS_S3_BUCKET"):
-            upload_improvements_document_to_s3({}, {"project_uuid": "x", "target_date": "2026-05-23"})
+            upload_improvements_document_stream_to_s3({}, iter([]), {"project_uuid": "x", "target_date": "2026-05-23"})
 
     def test_invoke_conversations_improvements_analysis_lambda_requires_name(self):
         settings.IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = ""

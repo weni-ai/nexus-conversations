@@ -215,7 +215,7 @@ class TestConversationsCountView:
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
     @patch("improvements.tasks.invoke_conversations_improvements_analysis_lambda")
     @patch("improvements.tasks.generate_presigned_s3_url")
-    @patch("improvements.tasks.upload_improvements_document_to_s3")
+    @patch("improvements.tasks.upload_improvements_document_stream_to_s3")
     @patch("improvements.tasks.get_project_customization")
     @patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[])
     @patch("improvements.services.conversation_count_service.get_boto3_client")
@@ -230,7 +230,21 @@ class TestConversationsCountView:
         mock_get_collaborative_agents,
         project,
     ):
+        from improvements.services.improvements_json_builder import build_improvements_s3_input
         from improvements.tasks import start_conversations_improvements
+
+        captured_document = {}
+        s3_key = f"improvements/{project.uuid}/2026-02-05/build_input.json"
+
+        def capture_upload(customization, raw_conversations, upload_payload):
+            raw_list = list(raw_conversations)
+            captured_document["value"] = build_improvements_s3_input(raw_list, customization)
+            return {
+                "s3_uri": f"s3://test-bucket/{s3_key}",
+                "bucket": "test-bucket",
+                "key": s3_key,
+                "conversation_count": len(raw_list),
+            }
 
         settings.GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = (
             "arn:aws:lambda:us-east-1:123456789012:function:conversations-count"
@@ -247,12 +261,7 @@ class TestConversationsCountView:
             "team": {"human_support": False, "human_support_prompt": ""},
         }
 
-        s3_key = f"improvements/{project.uuid}/2026-02-05/build_input.json"
-        mock_upload_s3.return_value = {
-            "s3_uri": f"s3://test-bucket/{s3_key}",
-            "bucket": "test-bucket",
-            "key": s3_key,
-        }
+        mock_upload_s3.side_effect = capture_upload
         mock_presign.return_value = f"https://test-bucket.s3.sa-east-1.amazonaws.com/{s3_key}?X-Amz-"
         mock_invoke_analysis.return_value = {
             "batches": [
@@ -322,7 +331,7 @@ class TestConversationsCountView:
         assert result["batches"] == mock_invoke_analysis.return_value["batches"]
         assert result["metadata_passthrough"] == mock_invoke_analysis.return_value["metadata_passthrough"]
 
-        uploaded_document = mock_upload_s3.call_args.args[0]
+        uploaded_document = captured_document["value"]
         assert len(uploaded_document["raw_conversations"]) == 2
         selected_uuids = {item["detail"]["conversation_uuid"] for item in uploaded_document["raw_conversations"]}
         assert selected_uuids.issubset({str(conversation.uuid) for conversation in in_range})
@@ -371,6 +380,26 @@ class TestConversationsCountView:
 
         assert len(selected) == 1
         mock_get_client.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_iter_conversation_batches_preserves_uuid_order(self, project):
+        from improvements.services.conversation_count_service import iter_conversation_batches_by_uuids
+
+        uuids = []
+        for _ in range(5):
+            conversation = Conversation.objects.create(
+                project=project,
+                start_date=datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_tz.utc),
+                end_date=datetime(2026, 2, 5, 13, 0, 0, tzinfo=dt_tz.utc),
+                channel_uuid=uuid4(),
+            )
+            uuids.append(conversation.uuid)
+
+        batches = list(iter_conversation_batches_by_uuids(uuids, batch_size=2))
+
+        assert len(batches) == 3
+        flattened = [conversation.uuid for batch in batches for conversation in batch]
+        assert flattened == uuids
 
 
 def django_datetime_from_pendulum(dt):

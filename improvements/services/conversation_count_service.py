@@ -55,6 +55,14 @@ DEFAULT_SAMPLING_MODE = "srs"
 
 LAMBDA_PAYLOAD_KEYS = ("sampling_mode", "total_count", "target_date")
 
+CONVERSATION_IMPROVEMENTS_SELECT_RELATED = (
+    "project",
+    "messages_data",
+    "classification",
+    "classification__topic",
+    "classification__subtopic",
+)
+
 
 def build_lambda_payload(
     total_count: int,
@@ -131,34 +139,67 @@ def get_conversations_sample_size_lambda(payload: dict[str, Any]) -> int:
     return _parse_lambda_sample_size(result)
 
 
+def _conversations_in_range_queryset(
+    project_uuid: str | UUID,
+    start: str,
+    end: str,
+):
+    start_utc = parse_api_utc(start)
+    end_utc = parse_api_utc(end)
+    return Conversation.objects.filter(
+        project__uuid=project_uuid,
+        start_date__gte=django_utc_from_pendulum(start_utc),
+        start_date__lte=django_utc_from_pendulum(end_utc),
+    )
+
+
+def select_random_conversation_uuids_in_range(
+    project_uuid: str | UUID,
+    start: str,
+    end: str,
+    sample_size: int,
+) -> list[UUID]:
+    if sample_size <= 0:
+        return []
+
+    queryset = _conversations_in_range_queryset(project_uuid, start, end)
+    total = queryset.count()
+    if total == 0:
+        return []
+
+    limit = min(sample_size, total)
+    return list(queryset.order_by("?").values_list("uuid", flat=True)[:limit])
+
+
+def iter_conversation_batches_by_uuids(
+    uuids: list[UUID],
+    batch_size: int | None = None,
+):
+    if not uuids:
+        return
+
+    if batch_size is None:
+        batch_size = getattr(settings, "IMPROVEMENTS_CONVERSATION_BATCH_SIZE", 50)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+
+    for index in range(0, len(uuids), batch_size):
+        batch_uuids = uuids[index : index + batch_size]
+        conversations = list(
+            Conversation.objects.filter(uuid__in=batch_uuids).select_related(*CONVERSATION_IMPROVEMENTS_SELECT_RELATED)
+        )
+        by_uuid = {conversation.uuid: conversation for conversation in conversations}
+        yield [by_uuid[uuid] for uuid in batch_uuids if uuid in by_uuid]
+
+
 def select_random_conversations_in_range(
     project_uuid: str | UUID,
     start: str,
     end: str,
     sample_size: int,
 ) -> list[Conversation]:
-    if sample_size <= 0:
-        return []
-
-    start_utc = parse_api_utc(start)
-    end_utc = parse_api_utc(end)
-    queryset = Conversation.objects.filter(
-        project__uuid=project_uuid,
-        start_date__gte=django_utc_from_pendulum(start_utc),
-        start_date__lte=django_utc_from_pendulum(end_utc),
-    )
-
-    total = queryset.count()
-    if total == 0:
-        return []
-
-    limit = min(sample_size, total)
-    return list(
-        queryset.select_related(
-            "project",
-            "messages_data",
-            "classification",
-            "classification__topic",
-            "classification__subtopic",
-        ).order_by("?")[:limit]
-    )
+    uuids = select_random_conversation_uuids_in_range(project_uuid, start, end, sample_size)
+    conversations: list[Conversation] = []
+    for batch in iter_conversation_batches_by_uuids(uuids):
+        conversations.extend(batch)
+    return conversations

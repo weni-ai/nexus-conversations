@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from conversation_ms.models import Conversation
@@ -141,7 +142,12 @@ def build_raw_conversation(conversation: Conversation) -> dict[str, Any]:
     }
 
 
+def iter_raw_conversations(conversations: Iterable[Conversation]) -> Iterator[dict[str, Any]]:
+    for conversation in conversations:
+        yield build_raw_conversation(conversation)
+
+
 def build_raw_conversations(conversations: list[Conversation]) -> dict[str, list[dict[str, Any]]]:
     return {
-        "raw_conversations": [build_raw_conversation(conversation) for conversation in conversations],
+        "raw_conversations": list(iter_raw_conversations(conversations)),
     }

@@ -215,7 +215,8 @@ class ClassificationService:
     def _format_messages_for_legacy_lambda(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Format messages for the legacy resolution Lambda (flat conversation array)."""
         formatted = []
-        for msg in messages:
+        # Dynamo returns newest-first; lambdas expect chronological order.
+        for msg in reversed(messages):
             formatted.append(
                 {
                     "sender": msg.get("source", "unknown"),
@@ -228,7 +229,8 @@ class ClassificationService:
     def _format_messages_for_v2_lambda(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Format messages for the V2 resolution Lambda (nested conversation.messages)."""
         formatted_messages = []
-        for msg in messages:
+        # Dynamo returns newest-first; lambdas expect chronological order.
+        for msg in reversed(messages):
             formatted_messages.append(
                 {
                     "sender": self._map_source_to_v2_sender(msg.get("source")),
@@ -261,7 +263,7 @@ class ClassificationService:
                 limit=50,
             )
             if result and result.get("items"):
-                return result["items"][::-1]
+                return result["items"]
         except Exception as e:
             logger.warning(f"[ClassificationService] Failed to fetch from DynamoDB: {e}")
 

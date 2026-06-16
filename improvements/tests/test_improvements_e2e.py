@@ -24,6 +24,7 @@ from rest_framework.test import APIClient
 from conversation_ms.models import Conversation, ConversationMessages, Project
 from conversation_ms.services.reconcile_cohort_export import django_utc_from_pendulum
 from improvements.adapters.in_memory import (
+    FakeProjectDataClient,
     InMemoryBatchCheckScheduler,
     InMemoryS3Storage,
     ScriptedLambdaClient,
@@ -214,11 +215,20 @@ class TestImprovementsE2E:
                 ],
             ),
         )
+        knowledge_base_chunks = [
+            {
+                "chunk_id": "kb-1",
+                "content": "Return policy details",
+                "filename": "policy.pdf",
+                "file_uuid": "file-uuid-1",
+            }
+        ]
         set_improvements_dependencies(
             build_in_memory_improvements_dependencies(
                 s3=s3,
                 scheduler=scheduler,
                 lambda_client=lambda_client,
+                project_data=FakeProjectDataClient(knowledge_base_chunks=knowledge_base_chunks),
             ),
         )
 
@@ -253,6 +263,7 @@ class TestImprovementsE2E:
             len(build_document["raw_conversations"]),
         )
         assert len(build_document["raw_conversations"]) == 2
+        assert build_document["customization"]["knowledge_base"] == knowledge_base_chunks
 
         final_metadata = _run_polling_until_terminal(str(project.uuid), target_date)
 

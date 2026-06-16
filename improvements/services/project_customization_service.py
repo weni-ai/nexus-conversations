@@ -1,5 +1,7 @@
 from typing import Any
 
+from django.conf import settings
+
 from improvements.dependencies import get_improvements_dependencies
 
 
@@ -11,9 +13,10 @@ def get_collaborative_agents(project_uuid: str) -> list[dict[str, Any]]:
     return get_improvements_dependencies().project_data.get_collaborative_agents(project_uuid)
 
 
-def get_knowledge_base_placeholder(customization: dict[str, Any]) -> list[dict[str, Any]]:
-    """Placeholder until knowledge base chunks are returned by the customization API."""
-    return customization.get("knowledge_base") or []
+def get_knowledge_base_chunks(project_uuid: str) -> list[dict[str, Any]]:
+    if not getattr(settings, "IMPROVEMENTS_KNOWLEDGE_BASE_FETCH_ENABLED", True):
+        return []
+    return get_improvements_dependencies().project_data.get_knowledge_base_chunks(project_uuid)
 
 
 def enrich_customization_for_improvements(
@@ -25,5 +28,5 @@ def enrich_customization_for_improvements(
     enriched.setdefault("agent", {})
     enriched.setdefault("instructions", [])
     enriched["collaborative_agents"] = get_collaborative_agents(project_uuid)
-    enriched.setdefault("knowledge_base", get_knowledge_base_placeholder(customization))
+    enriched["knowledge_base"] = get_knowledge_base_chunks(project_uuid)
     return enriched

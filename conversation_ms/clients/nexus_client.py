@@ -148,3 +148,97 @@ class NexusClient:
         if isinstance(item, dict):
             return {"trace": item}
         return {"trace": item}
+
+    def get_knowledge_base_chunks(self, project_uuid: str) -> list[dict[str, Any]]:
+        """
+        GET {NEXUS_API_BASE_URL}/api/{project_uuid}/knowledge-base/chunks
+        Paginates with cursor until next_cursor is absent or max chunk limit is reached.
+        """
+        max_chunks = getattr(settings, "IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS", 0)
+        accumulated: list[dict[str, Any]] = []
+        cursor: str | None = None
+        page = 0
+        total_count: int | None = None
+
+        while True:
+            page += 1
+            params = {"cursor": cursor} if cursor else None
+            try:
+                response = self._request(
+                    "GET",
+                    f"/api/{project_uuid}/knowledge-base/chunks",
+                    params=params,
+                    log_prefix="NexusClient.get_knowledge_base_chunks",
+                    context={"project_uuid": project_uuid, "page": page, "cursor": cursor},
+                )
+                if response.status_code == 404:
+                    logger.info(
+                        "[NexusClient.get_knowledge_base_chunks] No knowledge base found project_uuid=%s",
+                        project_uuid,
+                    )
+                    return []
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                sentry_sdk.capture_exception(exc)
+                logger.error(
+                    "[NexusClient.get_knowledge_base_chunks] Failed project_uuid=%s page=%s error=%s",
+                    project_uuid,
+                    page,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+
+            payload = response.json()
+            if not isinstance(payload, dict):
+                break
+
+            if total_count is None:
+                api_count = payload.get("count")
+                if isinstance(api_count, int):
+                    total_count = api_count
+
+            results = payload.get("results")
+            if not isinstance(results, list):
+                results = []
+
+            for item in results:
+                accumulated.append(self._normalize_knowledge_base_chunk(item))
+                if max_chunks > 0 and len(accumulated) >= max_chunks:
+                    if total_count is not None and total_count > max_chunks:
+                        logger.warning(
+                            "[NexusClient.get_knowledge_base_chunks] Truncated knowledge base "
+                            "project_uuid=%s api_count=%s included=%s max_chunks=%s",
+                            project_uuid,
+                            total_count,
+                            max_chunks,
+                            max_chunks,
+                        )
+                    return accumulated[:max_chunks]
+
+            logger.info(
+                "[NexusClient.get_knowledge_base_chunks] Fetched page project_uuid=%s page=%s "
+                "accumulated=%s api_count=%s",
+                project_uuid,
+                page,
+                len(accumulated),
+                total_count,
+            )
+
+            next_cursor = payload.get("next_cursor")
+            if not next_cursor:
+                break
+            cursor = str(next_cursor)
+
+        return accumulated
+
+    @staticmethod
+    def _normalize_knowledge_base_chunk(item: Any) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            return {"chunk_id": "", "content": str(item)}
+        return {
+            "chunk_id": item.get("id", ""),
+            "content": item.get("text", ""),
+            "filename": item.get("filename"),
+            "file_uuid": item.get("file_uuid"),
+        }

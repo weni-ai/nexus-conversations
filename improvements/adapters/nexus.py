@@ -17,3 +17,6 @@ class NexusProjectDataClient:
 
     def get_agent_traces(self, project_uuid: str, log_id: str) -> list[dict[str, Any]]:
         return self._client.get_agent_traces(project_uuid, log_id)
+
+    def get_knowledge_base_chunks(self, project_uuid: str) -> list[dict[str, Any]]:
+        return self._client.get_knowledge_base_chunks(project_uuid)

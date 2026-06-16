@@ -212,6 +212,7 @@ class TestConversationsCountView:
 
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
+    @patch("improvements.services.project_customization_service.get_knowledge_base_chunks", return_value=[])
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
     @patch("improvements.tasks.register_batch_check_schedule", return_value="uuid:2026-02-05")
     @patch("improvements.tasks.invoke_conversations_improvements_analysis_lambda")
@@ -230,6 +231,7 @@ class TestConversationsCountView:
         mock_invoke_analysis,
         mock_register_schedule,
         mock_get_collaborative_agents,
+        mock_get_knowledge_base_chunks,
         project,
     ):
         from improvements.services.improvements_json_builder import build_improvements_s3_input

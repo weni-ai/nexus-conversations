@@ -114,6 +114,7 @@ class FakeProjectDataClient:
         self,
         customization: dict[str, Any] | None = None,
         collaborative_agents: list[dict[str, Any]] | None = None,
+        knowledge_base_chunks: list[dict[str, Any]] | None = None,
     ) -> None:
         self.customization = customization or {
             "agent": {"name": "Agent", "role": "Support", "personality": "Friendly", "goal": "Help"},
@@ -121,6 +122,7 @@ class FakeProjectDataClient:
             "team": {"human_support": False, "human_support_prompt": ""},
         }
         self.collaborative_agents = collaborative_agents or []
+        self.knowledge_base_chunks = knowledge_base_chunks if knowledge_base_chunks is not None else []
 
     def get_project_customization(self, project_uuid: str) -> dict[str, Any]:
         return dict(self.customization)
@@ -130,6 +132,9 @@ class FakeProjectDataClient:
 
     def get_agent_traces(self, project_uuid: str, log_id: str) -> list[dict[str, Any]]:
         return []
+
+    def get_knowledge_base_chunks(self, project_uuid: str) -> list[dict[str, Any]]:
+        return list(self.knowledge_base_chunks)
 
 
 def build_in_memory_improvements_dependencies(

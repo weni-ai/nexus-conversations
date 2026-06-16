@@ -110,3 +110,101 @@ class TestNexusClient:
 
         with pytest.raises(ValueError, match="NEXUS_API_BASE_URL"):
             client.get_project_customization("017cd5df-cfc8-4d5c-b659-347fe7a4bee9")
+
+    def test_get_knowledge_base_chunks_single_page(self):
+        project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
+        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 0
+        api_payload = {
+            "count": 1,
+            "page_size": 50,
+            "next_cursor": None,
+            "results": [
+                {
+                    "id": "chunk-1",
+                    "text": "Policy text",
+                    "filename": "policy.pdf",
+                    "file_uuid": "file-uuid-1",
+                    "metadata": {"page": 1},
+                }
+            ],
+        }
+        client, mock_auth = _client_with_mock_auth(_mock_response(json_payload=api_payload))
+
+        result = client.get_knowledge_base_chunks(project_uuid)
+
+        assert result == [
+            {
+                "chunk_id": "chunk-1",
+                "content": "Policy text",
+                "filename": "policy.pdf",
+                "file_uuid": "file-uuid-1",
+            }
+        ]
+        mock_auth.make_request_with_retry.assert_called_once_with(
+            "GET",
+            f"https://nexus.stg.cloud.weni.ai/api/{project_uuid}/knowledge-base/chunks",
+            params=None,
+            timeout=30,
+        )
+
+    def test_get_knowledge_base_chunks_paginates_with_cursor(self):
+        project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
+        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 0
+        first_page = {
+            "count": 2,
+            "page_size": 1,
+            "next_cursor": "cursor-page-2",
+            "results": [{"id": "chunk-1", "text": "First", "filename": "a.pdf", "file_uuid": "f1"}],
+        }
+        second_page = {
+            "count": 2,
+            "page_size": 1,
+            "next_cursor": None,
+            "results": [{"id": "chunk-2", "text": "Second", "filename": "b.pdf", "file_uuid": "f2"}],
+        }
+        mock_auth = Mock()
+        mock_auth.make_request_with_retry.side_effect = [
+            _mock_response(json_payload=first_page),
+            _mock_response(json_payload=second_page),
+        ]
+        client = NexusClient(auth=mock_auth)
+
+        result = client.get_knowledge_base_chunks(project_uuid)
+
+        assert result == [
+            {"chunk_id": "chunk-1", "content": "First", "filename": "a.pdf", "file_uuid": "f1"},
+            {"chunk_id": "chunk-2", "content": "Second", "filename": "b.pdf", "file_uuid": "f2"},
+        ]
+        assert mock_auth.make_request_with_retry.call_count == 2
+        second_call = mock_auth.make_request_with_retry.call_args_list[1]
+        assert second_call.kwargs["params"] == {"cursor": "cursor-page-2"}
+
+    def test_get_knowledge_base_chunks_truncates_at_max_chunks(self):
+        project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
+        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 1
+        api_payload = {
+            "count": 3,
+            "page_size": 3,
+            "next_cursor": None,
+            "results": [
+                {"id": "chunk-1", "text": "First"},
+                {"id": "chunk-2", "text": "Second"},
+            ],
+        }
+        client, _mock_auth = _client_with_mock_auth(_mock_response(json_payload=api_payload))
+
+        result = client.get_knowledge_base_chunks(project_uuid)
+
+        assert result == [{"chunk_id": "chunk-1", "content": "First", "filename": None, "file_uuid": None}]
+
+    def test_get_knowledge_base_chunks_returns_empty_list_on_404(self):
+        project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
+        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        client, _mock_auth = _client_with_mock_auth(_mock_response(status_code=404))
+
+        result = client.get_knowledge_base_chunks(project_uuid)
+
+        assert result == []

@@ -15,6 +15,7 @@ from improvements.serializers import (
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
 )
+from improvements.services.analysis_run_service import AnalysisRunAlreadyExistsError, create_analysis_run
 from improvements.services.conversation_count_service import (
     build_task_payload,
     count_conversations_in_range,
@@ -108,6 +109,20 @@ class ConversationsImprovements(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        actor = getattr(request.user, "username", None)
+        try:
+            analysis_run = create_analysis_run(
+                project,
+                payload=payload,
+                triggered_by_actor=actor,
+            )
+        except AnalysisRunAlreadyExistsError:
+            return Response(
+                {"detail": "An analysis has already been executed today for this project."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        payload["run_uuid"] = str(analysis_run.uuid)
         start_conversations_improvements.delay(payload)
 
         return Response(

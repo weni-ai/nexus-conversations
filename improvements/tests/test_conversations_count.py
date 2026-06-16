@@ -369,6 +369,7 @@ class TestConversationsCountView:
             project_uuid=str(project.uuid),
             target_date="2026-02-05",
             batches=mock_invoke_analysis.return_value["batches"],
+            run_uuid=None,
         )
 
     @patch("improvements.adapters.boto3.get_boto3_client")

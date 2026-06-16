@@ -70,6 +70,18 @@ def create_analysis_run(
     )
 
 
+def create_analysis_run_from_payload(payload: dict[str, Any]) -> ImprovementAnalysisRun:
+    project_uuid = _parse_uuid(payload.get("project_uuid"))
+    if project_uuid is None:
+        raise ValueError("payload must include a valid project_uuid to create an analysis run")
+
+    project = Project.objects.filter(uuid=project_uuid).first()
+    if project is None:
+        raise ValueError(f"Project not found for project_uuid={project_uuid}")
+
+    return create_analysis_run(project, payload=payload)
+
+
 def get_analysis_run_for_payload(payload: dict[str, Any]) -> ImprovementAnalysisRun | None:
     run_uuid = _parse_uuid(payload.get("run_uuid"))
     if run_uuid is not None:

@@ -212,6 +212,7 @@ class TestConversationsCountView:
 
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
+    @patch("improvements.tasks.check_improvements_batches.delay")
     @patch("improvements.services.project_customization_service.get_knowledge_base_chunks", return_value=[])
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
     @patch("improvements.tasks.register_batch_check_schedule", return_value="uuid:2026-02-05")
@@ -232,9 +233,16 @@ class TestConversationsCountView:
         mock_register_schedule,
         mock_get_collaborative_agents,
         mock_get_knowledge_base_chunks,
+        mock_check_delay,
         project,
     ):
-        from improvements.services.improvements_json_builder import build_improvements_s3_input
+        from improvements.enums import ImprovementConversationProcessingStatus, ImprovementRunStatus
+        from improvements.models import ImprovementAnalysisRun
+        from improvements.services.improvements_check_service import build_check_state_s3_key
+        from improvements.services.improvements_json_builder import (
+            build_improvements_s3_input,
+            build_improvements_s3_key,
+        )
         from improvements.tasks import start_conversations_improvements
 
         captured_document = {}
@@ -335,6 +343,18 @@ class TestConversationsCountView:
         assert result["batches"] == mock_invoke_analysis.return_value["batches"]
         assert result["metadata_passthrough"] == mock_invoke_analysis.return_value["metadata_passthrough"]
         assert result["check_schedule_key"] == "uuid:2026-02-05"
+        assert "run_uuid" in result
+
+        run = ImprovementAnalysisRun.objects.get(uuid=result["run_uuid"])
+        assert run.status == ImprovementRunStatus.POLLING
+        assert run.sample_size == 2
+        assert run.conversations_total == 2
+        assert run.batches.count() == len(mock_invoke_analysis.return_value["batches"])
+        assert (
+            run.run_conversations.filter(processing_status=ImprovementConversationProcessingStatus.PENDING).count() == 2
+        )
+        assert run.s3_build_key == build_improvements_s3_key(payload)
+        assert run.s3_state_key == build_check_state_s3_key(str(project.uuid), "2026-02-05")
 
         uploaded_document = captured_document["value"]
         assert len(uploaded_document["raw_conversations"]) == 2
@@ -369,7 +389,11 @@ class TestConversationsCountView:
             project_uuid=str(project.uuid),
             target_date="2026-02-05",
             batches=mock_invoke_analysis.return_value["batches"],
-            run_uuid=None,
+            run_uuid=result["run_uuid"],
+        )
+        mock_check_delay.assert_called_once_with(
+            project_uuid=str(project.uuid),
+            target_date="2026-02-05",
         )
 
     @patch("improvements.adapters.boto3.get_boto3_client")

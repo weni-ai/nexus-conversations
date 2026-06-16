@@ -5,13 +5,16 @@ import pendulum
 from django.conf import settings
 
 from improvements.enums import ImprovementRunStatus
+from improvements.services.analysis_persistence_service import (
+    mark_run_building,
+    persist_analysis_build_phase,
+    persist_analysis_check_result,
+)
 from improvements.services.analysis_run_service import (
+    create_analysis_run_from_payload,
     get_analysis_run_for_payload,
     mark_run_status,
-    persist_analysis_batches,
-    populate_run_conversations,
     sync_run_cancel_requested,
-    update_run_s3_keys,
 )
 from improvements.services.conversation_count_service import (
     get_conversations_sample_size_lambda,
@@ -24,11 +27,9 @@ from improvements.services.improvements_check_service import (
     build_check_state_s3_key,
     check_state_exists,
     invoke_improvements_check_lambda,
-    upload_check_state_to_s3,
 )
 from improvements.services.improvements_json_builder import (
     build_analysis_lambda_payload,
-    build_improvements_s3_key,
     generate_presigned_s3_url,
     invoke_conversations_improvements_analysis_lambda,
     upload_improvements_document_stream_to_s3,
@@ -44,10 +45,7 @@ from improvements.services.improvements_redbeat_service import (
     unregister_batch_check_schedule,
     update_run_metadata,
 )
-from improvements.services.improvements_state_ingest_service import (
-    ingest_improvements_state_data,
-    supersede_previous_active_backlog_items,
-)
+from improvements.services.improvements_state_ingest_service import supersede_previous_active_backlog_items
 from improvements.services.project_customization_service import (
     enrich_customization_for_improvements,
     get_project_customization,
@@ -73,8 +71,11 @@ def _enrich_batches_with_submitted_at(batches: list[dict[str, Any]]) -> list[dic
     return enriched
 
 
-def _resolve_db_run(payload: dict[str, Any]):
-    return get_analysis_run_for_payload(payload)
+def _resolve_or_create_db_run(payload: dict[str, Any]):
+    run = get_analysis_run_for_payload(payload)
+    if run is not None:
+        return run
+    return create_analysis_run_from_payload(payload)
 
 
 def _finalize_run_status(run, check_status: str, *, cancel_requested: bool) -> str:
@@ -124,23 +125,14 @@ def _resolve_check_state_url(project_uuid: str, target_date: str) -> str | None:
     return None
 
 
-def _persist_check_state(
-    run,
-    state_data: dict[str, Any] | None,
-    *,
-    project_uuid: str,
-    target_date: str,
-    check_status: str,
-) -> None:
-    if state_data is None:
-        return
-    upload_check_state_to_s3(state_data, project_uuid, target_date)
-    if run is not None:
-        ingest_improvements_state_data(
-            run,
-            state_data,
-            terminal=check_status in TERMINAL_STATUSES,
-        )
+def _resolve_check_run(project_uuid: str, target_date: str, metadata: dict[str, Any]):
+    return get_analysis_run_for_payload(
+        {
+            "project_uuid": project_uuid,
+            "target_date": target_date,
+            "run_uuid": metadata.get("run_uuid"),
+        },
+    )
 
 
 def _finalize_db_run_after_check(
@@ -183,10 +175,11 @@ def _sync_check_schedule(project_uuid: str, target_date: str, check_status: str)
     default_retry_delay=60,
 )
 def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str, Any]:
-    run = _resolve_db_run(payload)
+    run = None
     try:
-        if run is not None:
-            mark_run_status(run, ImprovementRunStatus.BUILDING)
+        run = _resolve_or_create_db_run(payload)
+        payload["run_uuid"] = str(run.uuid)
+        mark_run_building(run)
 
         sample_size = get_conversations_sample_size_lambda(payload)
         conversation_uuids = select_random_conversation_uuids_in_range(
@@ -195,11 +188,6 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             payload["end"],
             sample_size,
         )
-
-        if run is not None:
-            run.sample_size = sample_size
-            run.save(update_fields=["sample_size"])
-            populate_run_conversations(run, conversation_uuids)
 
         customization = enrich_customization_for_improvements(
             get_project_customization(payload["project_uuid"]),
@@ -221,26 +209,25 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
         )
         analysis_result = invoke_conversations_improvements_analysis_lambda(analysis_payload)
 
-        if run is not None:
-            persist_analysis_batches(run, analysis_result["batches"])
-            update_run_s3_keys(
-                run,
-                s3_build_key=build_improvements_s3_key(payload),
-                s3_state_key=build_check_state_s3_key(
-                    str(payload["project_uuid"]),
-                    str(payload["target_date"]),
-                ),
-            )
+        persist_analysis_build_phase(
+            run,
+            payload=payload,
+            sample_size=sample_size,
+            conversation_uuids=conversation_uuids,
+            analysis_result=analysis_result,
+        )
 
         check_schedule_key = register_batch_check_schedule(
             project_uuid=str(payload["project_uuid"]),
             target_date=str(payload["target_date"]),
             batches=analysis_result["batches"],
-            run_uuid=str(run.uuid) if run is not None else None,
+            run_uuid=str(run.uuid),
         )
 
-        if run is not None:
-            mark_run_status(run, ImprovementRunStatus.POLLING)
+        check_improvements_batches.delay(
+            project_uuid=str(payload["project_uuid"]),
+            target_date=str(payload["target_date"]),
+        )
 
         conversation_count = upload_result.get("conversation_count", len(conversation_uuids))
         result = {
@@ -252,9 +239,8 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             "batches": analysis_result["batches"],
             "metadata_passthrough": analysis_result["metadata_passthrough"],
             "check_schedule_key": check_schedule_key,
+            "run_uuid": str(run.uuid),
         }
-        if run is not None:
-            result["run_uuid"] = str(run.uuid)
         logger.info(
             "[start_conversations_improvements] Uploaded improvements JSON and invoked analysis Lambda "
             "project_uuid=%s target_date=%s sample_size=%s s3_uri=%s batch_count=%s check_schedule_key=%s run_uuid=%s",
@@ -264,7 +250,7 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             upload_result["s3_uri"],
             len(analysis_result["batches"]),
             check_schedule_key,
-            run.uuid if run is not None else None,
+            run.uuid,
         )
         return result
     except Exception as exc:
@@ -284,14 +270,13 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
     default_retry_delay=60,
 )
 def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> dict[str, Any]:
-    run = get_analysis_run_for_payload(
-        {"project_uuid": project_uuid, "target_date": target_date},
-    )
+    run = None
     try:
         metadata = _load_active_run_metadata(project_uuid, target_date)
         if metadata.get("skipped"):
             return metadata
 
+        run = _resolve_check_run(project_uuid, target_date, metadata)
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _enrich_batches_with_submitted_at(list(metadata["batches"]))
         check_payload = build_check_lambda_payload(
@@ -302,12 +287,11 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
         check_result = invoke_improvements_check_lambda(check_payload)
         check_status = check_result["status"]
 
-        _persist_check_state(
+        persist_analysis_check_result(
             run,
-            check_result.get("state_data"),
+            check_result=check_result,
             project_uuid=project_uuid,
             target_date=target_date,
-            check_status=check_status,
         )
         _finalize_db_run_after_check(
             run,

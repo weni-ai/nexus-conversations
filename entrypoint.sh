@@ -58,9 +58,10 @@ elif [[ "celery-worker" == "$1" ]]; then
         -l "${LOG_LEVEL}" \
         --autoscale=${CELERY_MAX_WORKERS},1
 elif [[ "celery-beat" == "$1" ]]; then
-    echo "Starting Celery Beat"
+    echo "Starting Celery Beat (RedBeat scheduler)"
     do_gosu "${APP_USER}:${APP_GROUP}" exec celery \
         -A "${CELERY_APP}" beat \
+        -S redbeat.RedBeatScheduler \
         -l "${LOG_LEVEL}"
 elif [[ "healthcheck-celery-worker" == "$1" ]]; then
     celery_queue="celery"

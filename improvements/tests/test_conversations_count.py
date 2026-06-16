@@ -213,6 +213,7 @@ class TestConversationsCountView:
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
+    @patch("improvements.tasks.register_batch_check_schedule", return_value="uuid:2026-02-05")
     @patch("improvements.tasks.invoke_conversations_improvements_analysis_lambda")
     @patch("improvements.tasks.generate_presigned_s3_url")
     @patch("improvements.tasks.upload_improvements_document_stream_to_s3")
@@ -227,6 +228,7 @@ class TestConversationsCountView:
         mock_upload_s3,
         mock_presign,
         mock_invoke_analysis,
+        mock_register_schedule,
         mock_get_collaborative_agents,
         project,
     ):
@@ -330,6 +332,7 @@ class TestConversationsCountView:
         assert result["s3_uri"] == f"s3://test-bucket/{s3_key}"
         assert result["batches"] == mock_invoke_analysis.return_value["batches"]
         assert result["metadata_passthrough"] == mock_invoke_analysis.return_value["metadata_passthrough"]
+        assert result["check_schedule_key"] == "uuid:2026-02-05"
 
         uploaded_document = captured_document["value"]
         assert len(uploaded_document["raw_conversations"]) == 2
@@ -360,6 +363,11 @@ class TestConversationsCountView:
         mock_get_customization.assert_called_once_with(str(project.uuid))
         mock_upload_s3.assert_called_once()
         mock_client.invoke.assert_called_once()
+        mock_register_schedule.assert_called_once_with(
+            project_uuid=str(project.uuid),
+            target_date="2026-02-05",
+            batches=mock_invoke_analysis.return_value["batches"],
+        )
 
     @patch("improvements.services.conversation_count_service.get_boto3_client")
     def test_select_random_conversations_caps_at_available_total(self, mock_get_client, project):

@@ -200,7 +200,7 @@ def generate_presigned_s3_url(bucket: str, key: str) -> str:
     )
 
 
-def _parse_analysis_lambda_response(result: Any) -> dict[str, Any]:
+def _unwrap_lambda_response_body(result: Any) -> Any:
     if isinstance(result, dict) and "body" in result:
         body = result["body"]
         if isinstance(body, str):
@@ -208,7 +208,12 @@ def _parse_analysis_lambda_response(result: Any) -> dict[str, Any]:
                 body = json.loads(body)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Analysis Lambda returned invalid JSON body: {body!r}") from exc
-        result = body
+        return body
+    return result
+
+
+def _parse_analysis_lambda_response(result: Any) -> dict[str, Any]:
+    result = _unwrap_lambda_response_body(result)
 
     if not isinstance(result, dict):
         raise ValueError(f"Analysis Lambda must return an object, got: {result!r}")
@@ -226,7 +231,7 @@ def _parse_analysis_lambda_response(result: Any) -> dict[str, Any]:
     }
 
 
-def invoke_conversations_improvements_analysis_lambda(payload: dict[str, Any]) -> dict[str, Any]:
+def invoke_improvements_lambda(payload: dict[str, Any]) -> Any:
     lambda_name = getattr(settings, "IMPROVEMENTS_ANALYSIS_LAMBDA_NAME", None)
     if not lambda_name:
         raise ValueError("IMPROVEMENTS_ANALYSIS_LAMBDA_NAME is not configured")
@@ -241,18 +246,22 @@ def invoke_conversations_improvements_analysis_lambda(payload: dict[str, Any]) -
     status_code = response.get("StatusCode")
     if status_code and status_code >= 400:
         raise RuntimeError(
-            f"Analysis Lambda invocation failed with status {status_code}",
+            f"Improvements Lambda invocation failed with status {status_code}",
         )
 
     function_error = response.get("FunctionError")
     if function_error:
         error_payload = response["Payload"].read().decode("utf-8")
         raise RuntimeError(
-            f"Analysis Lambda returned FunctionError={function_error}: {error_payload}",
+            f"Improvements Lambda returned FunctionError={function_error}: {error_payload}",
         )
 
     response_payload = response["Payload"].read()
-    result = _parse_analysis_lambda_response(json.loads(response_payload))
+    return _unwrap_lambda_response_body(json.loads(response_payload))
+
+
+def invoke_conversations_improvements_analysis_lambda(payload: dict[str, Any]) -> dict[str, Any]:
+    result = _parse_analysis_lambda_response(invoke_improvements_lambda(payload))
     logger.info(
         "[invoke_conversations_improvements_analysis_lambda] Invoked analysis Lambda "
         "project_uuid=%s target_date=%s batch_count=%s",

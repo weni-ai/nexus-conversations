@@ -9,13 +9,24 @@ from rest_framework.views import APIView
 
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.models import Project
-from improvements.serializers import ConversationsCountRequestSerializer, ConversationsCountResponseSerializer
+from improvements.serializers import (
+    ConversationsCountRequestSerializer,
+    ConversationsCountResponseSerializer,
+    ImprovementsCancelRequestSerializer,
+    ImprovementsCancelResponseSerializer,
+)
 from improvements.services.conversation_count_service import (
     build_task_payload,
     count_conversations_in_range,
     resolve_date_range,
 )
-from improvements.tasks import start_conversations_improvements
+from improvements.services.improvements_redbeat_service import (
+    TERMINAL_STATUSES,
+    RunMetadataNotFound,
+    get_run_metadata,
+    improvements_run_key,
+)
+from improvements.tasks import cancel_improvements_batches, start_conversations_improvements
 
 logger = logging.getLogger(__name__)
 
@@ -102,4 +113,63 @@ class ConversationsImprovements(APIView):
         return Response(
             ConversationsCountResponseSerializer(payload).data,
             status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    summary="Cancel an in-progress improvements batch run",
+    description=(
+        "Requests cancellation of an active improvements analysis run for the given target date. "
+        "Sets a cancel flag and triggers an immediate batch check with cancel_if_incomplete."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+    ],
+    request=ImprovementsCancelRequestSerializer,
+    responses={202: ImprovementsCancelResponseSerializer},
+)
+class ConversationsImprovementsCancel(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, project_uuid):
+        try:
+            Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        ser = ImprovementsCancelRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        target_date = ser.validated_data["target_date"]
+
+        try:
+            metadata = get_run_metadata(str(project_uuid), str(target_date))
+        except RunMetadataNotFound:
+            return Response(
+                {"detail": "No active improvements run found for the given target date."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if metadata.get("status") in TERMINAL_STATUSES:
+            return Response(
+                {"detail": "The improvements run has already completed or failed."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        cancel_improvements_batches.delay(
+            project_uuid=str(project_uuid),
+            target_date=str(target_date),
+        )
+
+        run_key = improvements_run_key(str(project_uuid), str(target_date))
+        return Response(
+            ImprovementsCancelResponseSerializer(
+                {"run_key": run_key, "cancel_requested": True},
+            ).data,
+            status=status.HTTP_202_ACCEPTED,
         )

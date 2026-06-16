@@ -52,3 +52,12 @@ class ConversationsCountResponseSerializer(serializers.Serializer):
     sampling_mode = serializers.CharField()
     total_count = serializers.IntegerField()
     target_date = serializers.CharField()
+
+
+class ImprovementsCancelRequestSerializer(serializers.Serializer):
+    target_date = serializers.CharField()
+
+
+class ImprovementsCancelResponseSerializer(serializers.Serializer):
+    run_key = serializers.CharField()
+    cancel_requested = serializers.BooleanField()

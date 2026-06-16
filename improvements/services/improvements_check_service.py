@@ -4,10 +4,9 @@ import json
 import logging
 from typing import Any
 
-from botocore.exceptions import ClientError
 from django.conf import settings
 
-from conversation_ms.adapters.aws import get_boto3_client
+from improvements.dependencies import get_improvements_dependencies
 from improvements.services.improvements_json_builder import (
     JSON_DUMP_KWARGS,
     invoke_improvements_lambda,
@@ -29,15 +28,7 @@ def build_check_state_s3_key(project_uuid: str, target_date: str) -> str:
 
 
 def check_state_exists(bucket: str, key: str) -> bool:
-    s3_client = get_boto3_client("s3", region_name=getattr(settings, "AWS_REGION", None))
-    try:
-        s3_client.head_object(Bucket=bucket, Key=key)
-        return True
-    except ClientError as exc:
-        error_code = exc.response.get("Error", {}).get("Code", "")
-        if error_code in ("404", "NoSuchKey", "NotFound"):
-            return False
-        raise
+    return get_improvements_dependencies().s3.object_exists(bucket, key)
 
 
 def upload_check_state_to_s3(
@@ -50,13 +41,12 @@ def upload_check_state_to_s3(
         raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
 
     key = build_check_state_s3_key(project_uuid, target_date)
-    s3_client = get_boto3_client("s3", region_name=getattr(settings, "AWS_REGION", None))
     body = json.dumps(state_data, **JSON_DUMP_KWARGS).encode("utf-8")
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=body,
-        ContentType="application/json",
+    get_improvements_dependencies().s3.put_object(
+        bucket,
+        key,
+        body,
+        content_type="application/json",
     )
     s3_uri = f"s3://{bucket}/{key}"
     logger.info(

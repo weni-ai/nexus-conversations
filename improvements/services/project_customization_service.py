@@ -1,16 +1,14 @@
 from typing import Any
 
-from conversation_ms.clients.nexus_client import NexusClient
-
-_nexus_client = NexusClient()
+from improvements.dependencies import get_improvements_dependencies
 
 
 def get_project_customization(project_uuid: str) -> dict[str, Any]:
-    return _nexus_client.get_project_customization(project_uuid)
+    return get_improvements_dependencies().project_data.get_project_customization(project_uuid)
 
 
 def get_collaborative_agents(project_uuid: str) -> list[dict[str, Any]]:
-    return _nexus_client.get_collaborative_agents(project_uuid)
+    return get_improvements_dependencies().project_data.get_collaborative_agents(project_uuid)
 
 
 def get_knowledge_base_placeholder(customization: dict[str, Any]) -> list[dict[str, Any]]:

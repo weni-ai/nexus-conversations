@@ -9,7 +9,7 @@ from typing import Any
 
 from django.conf import settings
 
-from conversation_ms.adapters.aws import get_boto3_client
+from improvements.dependencies import get_improvements_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ def upload_improvements_document_stream_to_s3(
         raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
 
     key = build_improvements_s3_key(payload)
-    s3_client = get_boto3_client("s3", region_name=getattr(settings, "AWS_REGION", None))
+    s3 = get_improvements_dependencies().s3
 
     with tempfile.NamedTemporaryFile(mode="w+b") as tmp:
         text_tmp = TextIOWrapper(tmp, encoding="utf-8")
@@ -159,11 +159,11 @@ def upload_improvements_document_stream_to_s3(
         finally:
             text_tmp.detach()
         tmp.seek(0)
-        s3_client.upload_fileobj(
+        s3.upload_fileobj(
             tmp,
             bucket,
             key,
-            ExtraArgs={"ContentType": "application/json"},
+            content_type="application/json",
         )
 
     s3_uri = f"s3://{bucket}/{key}"
@@ -192,11 +192,10 @@ def upload_improvements_document_to_s3(document: dict[str, Any], payload: dict[s
 
 def generate_presigned_s3_url(bucket: str, key: str) -> str:
     expiration = getattr(settings, "IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION", 3600)
-    s3_client = get_boto3_client("s3", region_name=getattr(settings, "AWS_REGION", None))
-    return s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=expiration,
+    return get_improvements_dependencies().s3.generate_presigned_get_url(
+        bucket,
+        key,
+        expires_in=expiration,
     )
 
 
@@ -232,32 +231,8 @@ def _parse_analysis_lambda_response(result: Any) -> dict[str, Any]:
 
 
 def invoke_improvements_lambda(payload: dict[str, Any]) -> Any:
-    lambda_name = getattr(settings, "IMPROVEMENTS_ANALYSIS_LAMBDA_NAME", None)
-    if not lambda_name:
-        raise ValueError("IMPROVEMENTS_ANALYSIS_LAMBDA_NAME is not configured")
-
-    lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
-    response = lambda_client.invoke(
-        FunctionName=lambda_name,
-        InvocationType="RequestResponse",
-        Payload=json.dumps(payload),
-    )
-
-    status_code = response.get("StatusCode")
-    if status_code and status_code >= 400:
-        raise RuntimeError(
-            f"Improvements Lambda invocation failed with status {status_code}",
-        )
-
-    function_error = response.get("FunctionError")
-    if function_error:
-        error_payload = response["Payload"].read().decode("utf-8")
-        raise RuntimeError(
-            f"Improvements Lambda returned FunctionError={function_error}: {error_payload}",
-        )
-
-    response_payload = response["Payload"].read()
-    return _unwrap_lambda_response_body(json.loads(response_payload))
+    raw = get_improvements_dependencies().lambda_client.invoke_improvements(payload)
+    return _unwrap_lambda_response_body(raw)
 
 
 def invoke_conversations_improvements_analysis_lambda(payload: dict[str, Any]) -> dict[str, Any]:

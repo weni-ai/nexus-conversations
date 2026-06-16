@@ -1,10 +1,9 @@
-from unittest.mock import MagicMock, patch
-
 import pytest
-from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
 
+from improvements.adapters.in_memory import InMemoryBatchCheckScheduler, build_in_memory_improvements_dependencies
+from improvements.dependencies import reset_improvements_dependencies, set_improvements_dependencies
 from improvements.services.improvements_redbeat_service import (
     RunAlreadyTerminal,
     RunMetadataNotFound,
@@ -12,6 +11,7 @@ from improvements.services.improvements_redbeat_service import (
     improvements_run_key,
     mark_cancel_requested,
     register_batch_check_schedule,
+    run_schedule_exists,
     save_run_metadata,
     unregister_batch_check_schedule,
 )
@@ -55,33 +55,32 @@ class TestRunMetadata:
 
 
 class TestRedBeatSchedule:
-    @patch("improvements.services.improvements_redbeat_service.RedBeatSchedulerEntry")
-    def test_register_batch_check_schedule(self, mock_entry_cls):
-        settings.IMPROVEMENTS_BATCH_CHECK_INTERVAL_SECONDS = 300
-        mock_entry = MagicMock()
-        mock_entry_cls.return_value = mock_entry
+    def test_register_batch_check_schedule(self):
+        scheduler = InMemoryBatchCheckScheduler()
+        set_improvements_dependencies(build_in_memory_improvements_dependencies(scheduler=scheduler))
         batches = [{"batch_id": "b1"}]
 
         run_key = register_batch_check_schedule("uuid", "2026-05-29", batches)
 
         assert run_key == improvements_run_key("uuid", "2026-05-29")
-        mock_entry.save.assert_called_once()
+        assert run_schedule_exists("uuid", "2026-05-29")
         metadata = get_run_metadata("uuid", "2026-05-29")
         assert metadata["batches"] == batches
+        reset_improvements_dependencies()
 
-    @patch("improvements.services.improvements_redbeat_service.RedBeatSchedulerEntry")
-    def test_unregister_batch_check_schedule(self, mock_entry_cls):
+    def test_unregister_batch_check_schedule(self):
+        scheduler = InMemoryBatchCheckScheduler()
+        set_improvements_dependencies(build_in_memory_improvements_dependencies(scheduler=scheduler))
         save_run_metadata("uuid", "2026-05-29", [], status="polling")
-        mock_entry = MagicMock()
-        mock_entry.key = "redbeat:improvements-batch-check:uuid:2026-05-29"
-        mock_entry_cls.return_value = mock_entry
+        register_batch_check_schedule("uuid", "2026-05-29", [])
 
         run_key = unregister_batch_check_schedule("uuid", "2026-05-29", status="completed")
 
         assert run_key == improvements_run_key("uuid", "2026-05-29")
-        mock_entry.delete.assert_called_once()
+        assert not run_schedule_exists("uuid", "2026-05-29")
         metadata = get_run_metadata("uuid", "2026-05-29")
         assert metadata["status"] == "completed"
+        reset_improvements_dependencies()
 
 
 class TestCancelTaskExceptions:

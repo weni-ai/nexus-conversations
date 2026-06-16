@@ -219,7 +219,7 @@ class TestConversationsCountView:
     @patch("improvements.tasks.upload_improvements_document_stream_to_s3")
     @patch("improvements.tasks.get_project_customization")
     @patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[])
-    @patch("improvements.services.conversation_count_service.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_start_conversations_improvements_selects_random_conversations(
         self,
         mock_get_client,
@@ -369,7 +369,7 @@ class TestConversationsCountView:
             batches=mock_invoke_analysis.return_value["batches"],
         )
 
-    @patch("improvements.services.conversation_count_service.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_select_random_conversations_caps_at_available_total(self, mock_get_client, project):
         from improvements.services.conversation_count_service import select_random_conversations_in_range
 

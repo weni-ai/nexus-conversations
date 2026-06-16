@@ -44,13 +44,13 @@ class TestBuildCheckLambdaPayload:
 
 
 class TestCheckStateExists:
-    @patch("improvements.services.improvements_check_service.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_returns_true_when_object_exists(self, mock_get_client):
         mock_s3 = mock_get_client.return_value
         mock_s3.head_object.return_value = {}
         assert check_state_exists("bucket", "key") is True
 
-    @patch("improvements.services.improvements_check_service.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_returns_false_on_404(self, mock_get_client):
         mock_s3 = mock_get_client.return_value
         mock_s3.head_object.side_effect = ClientError(
@@ -61,7 +61,7 @@ class TestCheckStateExists:
 
 
 class TestUploadCheckStateToS3:
-    @patch("improvements.services.improvements_check_service.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_uploads_json(self, mock_get_client):
         settings.IMPROVEMENTS_S3_BUCKET = "test-bucket"
         settings.IMPROVEMENTS_S3_PREFIX = "improvements"

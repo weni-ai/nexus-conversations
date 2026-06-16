@@ -128,7 +128,7 @@ class TestImprovementsJsonBuilder:
             "lambda-payloads/37e1e32b-1111-2222-3333-444444444444/2026-05-23/build_input.json"
         )
 
-    @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_upload_improvements_document_stream_to_s3(self, mock_get_client):
         settings.IMPROVEMENTS_S3_BUCKET = "nexus-improvements"
         settings.IMPROVEMENTS_S3_PREFIX = "improvements"
@@ -170,7 +170,7 @@ class TestImprovementsJsonBuilder:
         assert uploaded_payload["extra_args"] == {"ContentType": "application/json"}
         assert uploaded_payload["body"] == document
 
-    @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_upload_improvements_document_to_s3(self, mock_get_client):
         settings.IMPROVEMENTS_S3_BUCKET = "nexus-improvements"
         settings.IMPROVEMENTS_S3_PREFIX = "improvements"
@@ -201,7 +201,7 @@ class TestImprovementsJsonBuilder:
         mock_s3.upload_fileobj.assert_called_once()
         assert uploaded_payload["body"] == document
 
-    @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_generate_presigned_s3_url(self, mock_get_client):
         settings.IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION = 7200
         mock_s3 = mock_get_client.return_value
@@ -216,7 +216,7 @@ class TestImprovementsJsonBuilder:
             ExpiresIn=7200,
         )
 
-    @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_invoke_conversations_improvements_analysis_lambda(self, mock_get_client):
         settings.IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = "conversations_improvements_analisys"
         mock_lambda = mock_get_client.return_value
@@ -259,7 +259,7 @@ class TestImprovementsJsonBuilder:
             Payload=json.dumps(analysis_payload),
         )
 
-    @patch("improvements.services.improvements_json_builder.get_boto3_client")
+    @patch("improvements.adapters.boto3.get_boto3_client")
     def test_invoke_conversations_improvements_analysis_lambda_parses_body_wrapper(self, mock_get_client):
         settings.IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = "conversations_improvements_analisys"
         mock_lambda = mock_get_client.return_value

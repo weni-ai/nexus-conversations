@@ -8,10 +8,10 @@ from uuid import UUID
 import pendulum
 from django.conf import settings
 
-from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.models import Conversation, Project
 from conversation_ms.services.reconcile_cohort_export import django_utc_from_pendulum, parse_api_utc
 from conversation_ms.utils.date_helpers import ProjectDay, resolve_effective_project_timezone
+from improvements.dependencies import get_improvements_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -117,26 +117,7 @@ def get_conversations_sample_size_lambda(payload: dict[str, Any]) -> int:
     if not lambda_arn:
         raise ValueError("GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN is not configured")
 
-    lambda_payload = {key: payload[key] for key in LAMBDA_PAYLOAD_KEYS}
-    lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
-    response = lambda_client.invoke(
-        FunctionName=lambda_arn,
-        InvocationType="RequestResponse",
-        Payload=json.dumps(lambda_payload),
-    )
-
-    status_code = response.get("StatusCode")
-    if status_code and status_code >= 400:
-        raise RuntimeError(f"Lambda invocation failed with status {status_code}")
-
-    function_error = response.get("FunctionError")
-    if function_error:
-        error_payload = response["Payload"].read().decode("utf-8")
-        raise RuntimeError(f"Lambda returned FunctionError={function_error}: {error_payload}")
-
-    response_payload = response["Payload"].read()
-    result = json.loads(response_payload)
-    return _parse_lambda_sample_size(result)
+    return get_improvements_dependencies().lambda_client.invoke_sample_size(payload)
 
 
 def _conversations_in_range_queryset(

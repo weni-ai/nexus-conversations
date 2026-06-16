@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 from typing import Any
 
-from celery.schedules import schedule
 from django.conf import settings
 from django.core.cache import cache
-from redbeat import RedBeatSchedulerEntry
 
-from nexus_conversations.celery import app as celery_app
+from improvements.dependencies import get_improvements_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +29,6 @@ def improvements_run_key(project_uuid: str, target_date: str) -> str:
 
 def _metadata_cache_key(project_uuid: str, target_date: str) -> str:
     return f"{RUN_METADATA_KEY_PREFIX}:{improvements_run_key(project_uuid, target_date)}"
-
-
-def _redbeat_entry_name(run_key: str) -> str:
-    return f"improvements-batch-check:{run_key}"
 
 
 def save_run_metadata(
@@ -83,13 +76,7 @@ def mark_cancel_requested(project_uuid: str, target_date: str) -> dict[str, Any]
 
 
 def run_schedule_exists(project_uuid: str, target_date: str) -> bool:
-    run_key = improvements_run_key(project_uuid, target_date)
-    entry = RedBeatSchedulerEntry(
-        name=_redbeat_entry_name(run_key),
-        task="improvements.tasks.check_improvements_batches",
-        app=celery_app,
-    )
-    return bool(entry.key)
+    return get_improvements_dependencies().scheduler.exists(project_uuid, target_date)
 
 
 def register_batch_check_schedule(
@@ -101,17 +88,15 @@ def register_batch_check_schedule(
     save_run_metadata(project_uuid, target_date, batches)
 
     interval = getattr(settings, "IMPROVEMENTS_BATCH_CHECK_INTERVAL_SECONDS", 300)
-    entry = RedBeatSchedulerEntry(
-        name=_redbeat_entry_name(run_key),
-        task="improvements.tasks.check_improvements_batches",
-        schedule=schedule(run_every=timedelta(seconds=interval)),
-        kwargs={
+    get_improvements_dependencies().scheduler.register(
+        project_uuid,
+        target_date,
+        task_kwargs={
             "project_uuid": str(project_uuid),
             "target_date": str(target_date),
         },
-        app=celery_app,
+        interval_seconds=interval,
     )
-    entry.save()
     logger.info(
         "[register_batch_check_schedule] Registered batch check schedule run_key=%s interval_seconds=%s",
         run_key,
@@ -127,18 +112,12 @@ def unregister_batch_check_schedule(
     status: str = "completed",
 ) -> str:
     run_key = improvements_run_key(project_uuid, target_date)
-    entry = RedBeatSchedulerEntry(
-        name=_redbeat_entry_name(run_key),
-        task="improvements.tasks.check_improvements_batches",
-        app=celery_app,
+    get_improvements_dependencies().scheduler.unregister(project_uuid, target_date)
+    logger.info(
+        "[unregister_batch_check_schedule] Removed batch check schedule run_key=%s status=%s",
+        run_key,
+        status,
     )
-    if entry.key:
-        entry.delete()
-        logger.info(
-            "[unregister_batch_check_schedule] Removed batch check schedule run_key=%s status=%s",
-            run_key,
-            status,
-        )
 
     try:
         metadata = get_run_metadata(project_uuid, target_date)

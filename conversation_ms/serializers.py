@@ -385,6 +385,10 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
     Query params for GET ``/api/v1/projects/<uuid>/reconcile-cohort/`` (internal, nexus-ai).
 
     Returns DB conversations matching reconcile cohort rules for the window.
+
+    When ``date_start`` / ``date_end`` use calendar-day semantics (``YYYY-MM-DD`` or
+    ``YYYY-MM-DDT00:00:00Z`` / ``YYYY-MM-DDT23:59:59Z``), bounds are rewritten to the
+    project's timezone before querying.
     """
 
     date_start = serializers.CharField()
@@ -392,28 +396,39 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
 
     def validate(self, attrs):
-        from conversation_ms.services.reconcile_cohort_export import (
-            parse_api_utc,
-            validate_reconcile_window_seconds,
-        )
+        from conversation_ms.services.reconcile_cohort_export import parse_api_utc, validate_reconcile_window_seconds
+        from conversation_ms.services.reconcile_window import calendar_range_day_count, parse_requested_calendar_range
 
-        try:
-            start_bound = parse_api_utc(str(attrs["date_start"]).strip())
-        except ValueError as e:
-            raise serializers.ValidationError({"date_start": str(e)}) from e
-
+        start_raw = str(attrs["date_start"]).strip()
         end_raw = str(attrs["date_end"]).strip()
         try:
-            end_bound = parse_api_utc(end_raw)
+            cal_range = parse_requested_calendar_range(start_raw, end_raw)
         except ValueError as e:
             raise serializers.ValidationError({"date_end": str(e)}) from e
 
-        try:
-            validate_reconcile_window_seconds(start_bound, end_bound)
-        except ValueError as e:
-            raise serializers.ValidationError({"date_end": str(e)}) from e
+        if cal_range is not None:
+            cal_start, cal_end = cal_range
+            if calendar_range_day_count(cal_start, cal_end) > 1:
+                raise serializers.ValidationError(
+                    {"date_end": "Reconcile cohort export supports one project calendar day per request"}
+                )
+        else:
+            try:
+                start_bound = parse_api_utc(start_raw)
+            except ValueError as e:
+                raise serializers.ValidationError({"date_start": str(e)}) from e
 
-        attrs["date_start"] = str(attrs["date_start"]).strip()
+            try:
+                end_bound = parse_api_utc(end_raw)
+            except ValueError as e:
+                raise serializers.ValidationError({"date_end": str(e)}) from e
+
+            try:
+                validate_reconcile_window_seconds(start_bound, end_bound)
+            except ValueError as e:
+                raise serializers.ValidationError({"date_end": str(e)}) from e
+
+        attrs["date_start"] = start_raw
         attrs["date_end"] = end_raw
         return attrs
 

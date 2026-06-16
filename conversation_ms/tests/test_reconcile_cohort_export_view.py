@@ -73,6 +73,33 @@ class TestReconcileCohortExportView:
         uuids = {row["uuid"] for row in response.data["conversations"]}
         assert str(conv.uuid) in uuids
 
+    def test_interprets_calendar_day_in_project_timezone(self, api_client, auth_headers):
+        project = Project.objects.create(name="TZ Project", timezone="America/Sao_Paulo")
+        start = datetime(2026, 6, 14, 15, 0, 0, tzinfo=dt_tz.utc)
+        end = datetime(2026, 6, 15, 2, 59, 59, 999999, tzinfo=dt_tz.utc)
+        conv = Conversation.objects.create(
+            project=project,
+            contact_urn="whatsapp:+5511888888888",
+            resolution="0",
+            start_date=start,
+            end_date=end,
+        )
+        url = reverse("project-reconcile-cohort-export", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(
+            url,
+            {
+                "date_start": "2026-06-14T00:00:00Z",
+                "date_end": "2026-06-14T23:59:59Z",
+            },
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["conversations_inside_date_rules"] == 1
+        assert response.data["selected_date_range"]["project_timezone"] == "America/Sao_Paulo"
+        assert response.data["selected_date_range"]["calendar_day"] == "2026-06-14"
+        uuids = {row["uuid"] for row in response.data["conversations"]}
+        assert str(conv.uuid) in uuids
+
     def test_rejects_window_over_24h(self, api_client, project, auth_headers):
         url = reverse("project-reconcile-cohort-export", kwargs={"project_uuid": project.uuid})
         response = api_client.get(

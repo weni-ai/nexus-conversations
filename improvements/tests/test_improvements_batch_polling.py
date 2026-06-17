@@ -1,5 +1,3 @@
-from datetime import datetime
-from datetime import timezone as dt_tz
 from unittest.mock import patch
 
 import pytest
@@ -22,6 +20,7 @@ from improvements.models import (
 )
 from improvements.services.improvements_redbeat_service import save_run_metadata
 from improvements.tasks import cancel_improvements_batches, check_improvements_batches
+from improvements.utils.time import utc_datetime
 
 
 def _build_state_data(conversation_uuid: str) -> dict:
@@ -141,8 +140,8 @@ class TestCheckImprovementsBatchesTask:
         project = Project.objects.create(name="Polling Project", timezone="UTC")
         conversation = Conversation.objects.create(
             project=project,
-            start_date=datetime(2026, 5, 29, 12, 0, 0, tzinfo=dt_tz.utc),
-            end_date=datetime(2026, 5, 29, 13, 0, 0, tzinfo=dt_tz.utc),
+            start_date=utc_datetime(2026, 5, 29, 12),
+            end_date=utc_datetime(2026, 5, 29, 13),
         )
         run = ImprovementAnalysisRun.objects.create(
             project=project,
@@ -151,8 +150,8 @@ class TestCheckImprovementsBatchesTask:
             status=ImprovementRunStatus.POLLING,
             sample_size=1,
             conversations_total=1,
-            range_start_utc=datetime(2026, 5, 29, 0, 0, 0, tzinfo=dt_tz.utc),
-            range_end_utc=datetime(2026, 5, 29, 23, 59, 59, tzinfo=dt_tz.utc),
+            range_start_utc=utc_datetime(2026, 5, 29),
+            range_end_utc=utc_datetime(2026, 5, 29, 23, 59, 59),
         )
         ImprovementRunConversation.objects.create(
             run=run,

@@ -12,6 +12,20 @@ def utc_now():
     return django_utc_from_pendulum(pendulum.now("UTC"))
 
 
+def utc_datetime(
+    year: int,
+    month: int,
+    day: int,
+    hour: int = 0,
+    minute: int = 0,
+    second: int = 0,
+):
+    """Build a Django-compatible UTC datetime from calendar parts via pendulum."""
+    return django_utc_from_pendulum(
+        pendulum.datetime(year, month, day, hour, minute, second, tz="UTC"),
+    )
+
+
 def parse_to_django_utc(value: Any):
     """Parse ISO strings or pendulum datetimes into Django UTC datetimes."""
     if value is None:

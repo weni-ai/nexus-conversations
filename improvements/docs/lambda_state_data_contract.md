@@ -3,6 +3,29 @@
 This document describes the expected `state_data` payload returned by the improvements
 analysis Lambda during `check` actions (`partial` and `completed` statuses).
 
+## Pipeline persistence phases
+
+### Start phase (`start_conversations_improvements`)
+
+After sampling and invoking the build Lambda, `persist_analysis_build_phase()` in
+[`improvements/services/analysis_persistence_service.py`](../services/analysis_persistence_service.py)
+persists:
+
+- Run status: `building` → `polling`
+- `sample_size`, `conversations_total`, `sampling_mode`, `population_n` (when returned in `metadata_passthrough`)
+- `ImprovementRunConversation` rows (one per sampled UUID, status `pending`)
+- `ImprovementAnalysisBatch` rows from build `batches`
+- `s3_build_key` and `s3_state_key`
+
+Build responses do **not** include `state_data`; backlog ingestion happens only during check polling.
+
+An immediate `check_improvements_batches` task is enqueued after registering the RedBeat schedule.
+
+### Check phase (`check_improvements_batches`)
+
+During `partial` and `completed` checks, `persist_analysis_check_result()` uploads `state_data` to S3
+and calls `ingest_improvements_state_data()` to update run progress, conversation results, and backlog items.
+
 ## Overview
 
 `nexus-conversations` polls the analysis Lambda and persists incremental results into

@@ -14,6 +14,7 @@ from improvements.serializers import (
     ConversationsCountResponseSerializer,
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
+    ImprovementsListResponseSerializer,
 )
 from improvements.services.analysis_run_service import AnalysisRunAlreadyExistsError, create_analysis_run
 from improvements.services.conversation_count_service import (
@@ -21,6 +22,7 @@ from improvements.services.conversation_count_service import (
     count_conversations_in_range,
     resolve_date_range,
 )
+from improvements.services.improvements_list_service import list_project_improvements
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
     RunMetadataNotFound,
@@ -187,4 +189,37 @@ class ConversationsImprovementsCancel(APIView):
                 {"run_key": run_key, "cancel_requested": True},
             ).data,
             status=status.HTTP_202_ACCEPTED,
+        )
+
+
+@extend_schema(
+    summary="List active improvement backlog items for a project",
+    description=(
+        "Returns active native-dimension backlog items for the project, plus an aggregated "
+        "amazing_conversation entry when the associated analysis run has amazing conversations."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+    ],
+    responses={200: ImprovementsListResponseSerializer},
+)
+class ProjectImprovementsList(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, project_uuid):
+        try:
+            Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        payload = list_project_improvements(project_uuid)
+        return Response(
+            ImprovementsListResponseSerializer(payload).data,
+            status=status.HTTP_200_OK,
         )

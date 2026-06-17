@@ -61,3 +61,24 @@ class ImprovementsCancelRequestSerializer(serializers.Serializer):
 class ImprovementsCancelResponseSerializer(serializers.Serializer):
     run_key = serializers.CharField()
     cancel_requested = serializers.BooleanField()
+
+
+class ImprovementListItemSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    text = serializers.CharField()
+    type = serializers.ChoiceField(
+        choices=[
+            "brand_voice_mismatch",
+            "many_questions_before_answering",
+            "missing_static_knowledge",
+            "instruction_non_compliance",
+            "catalog_search_mismatch",
+            "amazing_conversation",
+        ],
+    )
+    conversations_count = serializers.IntegerField(min_value=0)
+
+
+class ImprovementsListResponseSerializer(serializers.Serializer):
+    improvements_count = serializers.IntegerField(min_value=0)
+    improvements = ImprovementListItemSerializer(many=True)

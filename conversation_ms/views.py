@@ -365,7 +365,8 @@ class ConversationExportCsvView(APIView):
     description=(
         "Internal read-only export for nexus-ai. Returns conversation UUIDs with start_date and "
         "end_date for rows whose bounds fall inside the requested window (optional terminal-classification "
-        "filter). Does not call Flows. One window per request (at most 24 hours, UTC)."
+        "filter). Does not call Flows. One window per request (at most 24 hours). "
+        "Calendar-day inputs are interpreted in the project's timezone."
     ),
     parameters=[
         OpenApiParameter(
@@ -389,7 +390,8 @@ class ReconcileCohortExportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, project_uuid):
-        if not Project.objects.filter(uuid=project_uuid).exists():
+        project = Project.objects.filter(uuid=project_uuid).first()
+        if project is None:
             raise NotFound(detail="Project not found")
 
         ser = ReconcileCohortExportQuerySerializer(data=request.query_params)
@@ -397,6 +399,7 @@ class ReconcileCohortExportView(APIView):
         data = ser.validated_data
 
         from conversation_ms.services.reconcile_cohort_export import export_reconcile_cohort
+        from conversation_ms.services.reconcile_window import resolve_reconcile_cfg_dates
 
         cfg = {
             "project": str(project_uuid),
@@ -405,6 +408,7 @@ class ReconcileCohortExportView(APIView):
             "use_date_end": True,
             "apply_terminal_cohort_filter": data["apply_terminal_cohort_filter"],
         }
+        cfg = resolve_reconcile_cfg_dates(cfg, project.timezone)
         try:
             payload = export_reconcile_cohort(cfg)
         except ValueError as e:

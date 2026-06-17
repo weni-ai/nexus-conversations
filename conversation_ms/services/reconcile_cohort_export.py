@@ -104,6 +104,14 @@ def export_reconcile_cohort(cfg: dict[str, Any]) -> dict[str, Any]:
             "from_inclusive": cfg["date_start"],
             "to_inclusive": cfg["date_end"],
             "applies_end_date_cutoff": bool(cfg.get("use_date_end", True)),
+            "project_timezone": cfg.get("project_timezone"),
+            "calendar_day": cfg.get("_calendar_day")
+            or (
+                cfg.get("_calendar_range")[0].isoformat()
+                if cfg.get("_calendar_range") and cfg["_calendar_range"][0] == cfg["_calendar_range"][1]
+                else None
+            ),
+            "interpreted_as_project_calendar_days": bool(cfg.get("_interpreted_as_project_calendar_days")),
         },
         "conversations_inside_date_rules": len(rows),
         "date_matching_rule_description": "both_conversation_start_and_end_inside_config_window",

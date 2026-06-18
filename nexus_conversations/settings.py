@@ -264,6 +264,22 @@ LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")
 
 DATALAKE_FEATURE_FLAG = env.list("DATALAKE_FEATURE_FLAG", default=[])
 
+# EDA / AMQP Configuration (RabbitMQ / AmazonMQ)
+EDA_BROKER_HOST = env.str("EDA_BROKER_HOST", default="localhost")
+EDA_BROKER_PORT = env.int("EDA_BROKER_PORT", default=5672)
+EDA_BROKER_USER = env.str("EDA_BROKER_USER", default="guest")
+EDA_BROKER_PASSWORD = env.str("EDA_BROKER_PASSWORD", default="guest")
+EDA_VIRTUAL_HOST = env.str("EDA_VIRTUAL_HOST", default="/")
+
+EDA_CONNECTION_BACKEND = env.str(
+    "EDA_CONNECTION_BACKEND",
+    default="conversation_ms.eda.connection.AMQPConnectionBackend",
+)
+EDA_CONSUMERS_HANDLE = env.str(
+    "EDA_CONSUMERS_HANDLE",
+    default="conversation_ms.eda.consumers.handle_consumers",
+)
+
 
 JWT_PUBLIC_KEY_ENV = env.str("JWT_PUBLIC_KEY", default="")
 if JWT_PUBLIC_KEY_ENV:

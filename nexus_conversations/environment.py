@@ -25,4 +25,10 @@ env = environ.Env(
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
     JWT_PUBLIC_KEY=(str, ""),
+    # EDA / AMQP broker
+    EDA_BROKER_HOST=(str, "localhost"),
+    EDA_BROKER_PORT=(int, 5672),
+    EDA_BROKER_USER=(str, "guest"),
+    EDA_BROKER_PASSWORD=(str, "guest"),
+    EDA_VIRTUAL_HOST=(str, "/"),
 )

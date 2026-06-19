@@ -9,6 +9,7 @@ Include application logs as well:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 
@@ -35,8 +36,17 @@ from improvements.dependencies import (
     reset_improvements_dependencies,
     set_improvements_dependencies,
 )
+from improvements.enums import ImprovementConversationProcessingStatus, ImprovementRunStatus
+from improvements.models import (
+    ImprovementAnalysisRun,
+    ImprovementBacklogItem,
+    ImprovementBacklogItemConversation,
+)
 from improvements.services.improvements_check_service import build_check_state_s3_key
-from improvements.services.improvements_json_builder import build_improvements_s3_key
+from improvements.services.improvements_json_builder import (
+    build_conversations_s3_key,
+    build_customization_s3_key,
+)
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
     get_run_metadata,
@@ -100,6 +110,55 @@ def _log_lambda_invocations(lambda_client: ScriptedLambdaClient, *, label: str) 
             action,
             payload.get("cancel_if_incomplete") if isinstance(payload, dict) else None,
         )
+
+
+def _build_e2e_state_data(
+    conversation_uuids: list[str],
+    *,
+    include_backlog: bool = True,
+) -> dict:
+    conversation_results = [
+        {
+            "conversation_uuid": conversation_uuid,
+            "is_amazing_conversation": False,
+            "processing_status": "completed",
+            "dimension_results": [
+                {
+                    "dimension_id": "missing_static_knowledge",
+                    "problem_exists": True,
+                    "confidence_score": 0.72,
+                    "evidence": [],
+                }
+            ],
+        }
+        for conversation_uuid in conversation_uuids
+    ]
+    state_data: dict = {
+        "conversations_processed": len(conversation_uuids),
+        "conversations_total": len(conversation_uuids),
+        "conversation_results": conversation_results,
+        "backlog_items": [],
+    }
+    if include_backlog and conversation_uuids:
+        state_data["backlog_items"] = [
+            {
+                "dimension_id": "missing_static_knowledge",
+                "title": "Missing policy info",
+                "diagnosis": "The agent did not mention the return policy.",
+                "suggested_solution": {
+                    "kind": "knowledge_gap",
+                    "summary": "Add return policy to knowledge base.",
+                },
+                "affected_conversations": [
+                    {
+                        "conversation_uuid": conversation_uuids[0],
+                        "confidence_score": 0.72,
+                        "evidence": [],
+                    }
+                ],
+            }
+        ]
+    return state_data
 
 
 def _create_conversations_with_messages(project: Project, count: int = 5) -> None:
@@ -210,8 +269,6 @@ class TestImprovementsE2E:
             check_responses=deque(
                 [
                     {"status": "in_progress"},
-                    {"status": "partial", "state_data": {"classifications": [{"id": "c1"}]}},
-                    {"status": "completed"},
                 ],
             ),
         )
@@ -254,26 +311,70 @@ class TestImprovementsE2E:
         assert metadata["status"] == "polling"
         assert run_schedule_exists(str(project.uuid), target_date)
 
-        build_key = build_improvements_s3_key(payload)
-        assert s3.object_exists(settings.IMPROVEMENTS_S3_BUCKET, build_key)
-        build_document = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, build_key)
-        logger.info(
-            "[E2E s3] build_input uploaded key=%s conversation_count=%s",
-            build_key,
-            len(build_document["raw_conversations"]),
+        run = ImprovementAnalysisRun.objects.get(project=project, target_date=target_date)
+        assert run.status == ImprovementRunStatus.POLLING
+        assert run.sample_size == 2
+        assert run.conversations_total == 2
+        assert run.batches.exists()
+        assert (
+            run.run_conversations.filter(processing_status=ImprovementConversationProcessingStatus.PENDING).count() == 2
         )
-        assert len(build_document["raw_conversations"]) == 2
-        assert build_document["customization"]["knowledge_base"] == knowledge_base_chunks
+
+        sampled_uuids = [str(item.conversation_id) for item in run.run_conversations.order_by("conversation_id")]
+        lambda_client.check_responses.append(
+            {
+                "status": "partial",
+                "state_data": _build_e2e_state_data([sampled_uuids[0]], include_backlog=False),
+            },
+        )
+        lambda_client.check_responses.append(
+            {
+                "status": "completed",
+                "state_data": _build_e2e_state_data(sampled_uuids, include_backlog=True),
+            },
+        )
+
+        build_key = build_conversations_s3_key(payload)
+        customization_key = build_customization_s3_key(payload)
+        assert s3.object_exists(settings.IMPROVEMENTS_S3_BUCKET, build_key)
+        assert s3.object_exists(settings.IMPROVEMENTS_S3_BUCKET, customization_key)
+        conversations_raw = s3.get_object_bytes(settings.IMPROVEMENTS_S3_BUCKET, build_key)
+        assert conversations_raw is not None
+        conversations = [json.loads(line) for line in conversations_raw.decode("utf-8").splitlines() if line.strip()]
+        customization_artifact = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, customization_key)
+        logger.info(
+            "[E2E s3] build artifacts uploaded conversations_key=%s customization_key=%s conversation_count=%s",
+            build_key,
+            customization_key,
+            len(conversations),
+        )
+        assert len(conversations) == 2
+        assert conversations[0]["kb_chunk_ids"] == []
+        assert "knowledge_base" not in customization_artifact["customization"]
+        assert customization_artifact["kb_chunks_dict"] == {}
 
         final_metadata = _run_polling_until_terminal(str(project.uuid), target_date)
 
         assert final_metadata["status"] == "completed"
         assert not run_schedule_exists(str(project.uuid), target_date)
 
+        run.refresh_from_db()
+        assert run.status == ImprovementRunStatus.COMPLETED
+        assert run.conversations_processed == 2
+        assert ImprovementBacklogItem.objects.filter(run=run, status="active").count() == 1
+        backlog_item = ImprovementBacklogItem.objects.get(run=run, status="active")
+        assert backlog_item.dimension_id == "missing_static_knowledge"
+        assert ImprovementBacklogItemConversation.objects.filter(backlog_item=backlog_item).count() == 1
+        assert (
+            run.run_conversations.filter(processing_status=ImprovementConversationProcessingStatus.COMPLETED).count()
+            == 2
+        )
+
         check_key = build_check_state_s3_key(str(project.uuid), target_date)
         check_state = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, check_key)
         logger.info("[E2E s3] check_state uploaded key=%s body=%s", check_key, check_state)
-        assert check_state == {"classifications": [{"id": "c1"}]}
+        assert check_state["conversation_results"]
+        assert check_state["backlog_items"]
 
         check_invocations = [
             item["payload"]
@@ -322,11 +423,6 @@ class TestImprovementsE2E:
         )
         _log_api_response("conversations-count", count_response)
         assert count_response.status_code == status.HTTP_200_OK
-
-        _log_step("cancel_path", "Running first manual check")
-        first_check = check_improvements_batches.run(project_uuid=str(project.uuid), target_date=target_date)
-        logger.info("[E2E cancel_path] first_check result=%s", first_check)
-        assert first_check["status"] == "in_progress"
         assert get_run_metadata(str(project.uuid), target_date)["status"] == "polling"
 
         _log_step("cancel_path", "POST improvements/cancel")

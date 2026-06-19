@@ -10,6 +10,7 @@ from typing import Any
 from django.conf import settings
 
 from improvements.dependencies import get_improvements_dependencies
+from improvements.services.project_customization_service import build_customization_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,8 @@ def build_improvements_s3_input(
 
 def build_analysis_lambda_payload(
     *,
-    input_url: str,
+    conversations_url: str,
+    customization_url: str,
     project_name: str,
     project_uuid: str,
     target_date: str,
@@ -91,7 +93,8 @@ def build_analysis_lambda_payload(
     metadata_mode = SAMPLING_METADATA_MODE_BY_SAMPLING_MODE.get(sampling_mode, sampling_mode)
     return {
         "action": DEFAULT_ACTION,
-        "input_url": input_url,
+        "conversations_url": conversations_url,
+        "customization_url": customization_url,
         "metadata_passthrough": {
             "project_name": project_name,
             "project_uuid": project_uuid,
@@ -106,14 +109,40 @@ def build_analysis_lambda_payload(
     }
 
 
-def build_improvements_s3_key(payload: dict[str, Any]) -> str:
+def _build_improvements_s3_key(payload: dict[str, Any], filename: str) -> str:
     prefix = getattr(settings, "IMPROVEMENTS_S3_PREFIX", "improvements").strip("/")
     project_uuid = str(payload["project_uuid"])
     target_date = str(payload["target_date"])
-    key_parts = [project_uuid, target_date, "build_input.json"]
+    key_parts = [project_uuid, target_date, filename]
     if prefix:
         return f"{prefix}/{'/'.join(key_parts)}"
     return "/".join(key_parts)
+
+
+def build_conversations_s3_key(payload: dict[str, Any]) -> str:
+    return _build_improvements_s3_key(payload, "conversations.jsonl")
+
+
+def build_customization_s3_key(payload: dict[str, Any]) -> str:
+    return _build_improvements_s3_key(payload, "customization.json")
+
+
+def build_improvements_s3_key(payload: dict[str, Any]) -> str:
+    """Legacy alias: returns conversations.jsonl key (s3_build_key)."""
+    return build_conversations_s3_key(payload)
+
+
+def stream_conversations_jsonl_to_file(
+    file_obj,
+    conversations: Iterable[dict[str, Any]],
+) -> int:
+    count = 0
+    for conversation in conversations:
+        if count:
+            file_obj.write("\n")
+        json.dump(conversation, file_obj, **JSON_DUMP_KWARGS)
+        count += 1
+    return count
 
 
 def stream_improvements_s3_input_to_file(
@@ -137,6 +166,85 @@ def stream_improvements_s3_input_to_file(
     json.dump(customization, file_obj, **JSON_DUMP_KWARGS)
     file_obj.write("}")
     return count
+
+
+def _upload_fileobj_to_s3(
+    *,
+    fileobj,
+    bucket: str,
+    key: str,
+    content_type: str,
+) -> None:
+    s3 = get_improvements_dependencies().s3
+    s3.upload_fileobj(
+        fileobj,
+        bucket,
+        key,
+        content_type=content_type,
+    )
+
+
+def upload_improvements_build_artifacts_to_s3(
+    customization: dict[str, Any],
+    normalized_conversations: Iterable[dict[str, Any]],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    bucket = getattr(settings, "IMPROVEMENTS_S3_BUCKET", "")
+    if not bucket:
+        raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
+
+    conversations_key = build_conversations_s3_key(payload)
+    customization_key = build_customization_s3_key(payload)
+    conversations_list = list(normalized_conversations)
+    customization_artifact = build_customization_artifact(customization, conversations_list)
+
+    with tempfile.NamedTemporaryFile(mode="w+b") as conversations_tmp:
+        conversations_text = TextIOWrapper(conversations_tmp, encoding="utf-8")
+        try:
+            conversation_count = stream_conversations_jsonl_to_file(conversations_text, conversations_list)
+            conversations_text.flush()
+        finally:
+            conversations_text.detach()
+        conversations_tmp.seek(0)
+        _upload_fileobj_to_s3(
+            fileobj=conversations_tmp,
+            bucket=bucket,
+            key=conversations_key,
+            content_type="application/x-ndjson",
+        )
+
+    with tempfile.NamedTemporaryFile(mode="w+b") as customization_tmp:
+        customization_text = TextIOWrapper(customization_tmp, encoding="utf-8")
+        try:
+            json.dump(customization_artifact, customization_text, **JSON_DUMP_KWARGS)
+            customization_text.flush()
+        finally:
+            customization_text.detach()
+        customization_tmp.seek(0)
+        _upload_fileobj_to_s3(
+            fileobj=customization_tmp,
+            bucket=bucket,
+            key=customization_key,
+            content_type="application/json",
+        )
+
+    s3_uri = f"s3://{bucket}/{conversations_key}"
+    logger.info(
+        "[upload_improvements_build_artifacts_to_s3] Uploaded build artifacts "
+        "project_uuid=%s conversations_key=%s customization_key=%s conversation_count=%s",
+        payload.get("project_uuid"),
+        conversations_key,
+        customization_key,
+        conversation_count,
+    )
+    return {
+        "s3_uri": s3_uri,
+        "bucket": bucket,
+        "conversations_key": conversations_key,
+        "customization_key": customization_key,
+        "key": conversations_key,
+        "conversation_count": conversation_count,
+    }
 
 
 def upload_improvements_document_stream_to_s3(

@@ -3,7 +3,10 @@ from unittest.mock import patch
 import pytest
 from django.test import override_settings
 
-from improvements.services.project_customization_service import enrich_customization_for_improvements
+from improvements.services.project_customization_service import (
+    build_customization_for_lambda_upload,
+    enrich_customization_for_improvements,
+)
 
 
 @pytest.mark.django_db
@@ -29,6 +32,26 @@ class TestProjectCustomizationService:
         assert result["knowledge_base"] == []
         mock_get_collaborative_agents.assert_called_once_with(project_uuid)
         mock_get_knowledge_base_chunks.assert_called_once_with(project_uuid)
+
+    @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
+    @patch("improvements.services.project_customization_service.get_project_customization")
+    def test_build_customization_for_lambda_upload_excludes_knowledge_base(
+        self,
+        mock_get_project_customization,
+        mock_get_collaborative_agents,
+    ):
+        project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
+        mock_get_project_customization.return_value = {
+            "agent": {"name": "Taina"},
+            "instructions": [],
+        }
+
+        result = build_customization_for_lambda_upload(project_uuid)
+
+        assert result["agent"] == {"name": "Taina"}
+        assert result["collaborative_agents"] == []
+        assert "knowledge_base" not in result
+        mock_get_collaborative_agents.assert_called_once_with(project_uuid)
 
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
     @patch("improvements.services.project_customization_service.get_knowledge_base_chunks")

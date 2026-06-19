@@ -8,8 +8,59 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from conversation_ms.models import Conversation, Project
+from improvements.enums import (
+    ImprovementConversationProcessingStatus,
+    ImprovementRunStatus,
+)
+from improvements.models import (
+    ImprovementAnalysisRun,
+    ImprovementBacklogItem,
+    ImprovementRunConversation,
+)
 from improvements.services.improvements_redbeat_service import save_run_metadata
 from improvements.tasks import cancel_improvements_batches, check_improvements_batches
+from improvements.utils.time import utc_datetime
+
+
+def _build_state_data(conversation_uuid: str) -> dict:
+    return {
+        "conversations_processed": 1,
+        "conversations_total": 1,
+        "conversation_results": [
+            {
+                "conversation_uuid": conversation_uuid,
+                "is_amazing_conversation": False,
+                "processing_status": "completed",
+                "dimension_results": [
+                    {
+                        "dimension_id": "missing_static_knowledge",
+                        "problem_exists": True,
+                        "confidence_score": 0.72,
+                        "evidence": [],
+                    }
+                ],
+            }
+        ],
+        "backlog_items": [
+            {
+                "dimension_id": "missing_static_knowledge",
+                "title": "Missing policy info",
+                "diagnosis": "The agent did not mention the return policy.",
+                "suggested_solution": {
+                    "kind": "knowledge_gap",
+                    "summary": "Add return policy to knowledge base.",
+                },
+                "affected_conversations": [
+                    {
+                        "conversation_uuid": conversation_uuid,
+                        "confidence_score": 0.72,
+                        "evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +85,7 @@ class TestCheckImprovementsBatchesTask:
         save_run_metadata("uuid", "2026-05-29", [{"batch_id": "b1"}])
         mock_invoke.return_value = {"status": "completed", "state_data": {"classifications": []}}
 
-        with patch("improvements.tasks.upload_check_state_to_s3") as mock_upload:
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3") as mock_upload:
             result = check_improvements_batches.run(project_uuid="uuid", target_date="2026-05-29")
 
         assert result["status"] == "completed"
@@ -75,12 +126,64 @@ class TestCheckImprovementsBatchesTask:
         save_run_metadata("uuid", "2026-05-29", [{"batch_id": "b1"}])
         mock_invoke.return_value = {"status": "partial", "state_data": {"classifications": []}}
 
-        with patch("improvements.tasks.upload_check_state_to_s3") as mock_upload:
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3") as mock_upload:
             result = check_improvements_batches.run(project_uuid="uuid", target_date="2026-05-29")
 
         assert result["status"] == "partial"
         mock_upload.assert_called_once()
         mock_unregister.assert_not_called()
+
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_completed_persists_backlog_and_run_conversation(self, mock_exists, mock_invoke, mock_unregister):
+        project = Project.objects.create(name="Polling Project", timezone="UTC")
+        conversation = Conversation.objects.create(
+            project=project,
+            start_date=utc_datetime(2026, 5, 29, 12),
+            end_date=utc_datetime(2026, 5, 29, 13),
+        )
+        run = ImprovementAnalysisRun.objects.create(
+            project=project,
+            target_date="2026-05-29",
+            triggered_on_date="2026-05-30",
+            status=ImprovementRunStatus.POLLING,
+            sample_size=1,
+            conversations_total=1,
+            range_start_utc=utc_datetime(2026, 5, 29),
+            range_end_utc=utc_datetime(2026, 5, 29, 23, 59, 59),
+        )
+        ImprovementRunConversation.objects.create(
+            run=run,
+            conversation=conversation,
+            processing_status=ImprovementConversationProcessingStatus.PENDING,
+        )
+        state_data = _build_state_data(str(conversation.uuid))
+        save_run_metadata(
+            str(project.uuid),
+            "2026-05-29",
+            [{"batch_id": "b1"}],
+            run_uuid=str(run.uuid),
+        )
+        mock_invoke.return_value = {"status": "completed", "state_data": state_data}
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            result = check_improvements_batches.run(
+                project_uuid=str(project.uuid),
+                target_date="2026-05-29",
+            )
+
+        assert result["status"] == "completed"
+        run.refresh_from_db()
+        assert run.status == ImprovementRunStatus.COMPLETED
+        assert run.conversations_processed == 1
+        assert ImprovementBacklogItem.objects.filter(run=run).count() == 1
+        backlog_item = ImprovementBacklogItem.objects.get(run=run)
+        assert backlog_item.dimension_id == "missing_static_knowledge"
+        assert backlog_item.affected_conversations.count() == 1
+
+        run_conversation = ImprovementRunConversation.objects.get(run=run, conversation=conversation)
+        assert run_conversation.processing_status == ImprovementConversationProcessingStatus.COMPLETED
 
 
 @pytest.mark.django_db

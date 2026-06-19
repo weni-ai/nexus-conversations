@@ -38,12 +38,15 @@ def save_run_metadata(
     *,
     status: str = "polling",
     cancel_requested: bool = False,
+    run_uuid: str | None = None,
 ) -> dict[str, Any]:
     metadata = {
         "batches": batches,
         "cancel_requested": cancel_requested,
         "status": status,
     }
+    if run_uuid:
+        metadata["run_uuid"] = str(run_uuid)
     ttl = getattr(settings, "IMPROVEMENTS_RUN_METADATA_TTL_SECONDS", 604800)
     cache.set(_metadata_cache_key(project_uuid, target_date), metadata, ttl)
     return metadata
@@ -83,9 +86,11 @@ def register_batch_check_schedule(
     project_uuid: str,
     target_date: str,
     batches: list[dict[str, Any]],
+    *,
+    run_uuid: str | None = None,
 ) -> str:
     run_key = improvements_run_key(project_uuid, target_date)
-    save_run_metadata(project_uuid, target_date, batches)
+    save_run_metadata(project_uuid, target_date, batches, run_uuid=run_uuid)
 
     interval = getattr(settings, "IMPROVEMENTS_BATCH_CHECK_INTERVAL_SECONDS", 300)
     get_improvements_dependencies().scheduler.register(

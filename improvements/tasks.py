@@ -21,7 +21,7 @@ from improvements.services.conversation_count_service import (
     iter_conversation_batches_by_uuids,
     select_random_conversation_uuids_in_range,
 )
-from improvements.services.conversation_formatter import iter_raw_conversations
+from improvements.services.conversation_normalizer import iter_normalized_conversations
 from improvements.services.improvements_check_service import (
     build_check_lambda_payload,
     build_check_state_s3_key,
@@ -32,7 +32,7 @@ from improvements.services.improvements_json_builder import (
     build_analysis_lambda_payload,
     generate_presigned_s3_url,
     invoke_conversations_improvements_analysis_lambda,
-    upload_improvements_document_stream_to_s3,
+    upload_improvements_build_artifacts_to_s3,
 )
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
@@ -47,18 +47,17 @@ from improvements.services.improvements_redbeat_service import (
 )
 from improvements.services.improvements_state_ingest_service import supersede_previous_active_backlog_items
 from improvements.services.project_customization_service import (
-    enrich_customization_for_improvements,
-    get_project_customization,
+    build_customization_for_lambda_upload,
 )
 from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
 
 
-def _iter_raw_conversations_for_uuids(uuids: list) -> Any:
+def _iter_normalized_conversations_for_uuids(uuids: list) -> Any:
     batch_size = getattr(settings, "IMPROVEMENTS_CONVERSATION_BATCH_SIZE", 50)
     for batch in iter_conversation_batches_by_uuids(uuids, batch_size):
-        yield from iter_raw_conversations(batch)
+        yield from iter_normalized_conversations(batch)
 
 
 def _enrich_batches_with_submitted_at(batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,18 +188,23 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             sample_size,
         )
 
-        customization = enrich_customization_for_improvements(
-            get_project_customization(payload["project_uuid"]),
-            str(payload["project_uuid"]),
-        )
-        upload_result = upload_improvements_document_stream_to_s3(
+        customization = build_customization_for_lambda_upload(str(payload["project_uuid"]))
+        upload_result = upload_improvements_build_artifacts_to_s3(
             customization,
-            _iter_raw_conversations_for_uuids(conversation_uuids),
+            _iter_normalized_conversations_for_uuids(conversation_uuids),
             payload,
         )
-        input_url = generate_presigned_s3_url(upload_result["bucket"], upload_result["key"])
+        conversations_url = generate_presigned_s3_url(
+            upload_result["bucket"],
+            upload_result["conversations_key"],
+        )
+        customization_url = generate_presigned_s3_url(
+            upload_result["bucket"],
+            upload_result["customization_key"],
+        )
         analysis_payload = build_analysis_lambda_payload(
-            input_url=input_url,
+            conversations_url=conversations_url,
+            customization_url=customization_url,
             project_name=payload.get("project_name", ""),
             project_uuid=str(payload["project_uuid"]),
             target_date=str(payload["target_date"]),

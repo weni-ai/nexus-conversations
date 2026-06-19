@@ -35,3 +35,16 @@ def parse_to_django_utc(value: Any):
     if isinstance(value, pendulum.DateTime):
         return django_utc_from_pendulum(value.in_timezone("UTC"))
     return value
+
+
+def format_lambda_iso8601(value: Any) -> str:
+    """Format message created_at as 2026-05-23T13:19:31+00:00 (UTC, explicit offset)."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        dt = pendulum.parse(value)
+    elif isinstance(value, pendulum.DateTime):
+        dt = value
+    else:
+        dt = pendulum.instance(value)
+    return dt.in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss") + "+00:00"

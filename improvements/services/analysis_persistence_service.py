@@ -14,7 +14,7 @@ from improvements.services.improvements_check_service import (
     build_check_state_s3_key,
     upload_check_state_to_s3,
 )
-from improvements.services.improvements_json_builder import build_improvements_s3_key
+from improvements.services.improvements_json_builder import build_conversations_s3_key
 from improvements.services.improvements_redbeat_service import TERMINAL_STATUSES
 from improvements.services.improvements_state_ingest_service import ingest_improvements_state_data
 
@@ -64,7 +64,7 @@ def persist_analysis_build_phase(
     persist_analysis_batches(run, analysis_result["batches"])
     update_run_s3_keys(
         run,
-        s3_build_key=build_improvements_s3_key(payload),
+        s3_build_key=build_conversations_s3_key(payload),
         s3_state_key=build_check_state_s3_key(
             str(payload["project_uuid"]),
             str(payload["target_date"]),

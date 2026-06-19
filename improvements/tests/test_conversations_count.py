@@ -213,13 +213,12 @@ class TestConversationsCountView:
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
     @patch("improvements.tasks.check_improvements_batches.delay")
-    @patch("improvements.services.project_customization_service.get_knowledge_base_chunks", return_value=[])
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
     @patch("improvements.tasks.register_batch_check_schedule", return_value="uuid:2026-02-05")
     @patch("improvements.tasks.invoke_conversations_improvements_analysis_lambda")
     @patch("improvements.tasks.generate_presigned_s3_url")
-    @patch("improvements.tasks.upload_improvements_document_stream_to_s3")
-    @patch("improvements.tasks.get_project_customization")
+    @patch("improvements.tasks.upload_improvements_build_artifacts_to_s3")
+    @patch("improvements.services.project_customization_service.get_project_customization")
     @patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[])
     @patch("improvements.adapters.boto3.get_boto3_client")
     def test_start_conversations_improvements_selects_random_conversations(
@@ -232,7 +231,6 @@ class TestConversationsCountView:
         mock_invoke_analysis,
         mock_register_schedule,
         mock_get_collaborative_agents,
-        mock_get_knowledge_base_chunks,
         mock_check_delay,
         project,
     ):
@@ -240,22 +238,24 @@ class TestConversationsCountView:
         from improvements.models import ImprovementAnalysisRun
         from improvements.services.improvements_check_service import build_check_state_s3_key
         from improvements.services.improvements_json_builder import (
-            build_improvements_s3_input,
-            build_improvements_s3_key,
+            build_conversations_s3_key,
         )
         from improvements.tasks import start_conversations_improvements
 
-        captured_document = {}
-        s3_key = f"improvements/{project.uuid}/2026-02-05/build_input.json"
+        captured = {"conversations": [], "customization": None}
+        conversations_key = f"improvements/{project.uuid}/2026-02-05/conversations.jsonl"
+        customization_key = f"improvements/{project.uuid}/2026-02-05/customization.json"
 
-        def capture_upload(customization, raw_conversations, upload_payload):
-            raw_list = list(raw_conversations)
-            captured_document["value"] = build_improvements_s3_input(raw_list, customization)
+        def capture_upload(customization, normalized_conversations, upload_payload):
+            captured["conversations"] = list(normalized_conversations)
+            captured["customization"] = customization
             return {
-                "s3_uri": f"s3://test-bucket/{s3_key}",
+                "s3_uri": f"s3://test-bucket/{conversations_key}",
                 "bucket": "test-bucket",
-                "key": s3_key,
-                "conversation_count": len(raw_list),
+                "conversations_key": conversations_key,
+                "customization_key": customization_key,
+                "key": conversations_key,
+                "conversation_count": len(captured["conversations"]),
             }
 
         settings.GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = (
@@ -273,8 +273,10 @@ class TestConversationsCountView:
             "team": {"human_support": False, "human_support_prompt": ""},
         }
 
+        conversations_url = f"https://test-bucket.s3.sa-east-1.amazonaws.com/{conversations_key}?X-Amz-"
+        customization_url = f"https://test-bucket.s3.sa-east-1.amazonaws.com/{customization_key}?X-Amz-"
         mock_upload_s3.side_effect = capture_upload
-        mock_presign.return_value = f"https://test-bucket.s3.sa-east-1.amazonaws.com/{s3_key}?X-Amz-"
+        mock_presign.side_effect = [conversations_url, customization_url]
         mock_invoke_analysis.return_value = {
             "batches": [
                 {
@@ -339,7 +341,7 @@ class TestConversationsCountView:
         assert result["target_date"] == "2026-02-05"
         assert result["sample_size"] == 2
         assert result["conversation_count"] == 2
-        assert result["s3_uri"] == f"s3://test-bucket/{s3_key}"
+        assert result["s3_uri"] == f"s3://test-bucket/{conversations_key}"
         assert result["batches"] == mock_invoke_analysis.return_value["batches"]
         assert result["metadata_passthrough"] == mock_invoke_analysis.return_value["metadata_passthrough"]
         assert result["check_schedule_key"] == "uuid:2026-02-05"
@@ -353,26 +355,30 @@ class TestConversationsCountView:
         assert (
             run.run_conversations.filter(processing_status=ImprovementConversationProcessingStatus.PENDING).count() == 2
         )
-        assert run.s3_build_key == build_improvements_s3_key(payload)
+        assert run.s3_build_key == build_conversations_s3_key(payload)
         assert run.s3_state_key == build_check_state_s3_key(str(project.uuid), "2026-02-05")
 
-        uploaded_document = captured_document["value"]
-        assert len(uploaded_document["raw_conversations"]) == 2
-        selected_uuids = {item["detail"]["conversation_uuid"] for item in uploaded_document["raw_conversations"]}
+        uploaded_conversations = captured["conversations"]
+        assert len(uploaded_conversations) == 2
+        selected_uuids = {item["conversation_uuid"] for item in uploaded_conversations}
         assert selected_uuids.issubset({str(conversation.uuid) for conversation in in_range})
-        for item in uploaded_document["raw_conversations"]:
-            assert item["all_messages"]
-            assert item["all_messages"][0]["text"]
-            assert item["traces_by_message_id"] == {}
-        assert uploaded_document["customization"]["agent"]["name"] == "Taina"
-        assert uploaded_document["customization"]["collaborative_agents"] == []
-        assert uploaded_document["customization"]["knowledge_base"] == []
+        for item in uploaded_conversations:
+            assert item["messages"]
+            assert item["messages"][0]["speaker"] == "USER"
+            assert item["kb_chunk_ids"] == []
+        assert captured["customization"]["agent"]["name"] == "Taina"
+        assert captured["customization"]["collaborative_agents"] == []
+        assert "knowledge_base" not in captured["customization"]
 
-        mock_presign.assert_called_once_with("test-bucket", s3_key)
+        assert mock_presign.call_count == 2
+        mock_presign.assert_any_call("test-bucket", conversations_key)
+        mock_presign.assert_any_call("test-bucket", customization_key)
         mock_invoke_analysis.assert_called_once()
         analysis_payload = mock_invoke_analysis.call_args.args[0]
         assert analysis_payload["action"] == "build"
-        assert analysis_payload["input_url"] == mock_presign.return_value
+        assert analysis_payload["conversations_url"] == conversations_url
+        assert analysis_payload["customization_url"] == customization_url
+        assert "input_url" not in analysis_payload
         assert analysis_payload["metadata_passthrough"]["project_name"] == "Count Project"
         assert analysis_payload["metadata_passthrough"]["project_uuid"] == str(project.uuid)
         assert analysis_payload["metadata_passthrough"]["target_date"] == "2026-02-05"

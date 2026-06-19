@@ -9,6 +9,7 @@ Include application logs as well:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 
@@ -42,7 +43,10 @@ from improvements.models import (
     ImprovementBacklogItemConversation,
 )
 from improvements.services.improvements_check_service import build_check_state_s3_key
-from improvements.services.improvements_json_builder import build_improvements_s3_key
+from improvements.services.improvements_json_builder import (
+    build_conversations_s3_key,
+    build_customization_s3_key,
+)
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
     get_run_metadata,
@@ -330,16 +334,24 @@ class TestImprovementsE2E:
             },
         )
 
-        build_key = build_improvements_s3_key(payload)
+        build_key = build_conversations_s3_key(payload)
+        customization_key = build_customization_s3_key(payload)
         assert s3.object_exists(settings.IMPROVEMENTS_S3_BUCKET, build_key)
-        build_document = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, build_key)
+        assert s3.object_exists(settings.IMPROVEMENTS_S3_BUCKET, customization_key)
+        conversations_raw = s3.get_object_bytes(settings.IMPROVEMENTS_S3_BUCKET, build_key)
+        assert conversations_raw is not None
+        conversations = [json.loads(line) for line in conversations_raw.decode("utf-8").splitlines() if line.strip()]
+        customization_artifact = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, customization_key)
         logger.info(
-            "[E2E s3] build_input uploaded key=%s conversation_count=%s",
+            "[E2E s3] build artifacts uploaded conversations_key=%s customization_key=%s conversation_count=%s",
             build_key,
-            len(build_document["raw_conversations"]),
+            customization_key,
+            len(conversations),
         )
-        assert len(build_document["raw_conversations"]) == 2
-        assert build_document["customization"]["knowledge_base"] == knowledge_base_chunks
+        assert len(conversations) == 2
+        assert conversations[0]["kb_chunk_ids"] == []
+        assert "knowledge_base" not in customization_artifact["customization"]
+        assert customization_artifact["kb_chunks_dict"] == {}
 
         final_metadata = _run_polling_until_terminal(str(project.uuid), target_date)
 

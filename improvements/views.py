@@ -12,6 +12,7 @@ from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
     ConversationsCountResponseSerializer,
+    ImprovementDetailSerializer,
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
     ImprovementsListResponseSerializer,
@@ -21,6 +22,10 @@ from improvements.services.conversation_count_service import (
     build_task_payload,
     count_conversations_in_range,
     resolve_date_range,
+)
+from improvements.services.improvements_detail_service import (
+    ImprovementDetailNotFound,
+    get_improvement_detail,
 )
 from improvements.services.improvements_list_service import list_project_improvements
 from improvements.services.improvements_redbeat_service import (
@@ -250,5 +255,48 @@ class ProjectImprovementsList(APIView):
         payload = list_project_improvements(project_uuid)
         return Response(
             ImprovementsListResponseSerializer(payload).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    summary="Get improvement backlog item detail",
+    description=(
+        "Returns detail for a native improvement backlog item, including affected conversations "
+        "and affected manager instructions compared against the current Nexus project customization."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+        OpenApiParameter(
+            name="improvement_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Improvement backlog item UUID from the list endpoint",
+        ),
+    ],
+    responses={200: ImprovementDetailSerializer},
+)
+class ProjectImprovementDetail(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, project_uuid, improvement_uuid):
+        try:
+            Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        try:
+            payload = get_improvement_detail(project_uuid, improvement_uuid)
+        except ImprovementDetailNotFound:
+            raise NotFound(detail="Improvement not found") from None
+
+        return Response(
+            ImprovementDetailSerializer(payload).data,
             status=status.HTTP_200_OK,
         )

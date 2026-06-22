@@ -7,7 +7,7 @@ from improvements.views import (
 )
 
 urlpatterns = [
-    path(
+    path(  # mudar nome do endpoint
         "projects/<uuid:project_uuid>/conversations-count/",
         ConversationsImprovements.as_view(),
         name="project-conversations-count",

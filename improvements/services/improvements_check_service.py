@@ -93,12 +93,26 @@ def _parse_check_lambda_response(result: Any) -> dict[str, Any]:
     return parsed
 
 
-def invoke_improvements_check_lambda(payload: dict[str, Any]) -> dict[str, Any]:
+def invoke_improvements_check_lambda(
+    payload: dict[str, Any],
+    *,
+    project_uuid: str | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    context_suffix = ""
+    if project_uuid and target_date:
+        context_suffix = f" project_uuid={project_uuid} target_date={target_date}"
+
+    logger.info(
+        "[invoke_improvements_check_lambda] Request%s payload=%s",
+        context_suffix,
+        json.dumps(payload, **JSON_DUMP_KWARGS),
+    )
     result = invoke_improvements_lambda(payload)
     parsed = _parse_check_lambda_response(result)
     logger.info(
-        "[invoke_improvements_check_lambda] Check Lambda status=%s cancel_if_incomplete=%s",
-        parsed.get("status"),
-        payload.get("cancel_if_incomplete", False),
+        "[invoke_improvements_check_lambda] Response%s result=%s",
+        context_suffix,
+        json.dumps(parsed, **JSON_DUMP_KWARGS),
     )
     return parsed

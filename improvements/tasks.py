@@ -351,24 +351,17 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
         run = _resolve_check_run(project_uuid, target_date, metadata)
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _enrich_batches_with_submitted_at(list(metadata["batches"]))
-        logger.info(
-            "[check_improvements_batches] Invoking check Lambda project_uuid=%s batch_count=%s cancel_if_incomplete=%s",
-            project_uuid,
-            len(batches),
-            cancel_if_incomplete,
-        )
         check_payload = build_check_lambda_payload(
             batches,
             state_url=_resolve_check_state_url(project_uuid, target_date),
             cancel_if_incomplete=cancel_if_incomplete,
         )
-        check_result = invoke_improvements_check_lambda(check_payload)
-        check_status = check_result["status"]
-        logger.info(
-            "[check_improvements_batches] Check Lambda responded project_uuid=%s status=%s",
-            project_uuid,
-            check_status,
+        check_result = invoke_improvements_check_lambda(
+            check_payload,
+            project_uuid=project_uuid,
+            target_date=target_date,
         )
+        check_status = check_result["status"]
 
         persist_analysis_check_result(
             run,

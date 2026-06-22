@@ -175,24 +175,61 @@ def _sync_check_schedule(project_uuid: str, target_date: str, check_status: str)
 )
 def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str, Any]:
     run = None
+    project_uuid = str(payload.get("project_uuid", ""))
+    target_date = str(payload.get("target_date", ""))
     try:
+        logger.info(
+            "[start_conversations_improvements] Started project_uuid=%s target_date=%s run_uuid=%s",
+            project_uuid,
+            target_date,
+            payload.get("run_uuid"),
+        )
         run = _resolve_or_create_db_run(payload)
         payload["run_uuid"] = str(run.uuid)
         mark_run_building(run)
+        logger.info(
+            "[start_conversations_improvements] Run marked building project_uuid=%s run_uuid=%s",
+            project_uuid,
+            run.uuid,
+        )
 
         sample_size = get_conversations_sample_size_lambda(payload)
+        logger.info(
+            "[start_conversations_improvements] Sample size resolved project_uuid=%s sample_size=%s population_n=%s",
+            project_uuid,
+            sample_size,
+            payload.get("total_count"),
+        )
         conversation_uuids = select_random_conversation_uuids_in_range(
             payload["project_uuid"],
             payload["start"],
             payload["end"],
             sample_size,
         )
+        logger.info(
+            "[start_conversations_improvements] Conversations sampled project_uuid=%s selected=%s",
+            project_uuid,
+            len(conversation_uuids),
+        )
 
         customization = build_customization_for_lambda_upload(str(payload["project_uuid"]))
+        logger.info(
+            "[start_conversations_improvements] Customization built project_uuid=%s",
+            project_uuid,
+        )
         upload_result = upload_improvements_build_artifacts_to_s3(
             customization,
             _iter_normalized_conversations_for_uuids(conversation_uuids),
             payload,
+        )
+        logger.info(
+            "[start_conversations_improvements] Build artifacts uploaded project_uuid=%s s3_uri=%s "
+            "conversation_count=%s conversations_key=%s customization_key=%s",
+            project_uuid,
+            upload_result["s3_uri"],
+            upload_result["conversation_count"],
+            upload_result["conversations_key"],
+            upload_result["customization_key"],
         )
         conversations_url = generate_presigned_s3_url(
             upload_result["bucket"],
@@ -201,6 +238,10 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
         customization_url = generate_presigned_s3_url(
             upload_result["bucket"],
             upload_result["customization_key"],
+        )
+        logger.info(
+            "[start_conversations_improvements] Presigned URLs generated project_uuid=%s",
+            project_uuid,
         )
         analysis_payload = build_analysis_lambda_payload(
             conversations_url=conversations_url,
@@ -213,6 +254,11 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             n_conversations=int(upload_result["conversation_count"]),
         )
         analysis_result = invoke_conversations_improvements_analysis_lambda(analysis_payload)
+        logger.info(
+            "[start_conversations_improvements] Build Lambda invoked project_uuid=%s batch_count=%s",
+            project_uuid,
+            len(analysis_result.get("batches", [])),
+        )
 
         persist_analysis_build_phase(
             run,
@@ -220,6 +266,11 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             sample_size=sample_size,
             conversation_uuids=conversation_uuids,
             analysis_result=analysis_result,
+        )
+        logger.info(
+            "[start_conversations_improvements] Build phase persisted project_uuid=%s run_uuid=%s status=polling",
+            project_uuid,
+            run.uuid,
         )
 
         check_schedule_key = register_batch_check_schedule(
@@ -232,6 +283,11 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
         check_improvements_batches.delay(
             project_uuid=str(payload["project_uuid"]),
             target_date=str(payload["target_date"]),
+        )
+        logger.info(
+            "[start_conversations_improvements] Check task enqueued project_uuid=%s check_schedule_key=%s",
+            project_uuid,
+            check_schedule_key,
         )
 
         conversation_count = upload_result.get("conversation_count", len(conversation_uuids))
@@ -277,13 +333,30 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
 def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> dict[str, Any]:
     run = None
     try:
+        logger.info(
+            "[check_improvements_batches] Started project_uuid=%s target_date=%s",
+            project_uuid,
+            target_date,
+        )
         metadata = _load_active_run_metadata(project_uuid, target_date)
         if metadata.get("skipped"):
+            logger.info(
+                "[check_improvements_batches] Skipped project_uuid=%s target_date=%s reason=%s",
+                project_uuid,
+                target_date,
+                metadata.get("reason"),
+            )
             return metadata
 
         run = _resolve_check_run(project_uuid, target_date, metadata)
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _enrich_batches_with_submitted_at(list(metadata["batches"]))
+        logger.info(
+            "[check_improvements_batches] Invoking check Lambda project_uuid=%s batch_count=%s cancel_if_incomplete=%s",
+            project_uuid,
+            len(batches),
+            cancel_if_incomplete,
+        )
         check_payload = build_check_lambda_payload(
             batches,
             state_url=_resolve_check_state_url(project_uuid, target_date),
@@ -291,6 +364,11 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
         )
         check_result = invoke_improvements_check_lambda(check_payload)
         check_status = check_result["status"]
+        logger.info(
+            "[check_improvements_batches] Check Lambda responded project_uuid=%s status=%s",
+            project_uuid,
+            check_status,
+        )
 
         persist_analysis_check_result(
             run,
@@ -304,6 +382,13 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             cancel_if_incomplete=cancel_if_incomplete,
         )
         _sync_check_schedule(project_uuid, target_date, check_status)
+        if run is not None:
+            logger.info(
+                "[check_improvements_batches] Run updated project_uuid=%s run_uuid=%s status=%s",
+                project_uuid,
+                run.uuid,
+                run.status,
+            )
 
         logger.info(
             "[check_improvements_batches] Check completed project_uuid=%s target_date=%s status=%s",

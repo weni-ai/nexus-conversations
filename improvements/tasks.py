@@ -363,12 +363,22 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
         )
         check_status = check_result["status"]
 
-        persist_analysis_check_result(
+        ingest_result = persist_analysis_check_result(
             run,
             check_result=check_result,
             project_uuid=project_uuid,
             target_date=target_date,
         )
+        if ingest_result is not None:
+            logger.info(
+                "[check_improvements_batches] Ingested state project_uuid=%s target_date=%s "
+                "classified_count=%s backlog_items=%s conversations_processed=%s",
+                project_uuid,
+                target_date,
+                check_result.get("classified_count"),
+                ingest_result.get("backlog_items"),
+                ingest_result.get("conversations_processed"),
+            )
         _finalize_db_run_after_check(
             run,
             check_status=check_status,

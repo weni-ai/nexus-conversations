@@ -4,8 +4,8 @@ from typing import Any
 from uuid import UUID
 
 from improvements.enums import (
-    ImprovementDimensionId,
     ImprovementItemStatus,
+    ImprovementProblemType,
     ImprovementRunStatus,
 )
 from improvements.models import (
@@ -17,7 +17,7 @@ from improvements.models import (
 AMAZING_CONVERSATION_TYPE = "amazing_conversation"
 AMAZING_CONVERSATION_TEXT = "Amazing conversation"
 
-NATIVE_IMPROVEMENT_TYPES = frozenset(choice.value for choice in ImprovementDimensionId)
+NATIVE_IMPROVEMENT_TYPES = frozenset(choice.value for choice in ImprovementProblemType)
 
 LISTABLE_RUN_STATUSES = {
     ImprovementRunStatus.COMPLETED,

@@ -77,6 +77,33 @@ class TestUploadCheckStateToS3:
         assert json.loads(uploaded_body.decode("utf-8")) == state_data
 
 
+@patch("improvements.services.improvements_check_service.invoke_improvements_lambda")
+def test_invoke_improvements_check_lambda_parses_progress_fields(mock_invoke):
+    mock_invoke.return_value = {
+        "status": "completed",
+        "state_data": {"classifications": []},
+        "classified_count": 80,
+        "classification_errors_count": 2,
+        "completed": 80,
+        "total": 80,
+        "failed": 0,
+        "total_latency_minutes": 15.22,
+        "errors": [{"batch_id": "b1", "status": "failed"}],
+        "cancel_requested": ["b2"],
+    }
+
+    result = invoke_improvements_check_lambda({"action": "check", "batches": []})
+
+    assert result["classified_count"] == 80
+    assert result["classification_errors_count"] == 2
+    assert result["completed"] == 80
+    assert result["total"] == 80
+    assert result["failed"] == 0
+    assert result["total_latency_minutes"] == 15.22
+    assert result["errors"] == [{"batch_id": "b1", "status": "failed"}]
+    assert result["cancel_requested"] == ["b2"]
+
+
 @pytest.mark.parametrize(
     ("status", "state_data"),
     [

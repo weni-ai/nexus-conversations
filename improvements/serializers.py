@@ -84,3 +84,34 @@ class ImprovementListItemSerializer(serializers.Serializer):
 class ImprovementsListResponseSerializer(serializers.Serializer):
     improvements_count = serializers.IntegerField(min_value=0)
     improvements = ImprovementListItemSerializer(many=True)
+
+
+class ImprovementDetailConversationSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    contact_urn = serializers.CharField()
+    contact_name = serializers.CharField()
+
+
+class ImprovementAffectedInstructionSerializer(serializers.Serializer):
+    instruction_id = serializers.IntegerField()
+    change_type = serializers.ChoiceField(choices=["add", "fix", "remove"])
+    was_changed = serializers.BooleanField(allow_null=True)
+
+
+class ImprovementDetailSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    text = serializers.CharField()
+    type = serializers.ChoiceField(
+        choices=[
+            "many_questions_before_answering",
+            "wrong_behavior_due_to_instructions",
+            "missing_static_knowledge",
+            "personality_deviation",
+            "mentions_competitors",
+            "poor_product_search_results",
+            "repetitive_response",
+        ],
+    )
+    conversations = ImprovementDetailConversationSerializer(many=True)
+    status = serializers.ChoiceField(choices=["pending", "ignore", "resolved"])
+    affected_instructions = ImprovementAffectedInstructionSerializer(many=True)

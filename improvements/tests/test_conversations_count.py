@@ -379,6 +379,7 @@ class TestConversationsCountView:
         assert analysis_payload["conversations_url"] == conversations_url
         assert analysis_payload["customization_url"] == customization_url
         assert "input_url" not in analysis_payload
+        assert analysis_payload["metadata_passthrough"]["n_conversations"] == 2
         assert analysis_payload["metadata_passthrough"]["project_name"] == "Count Project"
         assert analysis_payload["metadata_passthrough"]["project_uuid"] == str(project.uuid)
         assert analysis_payload["metadata_passthrough"]["target_date"] == "2026-02-05"

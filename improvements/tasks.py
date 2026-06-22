@@ -210,6 +210,7 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             target_date=str(payload["target_date"]),
             sampling_mode=str(payload.get("sampling_mode", "srs")),
             population_n=int(payload["total_count"]),
+            n_conversations=int(upload_result["conversation_count"]),
         )
         analysis_result = invoke_conversations_improvements_analysis_lambda(analysis_payload)
 

@@ -108,6 +108,7 @@ class TestImprovementsJsonBuilder:
             target_date="2026-05-29",
             sampling_mode="srs",
             population_n=350,
+            n_conversations=42,
         )
 
         assert payload == {
@@ -119,6 +120,7 @@ class TestImprovementsJsonBuilder:
                 "project_uuid": "76396786-80de-4dd1-b65a-31bf006435cc",
                 "target_date": "2026-05-29",
                 "sampling_mode": "srs",
+                "n_conversations": 42,
                 "sampling_metadata": {
                     "mode": "cochran_simple_random",
                     "population_N": 350,
@@ -292,6 +294,7 @@ class TestImprovementsJsonBuilder:
             target_date="2026-05-29",
             sampling_mode="srs",
             population_n=350,
+            n_conversations=2,
         )
 
         result = invoke_conversations_improvements_analysis_lambda(analysis_payload)

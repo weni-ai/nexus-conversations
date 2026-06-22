@@ -93,4 +93,5 @@ def persist_analysis_check_result(
         run,
         state_data,
         terminal=check_status in TERMINAL_STATUSES,
+        check_result=check_result,
     )

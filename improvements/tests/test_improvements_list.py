@@ -193,7 +193,7 @@ class TestProjectImprovementsListView:
         run = _create_run(project)
         item = _create_backlog_item(
             run,
-            dimension_id="instruction_non_compliance",
+            dimension_id="wrong_behavior_due_to_instructions",
             title="Skipped instruction",
             affected_count=3,
         )
@@ -205,7 +205,7 @@ class TestProjectImprovementsListView:
         assert response.data["improvements"][0] == {
             "uuid": str(item.uuid),
             "text": "Skipped instruction",
-            "type": "instruction_non_compliance",
+            "type": "wrong_behavior_due_to_instructions",
             "conversations_count": 3,
         }
 

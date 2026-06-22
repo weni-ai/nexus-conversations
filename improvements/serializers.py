@@ -68,11 +68,13 @@ class ImprovementListItemSerializer(serializers.Serializer):
     text = serializers.CharField()
     type = serializers.ChoiceField(
         choices=[
-            "brand_voice_mismatch",
             "many_questions_before_answering",
+            "wrong_behavior_due_to_instructions",
             "missing_static_knowledge",
-            "instruction_non_compliance",
-            "catalog_search_mismatch",
+            "personality_deviation",
+            "mentions_competitors",
+            "poor_product_search_results",
+            "repetitive_response",
             "amazing_conversation",
         ],
     )

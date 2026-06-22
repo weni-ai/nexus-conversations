@@ -84,12 +84,21 @@ def _parse_check_lambda_response(result: Any) -> dict[str, Any]:
         raise ValueError(f"Check Lambda returned invalid status {status!r}: {result!r}")
 
     parsed: dict[str, Any] = {"status": status}
-    if "state_data" in result:
-        parsed["state_data"] = result["state_data"]
-    if "batches_status" in result:
-        parsed["batches_status"] = result["batches_status"]
-    if "cancel_requested" in result:
-        parsed["cancel_requested"] = result["cancel_requested"]
+    optional_fields = (
+        "state_data",
+        "batches_status",
+        "cancel_requested",
+        "classified_count",
+        "classification_errors_count",
+        "completed",
+        "total",
+        "failed",
+        "total_latency_minutes",
+        "errors",
+    )
+    for field in optional_fields:
+        if field in result:
+            parsed[field] = result[field]
     return parsed
 
 

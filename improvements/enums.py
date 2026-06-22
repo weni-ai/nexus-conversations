@@ -18,12 +18,35 @@ class ImprovementItemStatus(models.TextChoices):
     SUPERSEDED = "superseded", "Superseded"
 
 
-class ImprovementDimensionId(models.TextChoices):
-    BRAND_VOICE_MISMATCH = "brand_voice_mismatch", "Brand voice mismatch"
-    MANY_QUESTIONS_BEFORE_ANSWERING = "many_questions_before_answering", "Many questions before answering"
+class ImprovementProblemType(models.TextChoices):
+    MANY_QUESTIONS_BEFORE_ANSWERING = (
+        "many_questions_before_answering",
+        "Many questions before answering",
+    )
+    WRONG_BEHAVIOR_DUE_TO_INSTRUCTIONS = (
+        "wrong_behavior_due_to_instructions",
+        "Wrong behavior due to instructions",
+    )
     MISSING_STATIC_KNOWLEDGE = "missing_static_knowledge", "Missing static knowledge"
-    INSTRUCTION_NON_COMPLIANCE = "instruction_non_compliance", "Instruction non compliance"
-    CATALOG_SEARCH_MISMATCH = "catalog_search_mismatch", "Catalog search mismatch"
+    PERSONALITY_DEVIATION = "personality_deviation", "Personality deviation"
+    MENTIONS_COMPETITORS = "mentions_competitors", "Mentions competitors"
+    POOR_PRODUCT_SEARCH_RESULTS = (
+        "poor_product_search_results",
+        "Poor product search results",
+    )
+    REPETITIVE_RESPONSE = "repetitive_response", "Repetitive response"
+
+
+# Backward-compatible alias for code that still references ImprovementDimensionId.
+ImprovementDimensionId = ImprovementProblemType
+
+PROBLEM_TYPES_EXCLUDED_FROM_BACKLOG = frozenset(
+    {
+        "none",
+        "unclear",
+        "amazing_conversations",
+    }
+)
 
 
 class ImprovementItemType(models.TextChoices):
@@ -40,11 +63,13 @@ class ImprovementConversationProcessingStatus(models.TextChoices):
 
 
 DIMENSION_TO_ITEM_TYPE: dict[str, str] = {
-    ImprovementDimensionId.BRAND_VOICE_MISMATCH: ImprovementItemType.BEHAVIOR,
-    ImprovementDimensionId.MANY_QUESTIONS_BEFORE_ANSWERING: ImprovementItemType.BEHAVIOR,
-    ImprovementDimensionId.MISSING_STATIC_KNOWLEDGE: ImprovementItemType.KNOWLEDGE,
-    ImprovementDimensionId.INSTRUCTION_NON_COMPLIANCE: ImprovementItemType.BEHAVIOR,
-    ImprovementDimensionId.CATALOG_SEARCH_MISMATCH: ImprovementItemType.TECHNICAL,
+    ImprovementProblemType.MANY_QUESTIONS_BEFORE_ANSWERING: ImprovementItemType.BEHAVIOR,
+    ImprovementProblemType.WRONG_BEHAVIOR_DUE_TO_INSTRUCTIONS: ImprovementItemType.BEHAVIOR,
+    ImprovementProblemType.MISSING_STATIC_KNOWLEDGE: ImprovementItemType.KNOWLEDGE,
+    ImprovementProblemType.PERSONALITY_DEVIATION: ImprovementItemType.BEHAVIOR,
+    ImprovementProblemType.MENTIONS_COMPETITORS: ImprovementItemType.BEHAVIOR,
+    ImprovementProblemType.POOR_PRODUCT_SEARCH_RESULTS: ImprovementItemType.TECHNICAL,
+    ImprovementProblemType.REPETITIVE_RESPONSE: ImprovementItemType.BEHAVIOR,
 }
 
 MAX_ACTIVE_CUSTOM_MONITORS_PER_PROJECT = 10

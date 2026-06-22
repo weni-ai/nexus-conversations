@@ -58,6 +58,10 @@ class ConversationsImprovements(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, project_uuid):
+        logger.info(
+            "[ConversationsImprovements] Request received project_uuid=%s",
+            project_uuid,
+        )
         try:
             project = Project.objects.get(uuid=project_uuid)
         except Project.DoesNotExist:
@@ -71,7 +75,18 @@ class ConversationsImprovements(APIView):
 
         try:
             start_utc, end_utc = resolve_date_range(project, start_date, end_date)
+            logger.info(
+                "[ConversationsImprovements] Date range resolved project_uuid=%s start=%s end=%s",
+                project_uuid,
+                start_utc,
+                end_utc,
+            )
             total_count = count_conversations_in_range(project.uuid, start_utc, end_utc)
+            logger.info(
+                "[ConversationsImprovements] Conversations counted project_uuid=%s total_count=%s",
+                project_uuid,
+                total_count,
+            )
             threshold = getattr(settings, "CONVERSATIONS_IMPROVEMENTS_TRHESHOLD", 0)
             if total_count < threshold:
                 logger.info(
@@ -125,7 +140,21 @@ class ConversationsImprovements(APIView):
             )
 
         payload["run_uuid"] = str(analysis_run.uuid)
+        logger.info(
+            "[ConversationsImprovements] Analysis run created project_uuid=%s run_uuid=%s target_date=%s "
+            "total_count=%s sampling_mode=%s",
+            project_uuid,
+            analysis_run.uuid,
+            payload.get("target_date"),
+            payload.get("total_count"),
+            payload.get("sampling_mode"),
+        )
         start_conversations_improvements.delay(payload)
+        logger.info(
+            "[ConversationsImprovements] Build task enqueued project_uuid=%s run_uuid=%s",
+            project_uuid,
+            analysis_run.uuid,
+        )
 
         return Response(
             ConversationsCountResponseSerializer(payload).data,

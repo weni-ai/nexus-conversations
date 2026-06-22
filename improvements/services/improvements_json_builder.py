@@ -83,6 +83,7 @@ def build_analysis_lambda_payload(
     target_date: str,
     sampling_mode: str,
     population_n: int,
+    n_conversations: int,
     completion_window: str | None = None,
 ) -> dict[str, Any]:
     window = completion_window or getattr(
@@ -100,6 +101,7 @@ def build_analysis_lambda_payload(
             "project_uuid": project_uuid,
             "target_date": target_date,
             "sampling_mode": sampling_mode,
+            "n_conversations": n_conversations,
             "sampling_metadata": {
                 "mode": metadata_mode,
                 "population_N": population_n,

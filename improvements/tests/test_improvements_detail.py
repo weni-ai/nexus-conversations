@@ -17,6 +17,7 @@ from improvements.models import (
     ImprovementAnalysisRun,
     ImprovementBacklogItem,
     ImprovementBacklogItemConversation,
+    ImprovementRunConversation,
 )
 from improvements.services.improvements_detail_service import (
     ImprovementDetailNotFound,
@@ -63,6 +64,7 @@ def _link_conversation(
     *,
     contact_urn: str = "whatsapp:+5511999999999",
     contact_name: str = "Maria",
+    evidence: list | None = None,
 ) -> Conversation:
     conversation = Conversation.objects.create(
         project=project,
@@ -74,6 +76,7 @@ def _link_conversation(
     ImprovementBacklogItemConversation.objects.create(
         backlog_item=item,
         conversation=conversation,
+        evidence=evidence or [],
     )
     item.affected_conversations_count = item.affected_conversations.count()
     item.save(update_fields=["affected_conversations_count"])
@@ -119,8 +122,55 @@ class TestImprovementsDetailService:
                 "uuid": str(conversation.uuid),
                 "contact_urn": "whatsapp:+5511999999999",
                 "contact_name": "Maria",
+                "messages": [],
             }
         ]
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_returns_message_uuids_from_evidence(self, mock_customization, project, backlog_item):
+        conversation = _link_conversation(
+            backlog_item,
+            project,
+            evidence=["msg-003-ccc", "msg-004-ddd"],
+        )
+        mock_customization.return_value = {"instructions": []}
+
+        result = get_improvement_detail(project.uuid, backlog_item.uuid)
+
+        assert result["conversations"][0]["messages"] == ["msg-003-ccc", "msg-004-ddd"]
+        assert result["conversations"][0]["uuid"] == str(conversation.uuid)
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_returns_message_uuids_from_legacy_evidence_objects(self, mock_customization, project, backlog_item):
+        _link_conversation(
+            backlog_item,
+            project,
+            evidence=[{"message_uuid": "msg-legacy", "excerpt": "..."}],
+        )
+        mock_customization.return_value = {"instructions": []}
+
+        result = get_improvement_detail(project.uuid, backlog_item.uuid)
+
+        assert result["conversations"][0]["messages"] == ["msg-legacy"]
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_falls_back_to_dimension_results_message_uuids(self, mock_customization, project, backlog_item):
+        conversation = _link_conversation(backlog_item, project)
+        ImprovementRunConversation.objects.create(
+            run=backlog_item.run,
+            conversation=conversation,
+            dimension_results=[
+                {
+                    "dimension_id": "wrong_behavior_due_to_instructions",
+                    "message_uuids_relevant": ["msg-fallback-1"],
+                }
+            ],
+        )
+        mock_customization.return_value = {"instructions": []}
+
+        result = get_improvement_detail(project.uuid, backlog_item.uuid)
+
+        assert result["conversations"][0]["messages"] == ["msg-fallback-1"]
 
     @patch("improvements.services.improvements_detail_service.get_project_customization")
     @pytest.mark.parametrize(
@@ -284,7 +334,11 @@ class TestProjectImprovementDetailView:
                 },
             },
         )
-        conversation = _link_conversation(item, project)
+        conversation = _link_conversation(
+            item,
+            project,
+            evidence=["msg-003-ccc", "msg-004-ddd"],
+        )
         mock_customization.return_value = {
             "instructions": [{"id": 15684, "instruction": "Same text"}],
         }
@@ -301,6 +355,7 @@ class TestProjectImprovementDetailView:
                     "uuid": str(conversation.uuid),
                     "contact_urn": "whatsapp:+5511999999999",
                     "contact_name": "Maria",
+                    "messages": ["msg-003-ccc", "msg-004-ddd"],
                 }
             ],
             "status": "pending",

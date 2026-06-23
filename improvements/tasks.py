@@ -120,6 +120,14 @@ def _resolve_check_state_url(project_uuid: str, target_date: str) -> str | None:
         return None
     state_key = build_check_state_s3_key(project_uuid, target_date)
     if check_state_exists(bucket, state_key):
+        logger.info(
+            "[check_improvements_batches] Sending check_state.json to Lambda "
+            "project_uuid=%s target_date=%s bucket=%s key=%s",
+            project_uuid,
+            target_date,
+            bucket,
+            state_key,
+        )
         return generate_presigned_s3_url(bucket, state_key)
     return None
 

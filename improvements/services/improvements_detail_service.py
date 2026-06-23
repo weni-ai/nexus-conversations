@@ -8,7 +8,7 @@ from uuid import UUID
 from django.utils.dateparse import parse_datetime
 
 from improvements.enums import ImprovementItemStatus
-from improvements.models import ImprovementBacklogItem
+from improvements.models import ImprovementBacklogItem, ImprovementRunConversation
 from improvements.services.improvements_list_service import NATIVE_IMPROVEMENT_TYPES
 from improvements.services.project_customization_service import get_project_customization
 
@@ -205,6 +205,51 @@ def _build_affected_instructions(
     return affected
 
 
+def _extract_message_uuids(evidence: list[Any]) -> list[str]:
+    message_uuids: list[str] = []
+    for entry in evidence:
+        if isinstance(entry, str) and entry:
+            message_uuids.append(entry)
+            continue
+        if isinstance(entry, dict):
+            message_uuid = entry.get("message_uuid")
+            if message_uuid:
+                message_uuids.append(str(message_uuid))
+    return message_uuids
+
+
+def _message_uuids_from_dimension_results(dimension_results: list[Any]) -> list[str]:
+    for result in dimension_results:
+        if not isinstance(result, dict):
+            continue
+        message_uuids = result.get("message_uuids_relevant")
+        if isinstance(message_uuids, list):
+            return [str(uuid) for uuid in message_uuids if uuid]
+    return []
+
+
+def _resolve_conversation_messages(
+    item: ImprovementBacklogItem,
+    link,
+) -> list[str]:
+    messages = _extract_message_uuids(link.evidence or [])
+    if messages:
+        return messages
+
+    run_conversation = (
+        ImprovementRunConversation.objects.filter(
+            run_id=item.run_id,
+            conversation_id=link.conversation_id,
+        )
+        .only("dimension_results")
+        .first()
+    )
+    if run_conversation is None:
+        return []
+
+    return _message_uuids_from_dimension_results(run_conversation.dimension_results or [])
+
+
 def _map_conversations(item: ImprovementBacklogItem) -> list[dict[str, Any]]:
     conversations: list[dict[str, Any]] = []
     for link in item.affected_conversations.all():
@@ -214,6 +259,7 @@ def _map_conversations(item: ImprovementBacklogItem) -> list[dict[str, Any]]:
                 "uuid": str(conversation.uuid),
                 "contact_urn": conversation.contact_urn or "",
                 "contact_name": conversation.contact_name or "",
+                "messages": _resolve_conversation_messages(item, link),
             },
         )
     return conversations

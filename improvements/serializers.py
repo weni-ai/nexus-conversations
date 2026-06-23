@@ -90,6 +90,7 @@ class ImprovementDetailConversationSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     contact_urn = serializers.CharField()
     contact_name = serializers.CharField()
+    messages = serializers.ListField(child=serializers.CharField())
 
 
 class ImprovementAffectedInstructionSerializer(serializers.Serializer):

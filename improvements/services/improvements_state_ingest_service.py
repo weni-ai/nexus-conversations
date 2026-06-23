@@ -192,9 +192,29 @@ def _build_confidence_lookup(state_data: dict[str, Any]) -> dict[str, float | No
     return lookup
 
 
+def _build_message_uuids_lookup(state_data: dict[str, Any]) -> dict[str, list[str]]:
+    lookup: dict[str, list[str]] = {}
+    classifications = state_data.get("classifications")
+    if not isinstance(classifications, list):
+        return lookup
+
+    for entry in classifications:
+        if not isinstance(entry, dict):
+            continue
+        conversation_uuid = entry.get("conversation_uuid")
+        classification = entry.get("classification")
+        if not conversation_uuid or not isinstance(classification, dict):
+            continue
+        message_uuids = classification.get("message_uuids_relevant")
+        if isinstance(message_uuids, list):
+            lookup[str(conversation_uuid)] = [str(uuid) for uuid in message_uuids if uuid]
+    return lookup
+
+
 def _affected_conversations_from_uuids(
     conversation_uuids: list[Any],
     confidence_lookup: dict[str, float | None],
+    message_uuids_lookup: dict[str, list[str]],
 ) -> list[dict[str, Any]]:
     affected: list[dict[str, Any]] = []
     for conv_uuid in conversation_uuids:
@@ -205,7 +225,7 @@ def _affected_conversations_from_uuids(
             {
                 "conversation_uuid": conv_uuid_str,
                 "confidence_score": confidence_lookup.get(conv_uuid_str),
-                "evidence": [],
+                "evidence": message_uuids_lookup.get(conv_uuid_str, []),
             },
         )
     return affected
@@ -284,6 +304,7 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
         return 0
 
     confidence_lookup = _build_confidence_lookup(state_data)
+    message_uuids_lookup = _build_message_uuids_lookup(state_data)
     ingested_items = 0
 
     for problem_type, summary in summaries_by_class.items():
@@ -318,6 +339,7 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                         "affected_conversations": _affected_conversations_from_uuids(
                             conversation_uuids if isinstance(conversation_uuids, list) else [],
                             confidence_lookup,
+                            message_uuids_lookup,
                         ),
                     },
                 ):
@@ -340,6 +362,7 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                 "affected_conversations": _affected_conversations_from_uuids(
                     class_conversation_uuids if isinstance(class_conversation_uuids, list) else [],
                     confidence_lookup,
+                    message_uuids_lookup,
                 ),
             },
         ):

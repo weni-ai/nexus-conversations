@@ -11,6 +11,7 @@ from improvements.enums import (
 from improvements.models import (
     ImprovementAnalysisRun,
     ImprovementBacklogItem,
+    ImprovementBacklogItemConversation,
     ImprovementRunConversation,
 )
 from improvements.services.improvements_state_ingest_service import (
@@ -38,7 +39,7 @@ def _contract_state_data(conversation, *, amazing_conversation=None, none_conver
                 "recommended_action": "fix_instruction",
                 "confidence": 0.86,
                 "why_flagged": "Agent denied cancellation.",
-                "message_indices_relevant": [3, 4],
+                "message_uuids_relevant": ["msg-003-ccc", "msg-004-ddd"],
                 "problem_excerpt_summary": "Improper denial.",
                 "improvement_analysis": {
                     "target": "manager_instruction",
@@ -173,6 +174,13 @@ class TestImprovementsStateIngestService:
 
         assert ImprovementBacklogItem.objects.filter(run=run).count() == 2
         assert not ImprovementBacklogItem.objects.filter(run=run, dimension_id="none").exists()
+
+        backlog_link = ImprovementBacklogItemConversation.objects.filter(
+            backlog_item__run=run,
+            conversation=conversation,
+        ).first()
+        assert backlog_link is not None
+        assert backlog_link.evidence == ["msg-003-ccc", "msg-004-ddd"]
 
         list_result = __import__(
             "improvements.services.improvements_list_service",

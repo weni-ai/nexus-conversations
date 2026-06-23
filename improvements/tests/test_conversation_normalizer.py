@@ -194,6 +194,7 @@ class TestBuildNormalizedConversation:
             conversation=conversation,
             messages=[
                 {
+                    "uuid": "00000000-0000-4000-8000-000000000000",
                     "text": "Oi",
                     "source": "incoming",
                     "created_at": "2026-05-23T13:19:31Z",
@@ -221,11 +222,14 @@ class TestBuildNormalizedConversation:
         assert normalized["kb_chunk_ids"] == []
         assert normalized["messages"] == [
             {
+                "message_uuid": "00000000-0000-4000-8000-000000000000",
                 "created_at": "2026-05-23T13:19:31+00:00",
                 "speaker": "USER",
                 "text": "Oi",
+                "traces": None,
             },
             {
+                "message_uuid": "00000000-0000-4000-8000-000000000001",
                 "created_at": "2026-05-23T13:19:35+00:00",
                 "speaker": "AGENT",
                 "text": "Olá!",

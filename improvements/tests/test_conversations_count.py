@@ -365,6 +365,7 @@ class TestConversationsCountView:
         for item in uploaded_conversations:
             assert item["messages"]
             assert item["messages"][0]["speaker"] == "USER"
+            assert "message_uuid" in item["messages"][0]
             assert item["kb_chunk_ids"] == []
         assert captured["customization"]["agent"]["name"] == "Taina"
         assert captured["customization"]["collaborative_agents"] == []

@@ -211,25 +211,34 @@ def build_normalized_conversation(conversation: Conversation) -> dict[str, Any]:
         source = str(message.get("source") or "").strip().lower()
         created_at = format_lambda_iso8601(message.get("created_at"))
         text = str(message.get("text") or "")
+        message_uuid = _get_message_uuid(message)
 
         if source == "incoming":
-            messages.append({"created_at": created_at, "speaker": "USER", "text": text})
+            messages.append(
+                {
+                    "message_uuid": message_uuid,
+                    "created_at": created_at,
+                    "speaker": "USER",
+                    "text": text,
+                    "traces": None,
+                },
+            )
             continue
 
         if source != "outgoing":
             continue
 
-        agent_message: dict[str, Any] = {
-            "created_at": created_at,
-            "speaker": "AGENT",
-            "text": text,
-        }
-        message_uuid = _get_message_uuid(message)
         raw_traces = traces_by_message_id.get(message_uuid, [])
         normalized_traces = normalize_traces(raw_traces)
-        if normalized_traces:
-            agent_message["traces"] = normalized_traces
-        messages.append(agent_message)
+        messages.append(
+            {
+                "message_uuid": message_uuid,
+                "created_at": created_at,
+                "speaker": "AGENT",
+                "text": text,
+                "traces": normalized_traces if normalized_traces else None,
+            },
+        )
 
     conversation_dict = {
         "conversation_uuid": str(conversation.uuid),

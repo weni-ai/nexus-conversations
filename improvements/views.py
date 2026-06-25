@@ -227,10 +227,10 @@ class ConversationsImprovementsCancel(APIView):
 
 
 @extend_schema(
-    summary="List active improvement backlog items for a project",
+    summary="List improvement backlog items and current run status for a project",
     description=(
-        "Returns active native-dimension backlog items for the project, plus an aggregated "
-        "amazing_conversation entry when the associated analysis run has amazing conversations."
+        "Returns yesterday's conversation count (for enabling the run action), the current "
+        "improvements task progress, and active backlog items including custom analysis entries."
     ),
     parameters=[
         OpenApiParameter(
@@ -248,11 +248,11 @@ class ProjectImprovementsList(APIView):
 
     def get(self, request, project_uuid):
         try:
-            Project.objects.get(uuid=project_uuid)
+            project = Project.objects.get(uuid=project_uuid)
         except Project.DoesNotExist:
             raise NotFound(detail="Project not found") from None
 
-        payload = list_project_improvements(project_uuid)
+        payload = list_project_improvements(project)
         return Response(
             ImprovementsListResponseSerializer(payload).data,
             status=status.HTTP_200_OK,

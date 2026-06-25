@@ -51,6 +51,11 @@ def count_conversations_in_range(
     ).count()
 
 
+def count_yesterday_conversations(project: Project) -> int:
+    start_utc, end_utc = resolve_date_range(project, None, None)
+    return count_conversations_in_range(project.uuid, start_utc, end_utc)
+
+
 DEFAULT_SAMPLING_MODE = "srs"
 
 LAMBDA_PAYLOAD_KEYS = ("sampling_mode", "total_count", "target_date")

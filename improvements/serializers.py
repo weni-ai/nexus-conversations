@@ -72,17 +72,24 @@ class ImprovementListItemSerializer(serializers.Serializer):
             "wrong_behavior_due_to_instructions",
             "missing_static_knowledge",
             "personality_deviation",
-            "mentions_competitors",
             "poor_product_search_results",
             "repetitive_response",
-            "amazing_conversation",
+            "custom_analysis",
         ],
     )
     conversations_count = serializers.IntegerField(min_value=0)
 
 
+class ImprovementsTaskSerializer(serializers.Serializer):
+    is_running = serializers.BooleanField()
+    progress = serializers.IntegerField(min_value=0)
+    total = serializers.IntegerField(min_value=0)
+    created_at = serializers.DateTimeField(allow_null=True)
+
+
 class ImprovementsListResponseSerializer(serializers.Serializer):
-    improvements_count = serializers.IntegerField(min_value=0)
+    yesterday_conversations_count = serializers.IntegerField(min_value=0)
+    improvements_task = ImprovementsTaskSerializer()
     improvements = ImprovementListItemSerializer(many=True)
 
 

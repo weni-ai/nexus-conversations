@@ -5,11 +5,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from django.db.models import Q
 from django.utils.dateparse import parse_datetime
 
 from improvements.enums import ImprovementItemStatus
-from improvements.models import ImprovementBacklogItem, ImprovementRunConversation
-from improvements.services.improvements_list_service import NATIVE_IMPROVEMENT_TYPES
+from improvements.models import ImprovementBacklogItem
+from improvements.services.improvements_list_service import (
+    CUSTOM_ANALYSIS_TYPE,
+    NATIVE_IMPROVEMENT_TYPES,
+)
 from improvements.services.project_customization_service import get_project_customization
 
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ MANAGER_INSTRUCTION_TARGET = "manager_instruction"
 
 STATUS_TO_API: dict[str, str] = {
     ImprovementItemStatus.ACTIVE: "pending",
-    ImprovementItemStatus.IGNORED: "ignore",
+    ImprovementItemStatus.IGNORED: "ignored",
     ImprovementItemStatus.RESOLVED: "resolved",
 }
 
@@ -29,6 +33,32 @@ class ImprovementDetailNotFound(Exception):
 
 def _map_item_status(db_status: str) -> str:
     return STATUS_TO_API.get(db_status, "pending")
+
+
+def _map_detail_type(dimension_id: str) -> str:
+    if dimension_id.startswith("custom:"):
+        return CUSTOM_ANALYSIS_TYPE
+    return dimension_id
+
+
+def get_backlog_item(
+    project_uuid: UUID | str,
+    improvement_uuid: UUID | str,
+) -> ImprovementBacklogItem:
+    item = (
+        ImprovementBacklogItem.objects.filter(
+            uuid=improvement_uuid,
+            project_id=project_uuid,
+        )
+        .filter(
+            Q(dimension_id__in=NATIVE_IMPROVEMENT_TYPES) | Q(dimension_id__startswith="custom:"),
+        )
+        .exclude(status=ImprovementItemStatus.SUPERSEDED)
+        .first()
+    )
+    if item is None:
+        raise ImprovementDetailNotFound
+    return item
 
 
 def _build_instructions_index(instructions: list[Any]) -> dict[int, dict[str, Any]]:
@@ -205,66 +235,6 @@ def _build_affected_instructions(
     return affected
 
 
-def _extract_message_uuids(evidence: list[Any]) -> list[str]:
-    message_uuids: list[str] = []
-    for entry in evidence:
-        if isinstance(entry, str) and entry:
-            message_uuids.append(entry)
-            continue
-        if isinstance(entry, dict):
-            message_uuid = entry.get("message_uuid")
-            if message_uuid:
-                message_uuids.append(str(message_uuid))
-    return message_uuids
-
-
-def _message_uuids_from_dimension_results(dimension_results: list[Any]) -> list[str]:
-    for result in dimension_results:
-        if not isinstance(result, dict):
-            continue
-        message_uuids = result.get("message_uuids_relevant")
-        if isinstance(message_uuids, list):
-            return [str(uuid) for uuid in message_uuids if uuid]
-    return []
-
-
-def _resolve_conversation_messages(
-    item: ImprovementBacklogItem,
-    link,
-) -> list[str]:
-    messages = _extract_message_uuids(link.evidence or [])
-    if messages:
-        return messages
-
-    run_conversation = (
-        ImprovementRunConversation.objects.filter(
-            run_id=item.run_id,
-            conversation_id=link.conversation_id,
-        )
-        .only("dimension_results")
-        .first()
-    )
-    if run_conversation is None:
-        return []
-
-    return _message_uuids_from_dimension_results(run_conversation.dimension_results or [])
-
-
-def _map_conversations(item: ImprovementBacklogItem) -> list[dict[str, Any]]:
-    conversations: list[dict[str, Any]] = []
-    for link in item.affected_conversations.all():
-        conversation = link.conversation
-        conversations.append(
-            {
-                "uuid": str(conversation.uuid),
-                "contact_urn": conversation.contact_urn or "",
-                "contact_name": conversation.contact_name or "",
-                "messages": _resolve_conversation_messages(item, link),
-            },
-        )
-    return conversations
-
-
 def _fetch_current_instructions(project_uuid: UUID | str) -> list[Any] | None:
     try:
         customization = get_project_customization(str(project_uuid))
@@ -281,30 +251,29 @@ def _fetch_current_instructions(project_uuid: UUID | str) -> list[Any] | None:
     return []
 
 
+def _extract_suggested_change(suggested_solution: dict[str, Any] | None) -> str | None:
+    if not isinstance(suggested_solution, dict):
+        return None
+    suggested_change = suggested_solution.get("suggested_change")
+    if suggested_change is None:
+        return None
+    return str(suggested_change)
+
+
 def get_improvement_detail(
     project_uuid: UUID | str,
     improvement_uuid: UUID | str,
 ) -> dict[str, Any]:
-    item = (
-        ImprovementBacklogItem.objects.filter(
-            uuid=improvement_uuid,
-            project_id=project_uuid,
-            dimension_id__in=NATIVE_IMPROVEMENT_TYPES,
-        )
-        .exclude(status=ImprovementItemStatus.SUPERSEDED)
-        .prefetch_related("affected_conversations__conversation")
-        .first()
-    )
-    if item is None:
-        raise ImprovementDetailNotFound
-
+    item = get_backlog_item(project_uuid, improvement_uuid)
     current_instructions = _fetch_current_instructions(project_uuid)
+    suggested_solution = item.suggested_solution or {}
 
     return {
         "uuid": str(item.uuid),
         "text": item.title,
-        "type": item.dimension_id,
-        "conversations": _map_conversations(item),
+        "type": _map_detail_type(item.dimension_id),
+        "description": item.diagnosis,
+        "suggested_change": _extract_suggested_change(suggested_solution),
         "status": _map_item_status(item.status),
         "affected_instructions": _build_affected_instructions(
             item,

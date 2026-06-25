@@ -93,11 +93,26 @@ class ImprovementsListResponseSerializer(serializers.Serializer):
     improvements = ImprovementListItemSerializer(many=True)
 
 
-class ImprovementDetailConversationSerializer(serializers.Serializer):
+class ImprovementAffectedMessageSerializer(serializers.Serializer):
+    uuid = serializers.CharField()
+    id = serializers.CharField()
+    text = serializers.CharField(allow_null=True)
+    source = serializers.ChoiceField(choices=["incoming", "outgoing"])
+    created_at = serializers.CharField(allow_null=True)
+
+
+class ImprovementAffectedConversationSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     contact_urn = serializers.CharField()
     contact_name = serializers.CharField()
-    messages = serializers.ListField(child=serializers.CharField())
+    messages = ImprovementAffectedMessageSerializer(many=True)
+
+
+class ImprovementAffectedConversationsResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(min_value=0)
+    next = serializers.CharField(allow_null=True)
+    previous = serializers.CharField(allow_null=True)
+    results = ImprovementAffectedConversationSerializer(many=True)
 
 
 class ImprovementAffectedInstructionSerializer(serializers.Serializer):
@@ -115,11 +130,12 @@ class ImprovementDetailSerializer(serializers.Serializer):
             "wrong_behavior_due_to_instructions",
             "missing_static_knowledge",
             "personality_deviation",
-            "mentions_competitors",
             "poor_product_search_results",
             "repetitive_response",
+            "custom_analysis",
         ],
     )
-    conversations = ImprovementDetailConversationSerializer(many=True)
-    status = serializers.ChoiceField(choices=["pending", "ignore", "resolved"])
+    description = serializers.CharField()
+    suggested_change = serializers.CharField(allow_null=True)
+    status = serializers.ChoiceField(choices=["pending", "ignored", "resolved"])
     affected_instructions = ImprovementAffectedInstructionSerializer(many=True)

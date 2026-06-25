@@ -255,7 +255,7 @@ class TestImprovementsE2E:
         return Project.objects.create(name="E2E Project", timezone="UTC")
 
     def _count_url(self, project_uuid):
-        return reverse("project-conversations-count", kwargs={"project_uuid": project_uuid})
+        return reverse("project-improvements-run", kwargs={"project_uuid": project_uuid})
 
     def _cancel_url(self, project_uuid):
         return reverse("project-improvements-cancel", kwargs={"project_uuid": project_uuid})

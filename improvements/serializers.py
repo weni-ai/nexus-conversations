@@ -9,7 +9,7 @@ def _is_provided(value) -> bool:
 
 class ConversationsCountRequestSerializer(serializers.Serializer):
     """
-    Body for POST ``/api/v1/projects/<uuid>/conversations-count/``.
+    Body for POST ``/api/v1/projects/<uuid>/improvements/run/``.
 
     ``start_date`` and ``end_date`` are optional ISO datetimes. When both are omitted,
     the service uses yesterday in the project's timezone.

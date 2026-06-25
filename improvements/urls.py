@@ -8,10 +8,10 @@ from improvements.views import (
 )
 
 urlpatterns = [
-    path(  # mudar nome do endpoint
-        "projects/<uuid:project_uuid>/conversations-count/",
+    path(
+        "projects/<uuid:project_uuid>/improvements/run/",
         ConversationsImprovements.as_view(),
-        name="project-conversations-count",
+        name="project-improvements-run",
     ),
     path(
         "projects/<uuid:project_uuid>/improvements/",

@@ -42,7 +42,7 @@ class TestConversationsCountView:
         return arn
 
     def _url(self, project_uuid):
-        return reverse("project-conversations-count", kwargs={"project_uuid": project_uuid})
+        return reverse("project-improvements-run", kwargs={"project_uuid": project_uuid})
 
     def test_requires_auth(self, api_client, project):
         response = api_client.post(self._url(project.uuid), {})

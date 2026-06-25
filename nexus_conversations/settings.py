@@ -212,6 +212,9 @@ CONVERSATION_RESOLUTION_V2_NAME = env.str("CONVERSATION_RESOLUTION_V2_NAME", def
 CONVERSATION_RESOLUTION_LEGACY_PROJECTS = env.list("CONVERSATION_RESOLUTION_LEGACY_PROJECTS", default=[])
 CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
 
+# Nexus API (project customization)
+NEXUS_API_BASE_URL = env.str("NEXUS_API_BASE_URL", default="https://nexus.stg.cloud.weni.ai")
+
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
 DYNAMODB_MESSAGE_TABLE = env.str("DYNAMODB_MESSAGE_TABLE", default="NexusMessages")

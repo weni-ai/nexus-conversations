@@ -12,6 +12,7 @@ from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
     ConversationsCountResponseSerializer,
+    ImprovementAffectedConversationsResponseSerializer,
     ImprovementDetailSerializer,
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
@@ -23,6 +24,7 @@ from improvements.services.conversation_count_service import (
     count_conversations_in_range,
     resolve_date_range,
 )
+from improvements.services.improvements_affected_conversations_service import list_affected_conversations
 from improvements.services.improvements_detail_service import (
     ImprovementDetailNotFound,
     get_improvement_detail,
@@ -259,11 +261,15 @@ class ProjectImprovementsList(APIView):
         )
 
 
+DEFAULT_AFFECTED_CONVERSATIONS_PAGE_SIZE = 20
+MAX_AFFECTED_CONVERSATIONS_PAGE_SIZE = 100
+
+
 @extend_schema(
     summary="Get improvement backlog item detail",
     description=(
-        "Returns detail for a native improvement backlog item, including affected conversations "
-        "and affected manager instructions compared against the current Nexus project customization."
+        "Returns metadata for an improvement backlog item, including diagnosis, suggested change, "
+        "status, and affected manager instructions compared against the current Nexus customization."
     ),
     parameters=[
         OpenApiParameter(
@@ -298,5 +304,76 @@ class ProjectImprovementDetail(APIView):
 
         return Response(
             ImprovementDetailSerializer(payload).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    summary="List affected conversations for an improvement backlog item",
+    description=(
+        "Returns paginated conversations linked to the improvement, with message payloads "
+        "hydrated from stored conversation messages filtered by relevant message UUIDs."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+        OpenApiParameter(
+            name="improvement_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Improvement backlog item UUID from the list endpoint",
+        ),
+        OpenApiParameter(
+            name="page",
+            type=int,
+            location=OpenApiParameter.QUERY,
+            description="Page number",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=int,
+            location=OpenApiParameter.QUERY,
+            description="Number of conversations per page",
+        ),
+    ],
+    responses={200: ImprovementAffectedConversationsResponseSerializer},
+)
+class ProjectImprovementAffectedConversations(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, project_uuid, improvement_uuid):
+        try:
+            Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        try:
+            page = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size", DEFAULT_AFFECTED_CONVERSATIONS_PAGE_SIZE))
+        except (TypeError, ValueError):
+            page_size = DEFAULT_AFFECTED_CONVERSATIONS_PAGE_SIZE
+        page_size = min(max(page_size, 1), MAX_AFFECTED_CONVERSATIONS_PAGE_SIZE)
+
+        try:
+            payload = list_affected_conversations(
+                project_uuid,
+                improvement_uuid,
+                page=page,
+                page_size=page_size,
+                base_url=request.build_absolute_uri(request.path),
+            )
+        except ImprovementDetailNotFound:
+            raise NotFound(detail="Improvement not found") from None
+
+        return Response(
+            ImprovementAffectedConversationsResponseSerializer(payload).data,
             status=status.HTTP_200_OK,
         )

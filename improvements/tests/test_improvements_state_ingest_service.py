@@ -185,8 +185,10 @@ class TestImprovementsStateIngestService:
         list_result = __import__(
             "improvements.services.improvements_list_service",
             fromlist=["list_project_improvements"],
-        ).list_project_improvements(run.project_id)
-        assert list_result["improvements_count"] == 3
+        ).list_project_improvements(run.project)
+        assert len(list_result["improvements"]) == 2
+        assert list_result["improvements_task"]["is_running"] is True
+        assert list_result["improvements_task"]["progress"] == 3
 
     def test_ingest_conversation_results_and_backlog_items_legacy(self, run, conversation):
         state_data = {

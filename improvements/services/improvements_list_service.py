@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from django.db.models import Q
+
+from conversation_ms.models import Project
 from improvements.enums import (
     ImprovementItemStatus,
     ImprovementProblemType,
@@ -11,83 +14,89 @@ from improvements.enums import (
 from improvements.models import (
     ImprovementAnalysisRun,
     ImprovementBacklogItem,
-    ImprovementRunConversation,
 )
+from improvements.services.conversation_count_service import count_yesterday_conversations
 
-AMAZING_CONVERSATION_TYPE = "amazing_conversation"
-AMAZING_CONVERSATION_TEXT = "Amazing conversation"
+CUSTOM_ANALYSIS_TYPE = "custom_analysis"
 
 NATIVE_IMPROVEMENT_TYPES = frozenset(choice.value for choice in ImprovementProblemType)
 
-LISTABLE_RUN_STATUSES = {
-    ImprovementRunStatus.COMPLETED,
+ACTIVE_RUN_STATUSES = {
+    ImprovementRunStatus.QUEUED,
+    ImprovementRunStatus.BUILDING,
+    ImprovementRunStatus.POLLING,
     ImprovementRunStatus.IN_PROGRESS,
 }
+
+IDLE_IMPROVEMENTS_TASK: dict[str, Any] = {
+    "is_running": False,
+    "progress": 0,
+    "total": 0,
+    "created_at": None,
+}
+
+
+def _map_list_type(dimension_id: str) -> str:
+    if dimension_id.startswith("custom:"):
+        return CUSTOM_ANALYSIS_TYPE
+    return dimension_id
 
 
 def _map_backlog_item(item: ImprovementBacklogItem) -> dict[str, Any]:
     return {
         "uuid": str(item.uuid),
         "text": item.title,
-        "type": item.dimension_id,
+        "type": _map_list_type(item.dimension_id),
         "conversations_count": item.affected_conversations_count,
     }
 
 
-def _map_amazing_entry(run: ImprovementAnalysisRun, conversations_count: int) -> dict[str, Any]:
-    return {
-        "uuid": str(run.uuid),
-        "text": AMAZING_CONVERSATION_TEXT,
-        "type": AMAZING_CONVERSATION_TYPE,
-        "conversations_count": conversations_count,
-    }
-
-
-def _amazing_count(run: ImprovementAnalysisRun) -> int:
-    return ImprovementRunConversation.objects.filter(
-        run=run,
-        is_amazing_conversation=True,
-    ).count()
-
-
-def _resolve_run_for_amazing(
-    backlog_items: list[ImprovementBacklogItem],
-    *,
-    project_uuid: UUID,
-) -> ImprovementAnalysisRun | None:
-    if backlog_items:
-        return backlog_items[0].run
-
-    return (
+def _resolve_current_run(project_uuid: UUID) -> ImprovementAnalysisRun | None:
+    active_run = (
         ImprovementAnalysisRun.objects.filter(
             project_id=project_uuid,
-            status__in=LISTABLE_RUN_STATUSES,
+            status__in=ACTIVE_RUN_STATUSES,
         )
         .order_by("-started_at")
         .first()
     )
+    if active_run is not None:
+        return active_run
+
+    return ImprovementAnalysisRun.objects.filter(project_id=project_uuid).order_by("-started_at").first()
 
 
-def list_project_improvements(project_uuid: UUID | str) -> dict[str, Any]:
+def _build_improvements_task(run: ImprovementAnalysisRun | None) -> dict[str, Any]:
+    if run is None:
+        return dict(IDLE_IMPROVEMENTS_TASK)
+
+    total = run.conversations_total or run.sample_size
+    return {
+        "is_running": run.status in ACTIVE_RUN_STATUSES,
+        "progress": run.conversations_processed,
+        "total": total,
+        "created_at": run.started_at,
+    }
+
+
+def list_project_improvements(project: Project) -> dict[str, Any]:
     backlog_items = list(
         ImprovementBacklogItem.objects.filter(
-            project_id=project_uuid,
+            project=project,
             status=ImprovementItemStatus.ACTIVE,
-            dimension_id__in=NATIVE_IMPROVEMENT_TYPES,
+        )
+        .filter(
+            Q(dimension_id__in=NATIVE_IMPROVEMENT_TYPES) | Q(dimension_id__startswith="custom:"),
         )
         .select_related("run")
         .order_by("-last_updated_at"),
     )
 
-    run = _resolve_run_for_amazing(backlog_items, project_uuid=UUID(str(project_uuid)))
+    current_run = _resolve_current_run(project.uuid)
     improvements = [_map_backlog_item(item) for item in backlog_items]
 
-    if run is not None:
-        amazing_conversations_count = _amazing_count(run)
-        if amazing_conversations_count > 0:
-            improvements.append(_map_amazing_entry(run, amazing_conversations_count))
-
     return {
-        "improvements_count": len(improvements),
+        "yesterday_conversations_count": count_yesterday_conversations(project),
+        "improvements_task": _build_improvements_task(current_run),
         "improvements": improvements,
     }

@@ -133,7 +133,16 @@ CLOSE_DAILY_CLASSIFICATION_THREADS = env.int("CLOSE_DAILY_CLASSIFICATION_THREADS
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = "static/"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 AUTHENTICATION_BACKENDS = [
     "nexus_conversations.backends.InternalTokenBackend",
@@ -157,7 +166,6 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
 }
-STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -181,6 +189,9 @@ CELERY_BROKER_URL = env.str("CELERY_BROKER_URL", default="redis://localhost:6379
 CELERY_ACCEPT_CONTENT = ["application/json"]
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
+CELERY_BEAT_SCHEDULER = "redbeat.RedBeatScheduler"
+CELERY_REDBEAT_REDIS_URL = env.str("CELERY_REDBEAT_REDIS_URL", default=CELERY_BROKER_URL)
+CELERY_REDBEAT_KEY_PREFIX = env.str("CELERY_REDBEAT_KEY_PREFIX", default="redbeat:")
 
 # SQS Configuration for Conversation MS
 SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")

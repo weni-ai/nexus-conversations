@@ -20,6 +20,7 @@ from improvements.services.improvements_json_builder import (
     upload_improvements_document_stream_to_s3,
     upload_improvements_document_to_s3,
 )
+from improvements.services.project_customization_service import build_customization_artifact
 
 
 class TestImprovementsJsonBuilder:
@@ -145,6 +146,7 @@ class TestImprovementsJsonBuilder:
         )
         assert build_improvements_s3_key(payload) == build_conversations_s3_key(payload)
 
+    @pytest.mark.django_db
     @patch("improvements.adapters.boto3.get_boto3_client")
     def test_upload_improvements_build_artifacts_to_s3(self, mock_get_client):
         settings.IMPROVEMENTS_S3_BUCKET = "nexus-improvements"
@@ -188,6 +190,34 @@ class TestImprovementsJsonBuilder:
         customization_artifact = json.loads(uploaded[customization_key]["body"])
         assert customization_artifact["customization"] == customization
         assert customization_artifact["kb_chunks_dict"] == {}
+        assert customization_artifact["classification_classes"] == []
+
+    @pytest.mark.django_db
+    def test_build_customization_artifact_includes_classification_classes(self):
+        from conversation_ms.models import Project
+        from improvements.services.custom_analysis_service import create_custom_analysis
+
+        project = Project.objects.create(name="Artifact Project", timezone="UTC")
+        create_custom_analysis(
+            project,
+            title="Resposta muito longa",
+            definition="Definition",
+            exclusions="Exclusions",
+        )
+
+        artifact = build_customization_artifact(
+            {"agent": {"name": "Taina"}},
+            [],
+            project_uuid=str(project.uuid),
+        )
+
+        assert artifact["classification_classes"] == [
+            {
+                "name": "resposta-muito-longa",
+                "definition": "Definition",
+                "exclusions": "Exclusions",
+            }
+        ]
 
     @patch("improvements.adapters.boto3.get_boto3_client")
     def test_upload_improvements_document_stream_to_s3(self, mock_get_client):

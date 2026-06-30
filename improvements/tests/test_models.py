@@ -67,13 +67,17 @@ class TestImprovementModels:
         for index in range(MAX_ACTIVE_CUSTOM_MONITORS_PER_PROJECT):
             ImprovementCustomMonitor.objects.create(
                 project=project,
-                behavior_description=f"Monitor {index}",
+                title=f"Monitor {index}",
+                slug=f"monitor-{index}",
+                definition=f"Monitor {index}",
             )
 
         with pytest.raises(ValidationError):
             ImprovementCustomMonitor.objects.create(
                 project=project,
-                behavior_description="Monitor overflow",
+                title="Monitor overflow",
+                slug="monitor-overflow",
+                definition="Monitor overflow",
             )
 
     def test_backlog_item_relationships(self, project):

@@ -135,7 +135,10 @@ class ImprovementCustomMonitor(models.Model):
         on_delete=models.CASCADE,
         related_name="improvement_custom_monitors",
     )
-    behavior_description = models.TextField()
+    title = models.CharField(max_length=512)
+    slug = models.SlugField(max_length=128)
+    definition = models.TextField()
+    exclusions = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -145,6 +148,14 @@ class ImprovementCustomMonitor(models.Model):
         db_table = "improvements_custom_monitor"
         indexes = [
             models.Index(fields=["project", "is_active"]),
+            models.Index(fields=["project", "slug"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "slug"],
+                condition=models.Q(deleted_at__isnull=True),
+                name="improvements_custom_monitor_unique_project_slug",
+            ),
         ]
 
     def __str__(self) -> str:

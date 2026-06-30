@@ -29,12 +29,6 @@ class TestConversationsCountView:
         return Project.objects.create(name="Other Project", timezone="UTC")
 
     @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
-    @pytest.fixture
     def lambda_arn(self):
         arn = "arn:aws:lambda:us-east-1:123456789012:function:conversations-count"
         settings.GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = arn
@@ -44,7 +38,7 @@ class TestConversationsCountView:
     def _url(self, project_uuid):
         return reverse("project-improvements-run", kwargs={"project_uuid": project_uuid})
 
-    def test_requires_auth(self, api_client, project):
+    def test_requires_project_authorization(self, api_client, project):
         response = api_client.post(self._url(project.uuid), {})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 

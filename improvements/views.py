@@ -3,7 +3,7 @@ import logging
 from django.conf import settings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +12,10 @@ from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
     ConversationsCountResponseSerializer,
+    CustomAnalysisCreateSerializer,
+    CustomAnalysisDetailSerializer,
+    CustomAnalysisListItemSerializer,
+    CustomAnalysisUpdateSerializer,
     ImprovementAffectedConversationsResponseSerializer,
     ImprovementDetailSerializer,
     ImprovementsCancelRequestSerializer,
@@ -23,6 +27,13 @@ from improvements.services.conversation_count_service import (
     build_task_payload,
     count_conversations_in_range,
     resolve_date_range,
+)
+from improvements.services.custom_analysis_service import (
+    CustomAnalysisNotFound,
+    create_custom_analysis,
+    delete_custom_analysis,
+    list_custom_analyses,
+    update_custom_analysis,
 )
 from improvements.services.improvements_affected_conversations_service import list_affected_conversations
 from improvements.services.improvements_detail_service import (
@@ -377,3 +388,127 @@ class ProjectImprovementAffectedConversations(APIView):
             ImprovementAffectedConversationsResponseSerializer(payload).data,
             status=status.HTTP_200_OK,
         )
+
+
+@extend_schema(
+    summary="List custom analysis monitors for a project",
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+    ],
+    responses={200: CustomAnalysisListItemSerializer(many=True)},
+)
+class ProjectCustomAnalysisListCreate(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, project_uuid):
+        try:
+            project = Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        payload = list_custom_analyses(project)
+        return Response(
+            CustomAnalysisListItemSerializer(payload, many=True).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        summary="Create a custom analysis monitor",
+        request=CustomAnalysisCreateSerializer,
+        responses={201: CustomAnalysisDetailSerializer},
+    )
+    def post(self, request, project_uuid):
+        try:
+            project = Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        ser = CustomAnalysisCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        try:
+            payload = create_custom_analysis(
+                project,
+                title=ser.validated_data["title"],
+                definition=ser.validated_data["definition"],
+                exclusions=ser.validated_data.get("exclusions", ""),
+            )
+        except ValueError as exc:
+            raise ValidationError(detail=str(exc)) from exc
+
+        return Response(
+            CustomAnalysisDetailSerializer(payload).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(
+    summary="Update a custom analysis monitor",
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+        OpenApiParameter(
+            name="monitor_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Custom analysis monitor UUID",
+        ),
+    ],
+    request=CustomAnalysisUpdateSerializer,
+    responses={200: CustomAnalysisDetailSerializer},
+)
+class ProjectCustomAnalysisDetail(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, project_uuid, monitor_uuid):
+        try:
+            project = Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        ser = CustomAnalysisUpdateSerializer(data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        try:
+            payload = update_custom_analysis(
+                project,
+                monitor_uuid,
+                title=ser.validated_data.get("title"),
+                definition=ser.validated_data.get("definition"),
+                exclusions=ser.validated_data.get("exclusions"),
+            )
+        except CustomAnalysisNotFound:
+            raise NotFound(detail="Custom analysis not found") from None
+        except ValueError as exc:
+            raise ValidationError(detail=str(exc)) from exc
+
+        return Response(
+            CustomAnalysisDetailSerializer(payload).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        summary="Delete a custom analysis monitor",
+        responses={204: None},
+    )
+    def delete(self, request, project_uuid, monitor_uuid):
+        try:
+            project = Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        try:
+            delete_custom_analysis(project, monitor_uuid)
+        except CustomAnalysisNotFound:
+            raise NotFound(detail="Custom analysis not found") from None
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

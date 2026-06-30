@@ -2,7 +2,6 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from django.conf import settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -404,19 +403,13 @@ class TestProjectImprovementDetailView:
     def project(self):
         return Project.objects.create(name="Detail Project", timezone="UTC")
 
-    @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
     def _detail_url(self, project_uuid, improvement_uuid):
         return reverse(
             "project-improvement-detail",
             kwargs={"project_uuid": project_uuid, "improvement_uuid": improvement_uuid},
         )
 
-    def test_requires_auth(self, api_client, project):
+    def test_requires_project_authorization(self, api_client, project):
         run = _create_run(project)
         item = _create_backlog_item(run)
 
@@ -490,19 +483,13 @@ class TestProjectImprovementAffectedConversationsView:
     def project(self):
         return Project.objects.create(name="Detail Project", timezone="UTC")
 
-    @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
     def _url(self, project_uuid, improvement_uuid):
         return reverse(
             "project-improvement-affected-conversations",
             kwargs={"project_uuid": project_uuid, "improvement_uuid": improvement_uuid},
         )
 
-    def test_requires_auth(self, api_client, project):
+    def test_requires_project_authorization(self, api_client, project):
         run = _create_run(project)
         item = _create_backlog_item(run)
 

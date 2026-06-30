@@ -1,0 +1,128 @@
+import logging
+
+import requests
+import sentry_sdk
+from django.conf import settings
+from rest_framework.exceptions import APIException
+from rest_framework.permissions import SAFE_METHODS
+
+logger = logging.getLogger(__name__)
+
+PROJECT_AUTH_ROLES = {
+    "not_set": 0,
+    "viewer": 1,
+    "contributor": 2,
+    "moderator": 3,
+    "support": 4,
+    "chat_user": 5,
+}
+
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+class ProjectAuthNotFound(Exception):
+    """Raised when the external authorization API returns 404."""
+
+
+class ProjectAuthorizationDenied(Exception):
+    """Raised when the external authorization API denies access."""
+
+
+class ProjectAuthUnavailable(APIException):
+    status_code = 503
+    default_detail = "Project authorization service is temporarily unavailable"
+    default_code = "project_auth_unavailable"
+
+
+def _user_email_from_authorization_payload(payload: dict) -> str | None:
+    user = payload.get("user")
+    if isinstance(user, str):
+        return user.strip() or None
+    if isinstance(user, dict):
+        email = user.get("email")
+        if isinstance(email, str):
+            return email.strip() or None
+    return None
+
+
+def _is_role_authorized_for_method(role: int | None, method: str) -> bool:
+    if role is None or role == PROJECT_AUTH_ROLES["not_set"]:
+        return False
+
+    if method.upper() in SAFE_METHODS:
+        return True
+
+    if role == PROJECT_AUTH_ROLES["moderator"]:
+        return True
+
+    if role == PROJECT_AUTH_ROLES["contributor"]:
+        return method.upper() in WRITE_METHODS
+
+    return False
+
+
+def _check_project_authorization(token: str, project_uuid: str, method: str) -> tuple[bool, str | None]:
+    base_url = settings.PROJECTS_API_BASE_URL
+    if not base_url:
+        raise ProjectAuthUnavailable()
+
+    url = f"{base_url.rstrip('/')}/v2/projects/{project_uuid}/authorization"
+    response = requests.get(
+        url,
+        headers={"Authorization": token},
+        timeout=settings.PROJECT_AUTH_API_TIMEOUT_SECONDS,
+    )
+
+    if response.status_code == 404:
+        raise ProjectAuthNotFound()
+
+    if response.status_code in (401, 403):
+        raise ProjectAuthorizationDenied()
+
+    if not response.ok:
+        logger.error(
+            "[ProjectAuth] Unexpected status from authorization API project_uuid=%s status=%s",
+            project_uuid,
+            response.status_code,
+        )
+        raise ProjectAuthUnavailable()
+
+    data = response.json()
+    user_email = _user_email_from_authorization_payload(data)
+    role = data.get("project_authorization")
+    authorized = _is_role_authorized_for_method(role, method)
+
+    if not authorized:
+        raise ProjectAuthorizationDenied()
+
+    return True, user_email
+
+
+def _fallback_local_permission(request, project_uuid: str, method: str) -> bool:
+    """Phase 1: deny when external API has no authorization record."""
+    return False
+
+
+def has_external_project_permission(request, project_uuid: str, method: str) -> bool:
+    token = request.headers.get("Authorization")
+    if not token:
+        return False
+
+    try:
+        authorized, user_email = _check_project_authorization(token, project_uuid, method)
+        if user_email:
+            request.project_auth_user_email = user_email
+        return authorized
+    except ProjectAuthNotFound:
+        return _fallback_local_permission(request, project_uuid, method)
+    except ProjectAuthorizationDenied:
+        return False
+    except requests.RequestException as exc:
+        sentry_sdk.capture_exception(exc)
+        logger.error(
+            "[ProjectAuth] Authorization API request failed project_uuid=%s error=%s",
+            project_uuid,
+            exc,
+            exc_info=True,
+        )
+        raise ProjectAuthUnavailable() from exc

@@ -52,3 +52,25 @@ class InternalTokenAuthenticationScheme(OpenApiAuthenticationExtension):
             "scheme": "bearer",
             "description": "Internal API Token for microservice communication",
         }
+
+
+class BearerJWTAuthentication(authentication.BaseAuthentication):
+    """
+    Placeholder authentication for user JWT requests.
+    Token validation is deferred to ProjectPermission via the external authorization API.
+    """
+
+    def authenticate(self, request):
+        return None
+
+
+class BearerJWTAuthenticationScheme(OpenApiAuthenticationExtension):
+    target_class = "conversation_ms.authentication.BearerJWTAuthentication"
+    name = "BearerJWT"
+
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "User JWT forwarded to the project authorization API",
+        }

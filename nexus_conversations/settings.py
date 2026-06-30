@@ -291,6 +291,7 @@ BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
 PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
 PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
+PROJECT_AUTH_API_TIMEOUT_SECONDS = env.int("PROJECT_AUTH_API_TIMEOUT_SECONDS", default=5)
 
 # Keycloak OIDC (client_credentials for internal service-to-service calls)
 OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")

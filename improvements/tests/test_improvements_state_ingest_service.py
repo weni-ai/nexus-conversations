@@ -339,3 +339,56 @@ class TestImprovementsStateIngestService:
         assert updated == 1
         assert old_item.status == ImprovementItemStatus.SUPERSEDED
         assert new_item.status == ImprovementItemStatus.ACTIVE
+
+    def test_ingest_resolves_custom_monitor_by_slug(self, run, conversation):
+        from improvements.models import ImprovementCustomMonitor
+
+        monitor = ImprovementCustomMonitor.objects.create(
+            project=run.project,
+            title="Resposta muito longa",
+            slug="resposta-muito-longa",
+            definition="Definition",
+        )
+        state_data = {
+            "classifications": [
+                {
+                    "conversation_uuid": str(conversation.uuid),
+                    "classification": {
+                        "problem_type": "custom:resposta-muito-longa",
+                        "problem_exists": True,
+                        "confidence": 0.9,
+                        "improvement_analysis": {"target": "none", "details": {}},
+                    },
+                }
+            ],
+            "classification_errors": [],
+            "summaries_by_class": {
+                "custom:resposta-muito-longa": {
+                    "general_summary": "Long replies.",
+                    "general_solution": "Shorten replies.",
+                    "subproblems": [
+                        {
+                            "title": "Resposta muito longa",
+                            "description": "Agent sent a long reply.",
+                            "target": "none",
+                            "suggested_change": None,
+                            "details": {},
+                            "conversation_uuids": [str(conversation.uuid)],
+                        }
+                    ],
+                    "conversation_uuids": [str(conversation.uuid)],
+                }
+            },
+            "batch_status_map": {"batch_abc": True},
+        }
+
+        result = ingest_improvements_state_data(
+            run,
+            state_data,
+            check_result={"classified_count": 1, "total": 1},
+        )
+
+        backlog_item = ImprovementBacklogItem.objects.get(run=run, dimension_id="custom:resposta-muito-longa")
+        assert result["ingested"] is True
+        assert backlog_item.custom_monitor_id == monitor.uuid
+        assert backlog_item.item_type == "custom"

@@ -49,13 +49,21 @@ def _normalize_dimension_results(
 def _resolve_custom_monitor(dimension_id: str, project_id: UUID | str) -> ImprovementCustomMonitor | None:
     if not dimension_id.startswith("custom:"):
         return None
-    monitor_uuid = dimension_id.removeprefix("custom:")
-    return ImprovementCustomMonitor.objects.filter(
-        uuid=monitor_uuid,
+    monitor_key = dimension_id.removeprefix("custom:")
+    base_queryset = ImprovementCustomMonitor.objects.filter(
         project_id=project_id,
         is_active=True,
         deleted_at__isnull=True,
-    ).first()
+    )
+    monitor = base_queryset.filter(slug=monitor_key).first()
+    if monitor is not None:
+        return monitor
+
+    try:
+        monitor_uuid = UUID(monitor_key)
+    except (TypeError, ValueError):
+        return None
+    return base_queryset.filter(uuid=monitor_uuid).first()
 
 
 def _upsert_conversation_result(

@@ -2,12 +2,12 @@ import logging
 
 from django.conf import settings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import permissions, status
+from rest_framework import status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from conversation_ms.authentication import InternalTokenAuthentication
+from conversation_ms.api.permissions import ProjectPermission
 from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
@@ -51,6 +51,9 @@ from improvements.tasks import cancel_improvements_batches, start_conversations_
 
 logger = logging.getLogger(__name__)
 
+IMPROVEMENTS_PERMISSION_CLASSES = [ProjectPermission]
+BEARER_JWT_AUTH = ["BearerJWT"]
+
 
 @extend_schema(
     summary="Count project conversations and notify Lambda",
@@ -70,10 +73,11 @@ logger = logging.getLogger(__name__)
     ],
     request=ConversationsCountRequestSerializer,
     responses={200: ConversationsCountResponseSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ConversationsImprovements(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def post(self, request, project_uuid):
         logger.info(
@@ -144,7 +148,7 @@ class ConversationsImprovements(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        actor = getattr(request.user, "username", None)
+        actor = getattr(request, "project_auth_user_email", None)
         try:
             analysis_run = create_analysis_run(
                 project,
@@ -196,10 +200,11 @@ class ConversationsImprovements(APIView):
     ],
     request=ImprovementsCancelRequestSerializer,
     responses={202: ImprovementsCancelResponseSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ConversationsImprovementsCancel(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def post(self, request, project_uuid):
         try:
@@ -254,10 +259,11 @@ class ConversationsImprovementsCancel(APIView):
         ),
     ],
     responses={200: ImprovementsListResponseSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ProjectImprovementsList(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def get(self, request, project_uuid):
         try:
@@ -297,10 +303,11 @@ MAX_AFFECTED_CONVERSATIONS_PAGE_SIZE = 100
         ),
     ],
     responses={200: ImprovementDetailSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ProjectImprovementDetail(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def get(self, request, project_uuid, improvement_uuid):
         try:
@@ -352,10 +359,11 @@ class ProjectImprovementDetail(APIView):
         ),
     ],
     responses={200: ImprovementAffectedConversationsResponseSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ProjectImprovementAffectedConversations(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def get(self, request, project_uuid, improvement_uuid):
         try:
@@ -401,10 +409,11 @@ class ProjectImprovementAffectedConversations(APIView):
         ),
     ],
     responses={200: CustomAnalysisListItemSerializer(many=True)},
+    auth=BEARER_JWT_AUTH,
 )
 class ProjectCustomAnalysisListCreate(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def get(self, request, project_uuid):
         try:
@@ -422,6 +431,7 @@ class ProjectCustomAnalysisListCreate(APIView):
         summary="Create a custom analysis monitor",
         request=CustomAnalysisCreateSerializer,
         responses={201: CustomAnalysisDetailSerializer},
+        auth=BEARER_JWT_AUTH,
     )
     def post(self, request, project_uuid):
         try:
@@ -465,10 +475,11 @@ class ProjectCustomAnalysisListCreate(APIView):
     ],
     request=CustomAnalysisUpdateSerializer,
     responses={200: CustomAnalysisDetailSerializer},
+    auth=BEARER_JWT_AUTH,
 )
 class ProjectCustomAnalysisDetail(APIView):
-    authentication_classes = [InternalTokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def patch(self, request, project_uuid, monitor_uuid):
         try:
@@ -499,6 +510,7 @@ class ProjectCustomAnalysisDetail(APIView):
     @extend_schema(
         summary="Delete a custom analysis monitor",
         responses={204: None},
+        auth=BEARER_JWT_AUTH,
     )
     def delete(self, request, project_uuid, monitor_uuid):
         try:

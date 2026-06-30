@@ -1,7 +1,6 @@
 from uuid import uuid4
 
 import pytest
-from django.conf import settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -20,12 +19,6 @@ class TestCustomAnalysisApi:
     def project(self):
         return Project.objects.create(name="Custom Analysis Project", timezone="UTC")
 
-    @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
     def _list_url(self, project_uuid):
         return reverse("project-custom-analysis-list-create", kwargs={"project_uuid": project_uuid})
 
@@ -35,7 +28,7 @@ class TestCustomAnalysisApi:
             kwargs={"project_uuid": project_uuid, "monitor_uuid": monitor_uuid},
         )
 
-    def test_list_requires_auth(self, api_client, project):
+    def test_list_requires_project_authorization(self, api_client, project):
         response = api_client.get(self._list_url(project.uuid))
 
         assert response.status_code == status.HTTP_403_FORBIDDEN

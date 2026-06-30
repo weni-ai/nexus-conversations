@@ -1,7 +1,6 @@
 from unittest.mock import ANY, patch
 
 import pytest
-from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
@@ -255,16 +254,10 @@ class TestImprovementsCancelView:
     def api_client(self):
         return APIClient()
 
-    @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
     def _url(self, project_uuid):
         return reverse("project-improvements-cancel", kwargs={"project_uuid": project_uuid})
 
-    def test_requires_auth(self, api_client):
+    def test_requires_project_authorization(self, api_client):
         from uuid import uuid4
 
         response = api_client.post(self._url(uuid4()), {"target_date": "2026-05-29"})

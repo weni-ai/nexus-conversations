@@ -233,7 +233,6 @@ class TestImprovementsE2E:
         settings.GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = (
             "arn:aws:lambda:us-east-1:123456789012:function:conversations-count"
         )
-        settings.INTERNAL_API_TOKENS = {"TestTeam": "test-secret-token"}
         settings.CONVERSATIONS_IMPROVEMENTS_TRHESHOLD = 0
 
         with override_settings(CACHES=LOC_MEM_CACHE, **EAGER_CELERY):
@@ -245,10 +244,6 @@ class TestImprovementsE2E:
     @pytest.fixture
     def api_client(self):
         return APIClient()
-
-    @pytest.fixture
-    def auth_headers(self):
-        return {"HTTP_AUTHORIZATION": "Bearer test-secret-token"}
 
     @pytest.fixture
     def project(self):

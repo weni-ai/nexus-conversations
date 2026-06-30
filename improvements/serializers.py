@@ -139,3 +139,50 @@ class ImprovementDetailSerializer(serializers.Serializer):
     suggested_change = serializers.CharField(allow_null=True)
     status = serializers.ChoiceField(choices=["pending", "ignored", "resolved"])
     affected_instructions = ImprovementAffectedInstructionSerializer(many=True)
+
+
+class CustomAnalysisListItemSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    title = serializers.CharField()
+    conversations_count = serializers.IntegerField(min_value=0)
+
+
+class CustomAnalysisDetailSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    title = serializers.CharField()
+    definition = serializers.CharField()
+    exclusions = serializers.CharField()
+    slug = serializers.SlugField()
+
+
+class CustomAnalysisCreateSerializer(serializers.Serializer):
+    title = serializers.CharField()
+    definition = serializers.CharField()
+    exclusions = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_title(self, value):
+        if not str(value).strip():
+            raise serializers.ValidationError("Complete this field")
+        return value
+
+    def validate_definition(self, value):
+        if not str(value).strip():
+            raise serializers.ValidationError("Complete this field")
+        return value
+
+
+class CustomAnalysisUpdateSerializer(serializers.Serializer):
+    title = serializers.CharField(required=False)
+    definition = serializers.CharField(required=False)
+    exclusions = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("At least one field must be provided")
+        title = attrs.get("title")
+        if title is not None and not str(title).strip():
+            raise serializers.ValidationError({"title": "Complete this field"})
+        definition = attrs.get("definition")
+        if definition is not None and not str(definition).strip():
+            raise serializers.ValidationError({"definition": "Complete this field"})
+        return attrs

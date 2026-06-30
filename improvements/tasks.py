@@ -22,6 +22,7 @@ from improvements.services.conversation_count_service import (
     select_random_conversation_uuids_in_range,
 )
 from improvements.services.conversation_normalizer import iter_normalized_conversations
+from improvements.services.custom_analysis_service import build_check_classification_classes
 from improvements.services.improvements_check_service import (
     build_check_lambda_payload,
     build_check_state_s3_key,
@@ -363,6 +364,7 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             batches,
             state_url=_resolve_check_state_url(project_uuid, target_date),
             cancel_if_incomplete=cancel_if_incomplete,
+            classification_classes=build_check_classification_classes(project_uuid),
         )
         check_result = invoke_improvements_check_lambda(
             check_payload,

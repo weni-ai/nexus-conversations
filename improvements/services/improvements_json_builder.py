@@ -198,7 +198,11 @@ def upload_improvements_build_artifacts_to_s3(
     conversations_key = build_conversations_s3_key(payload)
     customization_key = build_customization_s3_key(payload)
     conversations_list = list(normalized_conversations)
-    customization_artifact = build_customization_artifact(customization, conversations_list)
+    customization_artifact = build_customization_artifact(
+        customization,
+        conversations_list,
+        project_uuid=str(payload.get("project_uuid", "")),
+    )
 
     with tempfile.NamedTemporaryFile(mode="w+b") as conversations_tmp:
         conversations_text = TextIOWrapper(conversations_tmp, encoding="utf-8")

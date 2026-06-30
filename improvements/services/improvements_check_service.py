@@ -63,6 +63,7 @@ def build_check_lambda_payload(
     *,
     state_url: str | None = None,
     cancel_if_incomplete: bool = False,
+    classification_classes: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "action": CHECK_ACTION,
@@ -72,6 +73,8 @@ def build_check_lambda_payload(
         payload["state_url"] = state_url
     if cancel_if_incomplete:
         payload["cancel_if_incomplete"] = True
+    if classification_classes:
+        payload["classification_classes"] = classification_classes
     return payload
 
 

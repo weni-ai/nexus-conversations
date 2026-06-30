@@ -36,6 +36,12 @@ class TestBuildCheckLambdaPayload:
             "state_url": "https://example.com/state",
         }
 
+    def test_includes_classification_classes(self):
+        batches = [{"batch_id": "b1"}]
+        classes = [{"name": "resposta-muito-longa", "definition": "Definition"}]
+        payload = build_check_lambda_payload(batches, classification_classes=classes)
+        assert payload["classification_classes"] == classes
+
     def test_includes_cancel_if_incomplete(self):
         batches = [{"batch_id": "b1"}]
         payload = build_check_lambda_payload(batches, cancel_if_incomplete=True)

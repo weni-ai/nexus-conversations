@@ -365,7 +365,7 @@ class TestImprovementsE2E:
             == 2
         )
 
-        check_key = build_check_state_s3_key(str(project.uuid), target_date)
+        check_key = build_check_state_s3_key(str(project.uuid), target_date, str(run.uuid))
         check_state = parse_s3_json(s3, settings.IMPROVEMENTS_S3_BUCKET, check_key)
         logger.info("[E2E s3] check_state uploaded key=%s body=%s", check_key, check_state)
         assert check_state["conversation_results"]

@@ -19,9 +19,9 @@ TERMINAL_CHECK_STATUSES = frozenset({"completed", "failed"})
 VALID_CHECK_STATUSES = TERMINAL_CHECK_STATUSES | frozenset({"partial", "in_progress", "cancelling"})
 
 
-def build_check_state_s3_key(project_uuid: str, target_date: str) -> str:
+def build_check_state_s3_key(project_uuid: str, target_date: str, run_uuid: str) -> str:
     prefix = getattr(settings, "IMPROVEMENTS_S3_PREFIX", "improvements").strip("/")
-    key_parts = [str(project_uuid), str(target_date), "check_state.json"]
+    key_parts = [str(project_uuid), str(target_date), str(run_uuid), "check_state.json"]
     if prefix:
         return f"{prefix}/{'/'.join(key_parts)}"
     return "/".join(key_parts)
@@ -35,12 +35,13 @@ def upload_check_state_to_s3(
     state_data: dict[str, Any],
     project_uuid: str,
     target_date: str,
+    run_uuid: str,
 ) -> dict[str, str]:
     bucket = getattr(settings, "IMPROVEMENTS_S3_BUCKET", "")
     if not bucket:
         raise ValueError("IMPROVEMENTS_S3_BUCKET is not configured")
 
-    key = build_check_state_s3_key(project_uuid, target_date)
+    key = build_check_state_s3_key(project_uuid, target_date, run_uuid)
     body = json.dumps(state_data, **JSON_DUMP_KWARGS).encode("utf-8")
     get_improvements_dependencies().s3.put_object(
         bucket,
@@ -50,9 +51,10 @@ def upload_check_state_to_s3(
     )
     s3_uri = f"s3://{bucket}/{key}"
     logger.info(
-        "[upload_check_state_to_s3] Uploaded check state project_uuid=%s target_date=%s s3_uri=%s",
+        "[upload_check_state_to_s3] Uploaded check state project_uuid=%s target_date=%s run_uuid=%s s3_uri=%s",
         project_uuid,
         target_date,
+        run_uuid,
         s3_uri,
     )
     return {"s3_uri": s3_uri, "bucket": bucket, "key": key}

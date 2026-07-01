@@ -20,7 +20,7 @@ class InternalAuthentication:
     def __init__(self):
         self.token_cache = TokenCache(cache_key_prefix="keycloak_internal")
 
-    def _fetch_token_from_keycloak(self) -> str:
+    def _fetch_token_from_keycloak(self) -> tuple[str, int]:
         """Fetch new token from Keycloak."""
         logger.debug("Fetching new token from Keycloak")
 
@@ -36,10 +36,12 @@ class InternalAuthentication:
             )
             response.raise_for_status()
 
-            token = response.json().get("access_token")
+            json_data = response.json()
+            token = json_data.get("access_token")
+            expires_in = json_data.get("expires_in", 12 * 60 * 60)
 
             if token:
-                return f"Bearer {token}"
+                return f"Bearer {token}", expires_in
 
             raise InternalAuthenticationTokenError("Access token not found in response")
 

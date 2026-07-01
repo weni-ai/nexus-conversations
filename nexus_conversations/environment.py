@@ -25,4 +25,7 @@ env = environ.Env(
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),
     JWT_PUBLIC_KEY=(str, ""),
+    CORS_ORIGIN_ALLOW_ALL=(bool, False),
+    CORS_ALLOWED_ORIGINS=(list, []),
+    CORS_ALLOW_CREDENTIALS=(bool, False),
 )

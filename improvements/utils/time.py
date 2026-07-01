@@ -48,3 +48,15 @@ def format_lambda_iso8601(value: Any) -> str:
     else:
         dt = pendulum.instance(value)
     return dt.in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss") + "+00:00"
+
+
+def format_schedule_registered_at(dt: pendulum.DateTime | None = None) -> str:
+    """Format polling registration timestamp for Redis metadata (UTC Z suffix)."""
+    moment = dt or pendulum.now("UTC")
+    return moment.in_timezone("UTC").format("YYYY-MM-DDTHH:mm:ss") + "Z"
+
+
+def polling_elapsed_seconds(registered_at: str) -> int:
+    """Return seconds elapsed since schedule_registered_at ISO string."""
+    started = pendulum.parse(registered_at).in_timezone("UTC")
+    return int(pendulum.now("UTC").diff(started).in_seconds())

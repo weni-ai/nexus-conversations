@@ -28,4 +28,7 @@ env = environ.Env(
     OIDC_OP_TOKEN_ENDPOINT=(str, ""),
     OIDC_RP_CLIENT_ID=(str, ""),
     OIDC_RP_CLIENT_SECRET=(str, ""),
+    CORS_ORIGIN_ALLOW_ALL=(bool, False),
+    CORS_ALLOWED_ORIGINS=(list, []),
+    CORS_ALLOW_CREDENTIALS=(bool, False),
 )

@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+from corsheaders.defaults import default_headers
+
 from .environment import env
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -33,6 +35,14 @@ DEBUG = env.bool("DEBUG")
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
+CORS_ALLOW_ALL_ORIGINS = env.bool("CORS_ORIGIN_ALLOW_ALL", default=DEBUG)
+
+if not CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
+
+CORS_ALLOW_CREDENTIALS = env.bool("CORS_ALLOW_CREDENTIALS", default=False)
+CORS_ALLOW_HEADERS = list(default_headers)
+
 # Internal API Tokens
 # Team-based tokens support (JSON dict: {"TeamName": "Token"})
 INTERNAL_API_TOKENS = env.json("INTERNAL_API_TOKENS", default={})
@@ -49,6 +59,7 @@ INSTALLED_APPS = [
     "django_celery_results",
     "django_celery_beat",
     "rest_framework",
+    "corsheaders",
     "drf_spectacular",
     "django_filters",
     "nexus_conversations.sentry",
@@ -58,6 +69,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

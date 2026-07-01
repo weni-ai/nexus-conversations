@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 import pendulum
+import sentry_sdk
 from django.conf import settings
 
 from improvements.enums import ImprovementRunStatus
@@ -36,12 +37,15 @@ from improvements.services.improvements_json_builder import (
     upload_improvements_build_artifacts_to_s3,
 )
 from improvements.services.improvements_redbeat_service import (
+    POLLING_TIMEOUT_FAILURE_REASON,
     TERMINAL_STATUSES,
     RunAlreadyTerminal,
     RunMetadataNotFound,
     get_run_metadata,
     improvements_run_key,
+    is_polling_past_timeout,
     mark_cancel_requested,
+    polling_timeout_elapsed_seconds,
     register_batch_check_schedule,
     unregister_batch_check_schedule,
     update_run_metadata,
@@ -189,6 +193,74 @@ def _sync_check_schedule(project_uuid: str, target_date: str, check_status: str)
         unregister_batch_check_schedule(project_uuid, target_date, status=check_status)
     elif check_status == "cancelling":
         update_run_metadata(project_uuid, target_date, status="cancelling")
+
+
+def _report_improvements_run_timeout_to_sentry(
+    *,
+    project_uuid: str,
+    target_date: str,
+    run,
+    metadata: dict[str, Any],
+    elapsed_seconds: int | None,
+) -> None:
+    timeout_seconds = getattr(settings, "IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS", 86400)
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("project_uuid", project_uuid)
+        scope.set_tag("target_date", target_date)
+        scope.set_tag("run_uuid", str(run.uuid) if run is not None else "unknown")
+        scope.set_context(
+            "improvements_timeout",
+            {
+                "elapsed_seconds": elapsed_seconds,
+                "schedule_registered_at": metadata.get("schedule_registered_at"),
+                "timeout_seconds": timeout_seconds,
+                "last_metadata_status": metadata.get("status"),
+                "run_db_status": run.status if run is not None else None,
+            },
+        )
+        sentry_sdk.capture_message(
+            "Improvements batch check exceeded 24h without terminal Lambda response",
+            level="error",
+        )
+
+
+def _expire_stale_improvements_run(
+    *,
+    project_uuid: str,
+    target_date: str,
+    run,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    elapsed_seconds = polling_timeout_elapsed_seconds(metadata, run)
+    logger.error(
+        "[check_improvements_batches] Polling timeout project_uuid=%s target_date=%s "
+        "elapsed_seconds=%s schedule_registered_at=%s",
+        project_uuid,
+        target_date,
+        elapsed_seconds,
+        metadata.get("schedule_registered_at"),
+    )
+    unregister_batch_check_schedule(project_uuid, target_date, status="cancelled")
+    if run is not None:
+        mark_run_status(
+            run,
+            ImprovementRunStatus.CANCELLED,
+            failure_reason=POLLING_TIMEOUT_FAILURE_REASON,
+        )
+    _report_improvements_run_timeout_to_sentry(
+        project_uuid=project_uuid,
+        target_date=target_date,
+        run=run,
+        metadata=metadata,
+        elapsed_seconds=elapsed_seconds,
+    )
+    return {
+        "project_uuid": project_uuid,
+        "target_date": target_date,
+        "status": "cancelled",
+        "expired": True,
+        "reason": "polling_timeout",
+    }
 
 
 @celery_app.task(
@@ -376,7 +448,14 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             return metadata
 
         run = _resolve_check_run(project_uuid, target_date, metadata)
-        run_uuid = str(run.uuid) if run is not None else str(metadata.get("run_uuid", ""))
+        if is_polling_past_timeout(metadata, run):
+            return _expire_stale_improvements_run(
+                project_uuid=project_uuid,
+                target_date=target_date,
+                run=run,
+                metadata=metadata,
+            )
+
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _resolve_check_batches(project_uuid, target_date, metadata)
         check_payload = build_check_lambda_payload(

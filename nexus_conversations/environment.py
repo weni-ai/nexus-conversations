@@ -28,4 +28,5 @@ env = environ.Env(
     OIDC_OP_TOKEN_ENDPOINT=(str, ""),
     OIDC_RP_CLIENT_ID=(str, ""),
     OIDC_RP_CLIENT_SECRET=(str, ""),
+    IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=(int, 86400),
 )

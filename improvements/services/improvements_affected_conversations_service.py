@@ -34,7 +34,10 @@ def list_affected_conversations(
     except ImprovementDetailNotFound:
         raise
 
-    links_qs = item.affected_conversations.select_related("conversation").order_by("pk")
+    links_qs = item.affected_conversations.select_related(
+        "conversation",
+        "conversation__messages_data",
+    ).order_by("pk")
     total_count = links_qs.count()
     offset = (page - 1) * page_size
     links = list(links_qs[offset : offset + page_size])

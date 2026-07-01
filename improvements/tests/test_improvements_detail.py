@@ -6,6 +6,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.models import Conversation, ConversationMessages, Project
 from improvements.enums import (
     ImprovementItemStatus,
@@ -391,6 +392,44 @@ class TestImprovementsAffectedConversationsService:
         assert len(page_two["results"]) == 1
         assert page_two["previous"] is not None
         assert page_two["next"] is None
+
+    def test_list_affected_conversations_avoids_messages_data_n_plus_one(self, project, django_assert_num_queries):
+        run = _create_run(project)
+        item = _create_backlog_item(run)
+        for index in range(2):
+            conversation = _link_conversation(
+                item,
+                project,
+                contact_urn=f"whatsapp:+551199999999{index}",
+                contact_name=f"Contact {index}",
+                evidence=[f"msg-{index}"],
+            )
+            conversation.resolution = ResolutionEntities.RESOLVED
+            conversation.save(update_fields=["resolution"])
+            ConversationMessages.objects.create(
+                conversation=conversation,
+                messages=[
+                    {
+                        "message_id": f"msg-{index}",
+                        "text": f"Message {index}",
+                        "source": "user",
+                        "created_at": "2026-06-23T09:44:26-03:00",
+                    },
+                ],
+            )
+
+        with django_assert_num_queries(3):
+            result = list_affected_conversations(
+                project.uuid,
+                item.uuid,
+                page=1,
+                page_size=2,
+                base_url="http://testserver/api/v1/projects/x/improvements/y/affected_conversations/",
+            )
+
+        assert result["count"] == 2
+        assert len(result["results"]) == 2
+        assert result["results"][0]["messages"][0]["text"] == "Message 0"
 
 
 @pytest.mark.django_db

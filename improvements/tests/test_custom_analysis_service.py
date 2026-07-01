@@ -55,6 +55,41 @@ class TestCustomAnalysisService:
         assert result["exclusions"].startswith("Não classifique")
         assert ImprovementCustomMonitor.objects.filter(project=project).count() == 1
 
+    def test_list_custom_analyses_uses_single_query(self, project, django_assert_num_queries):
+        for index in range(2):
+            monitor = ImprovementCustomMonitor.objects.create(
+                project=project,
+                title=f"Monitor {index}",
+                slug=f"monitor-{index}",
+                definition="Definition",
+            )
+            run = ImprovementAnalysisRun.objects.create(
+                project=project,
+                target_date=f"2026-02-0{index + 5}",
+                triggered_on_date=f"2026-02-0{index + 6}",
+                status=ImprovementRunStatus.COMPLETED,
+                range_start_utc=utc_datetime(2026, 2, 5),
+                range_end_utc=utc_datetime(2026, 2, 5, 23, 59, 59),
+            )
+            ImprovementBacklogItem.objects.create(
+                project=project,
+                run=run,
+                dimension_id=custom_dimension_id(monitor.slug),
+                item_type=ImprovementItemType.CUSTOM,
+                custom_monitor=monitor,
+                title="Issue",
+                diagnosis="Diagnosis",
+                affected_conversations_count=index + 1,
+                status=ImprovementItemStatus.ACTIVE,
+            )
+
+        with django_assert_num_queries(1):
+            result = list_custom_analyses(project)
+
+        assert len(result) == 2
+        counts = {item["title"]: item["conversations_count"] for item in result}
+        assert counts == {"Monitor 0": 1, "Monitor 1": 2}
+
     def test_list_custom_analyses_includes_conversations_count(self, project):
         monitor = ImprovementCustomMonitor.objects.create(
             project=project,

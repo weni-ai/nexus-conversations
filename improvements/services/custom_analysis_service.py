@@ -4,12 +4,14 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from django.core.exceptions import ValidationError
-from django.db.models import Sum
+from django.db import transaction
+from django.db.models import F, Q, Sum, Value
+from django.db.models.functions import Coalesce, Concat
 from django.utils.text import slugify
 
 from conversation_ms.models import Project
 from improvements.enums import ImprovementItemStatus
-from improvements.models import ImprovementBacklogItem, ImprovementCustomMonitor
+from improvements.models import ImprovementCustomMonitor
 from improvements.utils.time import utc_now
 
 CUSTOM_DIMENSION_PREFIX = "custom:"
@@ -50,21 +52,26 @@ def build_monitor_slug(title: str, *, project: Project, exclude_pk: UUID | None 
         suffix += 1
 
 
-def _conversations_count_for_monitor(monitor: ImprovementCustomMonitor) -> int:
-    aggregate = ImprovementBacklogItem.objects.filter(
-        project_id=monitor.project_id,
-        custom_monitor=monitor,
-        dimension_id=custom_dimension_id(monitor.slug),
-        status=ImprovementItemStatus.ACTIVE,
-    ).aggregate(total=Sum("affected_conversations_count"))
-    return int(aggregate["total"] or 0)
+def _annotate_monitors_with_conversations_count(queryset):
+    return queryset.annotate(
+        conversations_count=Coalesce(
+            Sum(
+                "backlog_items__affected_conversations_count",
+                filter=Q(
+                    backlog_items__status=ImprovementItemStatus.ACTIVE,
+                    backlog_items__dimension_id=Concat(Value(CUSTOM_DIMENSION_PREFIX), F("slug")),
+                ),
+            ),
+            Value(0),
+        ),
+    )
 
 
 def _map_monitor_list_item(monitor: ImprovementCustomMonitor) -> dict[str, Any]:
     return {
         "uuid": str(monitor.uuid),
         "title": monitor.title,
-        "conversations_count": _conversations_count_for_monitor(monitor),
+        "conversations_count": int(monitor.conversations_count),
     }
 
 
@@ -79,7 +86,7 @@ def _map_monitor_detail(monitor: ImprovementCustomMonitor) -> dict[str, Any]:
 
 
 def list_custom_analyses(project: Project) -> list[dict[str, Any]]:
-    monitors = _active_monitors_queryset(project).order_by("-created_at")
+    monitors = _annotate_monitors_with_conversations_count(_active_monitors_queryset(project)).order_by("-created_at")
     return [_map_monitor_list_item(monitor) for monitor in monitors]
 
 
@@ -145,8 +152,11 @@ def update_custom_analysis(
     return _map_monitor_detail(monitor)
 
 
+@transaction.atomic
 def delete_custom_analysis(project: Project, monitor_uuid: UUID | str) -> None:
-    monitor = get_custom_analysis(project, monitor_uuid)
+    monitor = _active_monitors_queryset(project).select_for_update().filter(uuid=monitor_uuid).first()
+    if monitor is None:
+        raise CustomAnalysisNotFound
     monitor.is_active = False
     monitor.deleted_at = utc_now()
     monitor.save(update_fields=["is_active", "deleted_at", "updated_at"])

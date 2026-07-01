@@ -82,10 +82,17 @@ class TokenCache:
 
         logger.debug(f"Generating new token for: {identifier}")
 
-        new_token = token_factory()
+        factory_result = token_factory()
+
+        if isinstance(factory_result, tuple):
+            new_token, factory_ttl = factory_result
+            effective_ttl = ttl_seconds if ttl_seconds is not None else factory_ttl
+        else:
+            new_token = factory_result
+            effective_ttl = ttl_seconds
 
         if new_token:
-            self.set(identifier, new_token, ttl_seconds)
+            self.set(identifier, new_token, effective_ttl)
             return new_token
 
         raise ValueError("Token factory returned empty token")

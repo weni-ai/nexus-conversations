@@ -80,6 +80,17 @@ class TestTokenCache:
         with pytest.raises(ValueError, match="Token factory returned empty token"):
             token_cache.get_or_generate("main", lambda: "")
 
+    def test_get_or_generate_uses_ttl_from_factory_tuple(self, in_memory_cache):
+        token_cache = TokenCache(cache_key_prefix="test")
+        factory = Mock(return_value=("Bearer new", 1800))
+
+        result = token_cache.get_or_generate("main", factory)
+
+        assert result == "Bearer new"
+        cached = in_memory_cache["test:main"]
+        assert cached["token"] == "Bearer new"
+        assert cached["expires_at"] == pytest.approx(time.time() + 1800, abs=2)
+
 
 @pytest.mark.django_db
 class TestInternalAuthentication:
@@ -94,13 +105,14 @@ class TestInternalAuthentication:
         settings.OIDC_RP_CLIENT_SECRET = "client-secret"
 
         mock_response = Mock()
-        mock_response.json.return_value = {"access_token": "token-123"}
+        mock_response.json.return_value = {"access_token": "token-123", "expires_in": 3600}
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        result = auth._fetch_token_from_keycloak()
+        token, expires_in = auth._fetch_token_from_keycloak()
 
-        assert result == "Bearer token-123"
+        assert token == "Bearer token-123"
+        assert expires_in == 3600
         mock_post.assert_called_once_with(
             url="https://keycloak.example/token",
             data={
@@ -136,7 +148,22 @@ class TestInternalAuthentication:
         with pytest.raises(InternalAuthenticationTokenError, match="Failed to fetch token"):
             auth._fetch_token_from_keycloak()
 
-    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value="Bearer fresh")
+    @patch("conversation_ms.internals.requests.post")
+    def test_fetch_token_defaults_expires_in_when_missing(self, mock_post, auth, settings):
+        settings.OIDC_OP_TOKEN_ENDPOINT = "https://keycloak.example/token"
+        settings.OIDC_RP_CLIENT_ID = "client-id"
+        settings.OIDC_RP_CLIENT_SECRET = "client-secret"
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"access_token": "token-123"}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        _, expires_in = auth._fetch_token_from_keycloak()
+
+        assert expires_in == 12 * 60 * 60
+
+    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value=("Bearer fresh", 3600))
     def test_headers_uses_cached_token(self, mock_fetch, auth, in_memory_cache):
         in_memory_cache["keycloak_internal:main"] = {
             "token": "Bearer cached",
@@ -150,7 +177,7 @@ class TestInternalAuthentication:
         mock_fetch.assert_not_called()
 
     @patch("conversation_ms.internals.requests.request")
-    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value="Bearer fresh")
+    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value=("Bearer fresh", 3600))
     def test_make_request_with_retry_invalidates_cache_on_401(self, mock_fetch, mock_request, auth, in_memory_cache):
         in_memory_cache["keycloak_internal:main"] = {
             "token": "Bearer stale",
@@ -169,7 +196,7 @@ class TestInternalAuthentication:
         assert in_memory_cache["keycloak_internal:main"]["token"] == "Bearer fresh"
 
     @patch("conversation_ms.internals.requests.request")
-    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value="Bearer fresh")
+    @patch.object(InternalAuthentication, "_fetch_token_from_keycloak", return_value=("Bearer fresh", 3600))
     def test_make_request_with_retry_invalidates_cache_on_403(self, mock_fetch, mock_request, auth, in_memory_cache):
         in_memory_cache["keycloak_internal:main"] = {
             "token": "Bearer stale",

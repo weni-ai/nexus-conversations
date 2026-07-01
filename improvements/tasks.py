@@ -70,6 +70,20 @@ def _enrich_batches_with_submitted_at(batches: list[dict[str, Any]]) -> list[dic
     return enriched
 
 
+def _resolve_check_batches(
+    project_uuid: str,
+    target_date: str,
+    metadata: dict[str, Any],
+) -> list[dict[str, Any]]:
+    raw_batches = list(metadata["batches"])
+    if not any("submitted_at" not in batch for batch in raw_batches):
+        return raw_batches
+
+    batches = _enrich_batches_with_submitted_at(raw_batches)
+    update_run_metadata(project_uuid, target_date, batches=batches)
+    return batches
+
+
 def _resolve_or_create_db_run(payload: dict[str, Any]):
     run = get_analysis_run_for_payload(payload)
     if run is not None:
@@ -268,6 +282,9 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             len(analysis_result.get("batches", [])),
         )
 
+        enriched_batches = _enrich_batches_with_submitted_at(list(analysis_result.get("batches", [])))
+        analysis_result = {**analysis_result, "batches": enriched_batches}
+
         persist_analysis_build_phase(
             run,
             payload=payload,
@@ -358,7 +375,7 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
 
         run = _resolve_check_run(project_uuid, target_date, metadata)
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
-        batches = _enrich_batches_with_submitted_at(list(metadata["batches"]))
+        batches = _resolve_check_batches(project_uuid, target_date, metadata)
         check_payload = build_check_lambda_payload(
             batches,
             state_url=_resolve_check_state_url(project_uuid, target_date),

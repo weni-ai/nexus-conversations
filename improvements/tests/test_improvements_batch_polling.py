@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from django.conf import settings
@@ -18,8 +18,12 @@ from improvements.models import (
     ImprovementBacklogItem,
     ImprovementRunConversation,
 )
-from improvements.services.improvements_redbeat_service import save_run_metadata
-from improvements.tasks import cancel_improvements_batches, check_improvements_batches
+from improvements.services.improvements_redbeat_service import get_run_metadata, save_run_metadata
+from improvements.tasks import (
+    _enrich_batches_with_submitted_at,
+    cancel_improvements_batches,
+    check_improvements_batches,
+)
 from improvements.utils.time import utc_datetime
 
 
@@ -77,6 +81,24 @@ def use_locmem_cache():
 
 
 @pytest.mark.django_db
+class TestEnrichBatchesWithSubmittedAt:
+    def test_adds_submitted_at_when_missing(self):
+        batches = [{"batch_id": "b1"}]
+
+        enriched = _enrich_batches_with_submitted_at(batches)
+
+        assert enriched[0]["submitted_at"].endswith("Z")
+        assert "submitted_at" not in batches[0]
+
+    def test_preserves_existing_submitted_at(self):
+        batches = [{"batch_id": "b1", "submitted_at": "2026-05-29T12:00:00Z"}]
+
+        enriched = _enrich_batches_with_submitted_at(batches)
+
+        assert enriched[0]["submitted_at"] == "2026-05-29T12:00:00Z"
+
+
+@pytest.mark.django_db
 class TestCheckImprovementsBatchesTask:
     @patch("improvements.tasks.unregister_batch_check_schedule")
     @patch("improvements.tasks.invoke_improvements_check_lambda")
@@ -117,7 +139,27 @@ class TestCheckImprovementsBatchesTask:
         assert result["status"] == "cancelling"
         assert result["cancel_if_incomplete"] is True
         mock_unregister.assert_not_called()
-        mock_update.assert_called_once_with("uuid", "2026-05-29", status="cancelling")
+        mock_update.assert_any_call("uuid", "2026-05-29", batches=ANY)
+        mock_update.assert_any_call("uuid", "2026-05-29", status="cancelling")
+
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_persists_submitted_at_on_first_poll(self, mock_exists, mock_invoke, mock_unregister):
+        save_run_metadata("uuid", "2026-05-29", [{"batch_id": "b1", "input_file_id": "f1"}])
+        mock_invoke.return_value = {"status": "partial", "state_data": {"classifications": []}}
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            check_improvements_batches.run(project_uuid="uuid", target_date="2026-05-29")
+
+        metadata = get_run_metadata("uuid", "2026-05-29")
+        assert metadata["batches"][0]["submitted_at"].endswith("Z")
+
+        first_submitted_at = metadata["batches"][0]["submitted_at"]
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            check_improvements_batches.run(project_uuid="uuid", target_date="2026-05-29")
+        metadata_after_second_poll = get_run_metadata("uuid", "2026-05-29")
+        assert metadata_after_second_poll["batches"][0]["submitted_at"] == first_submitted_at
 
     @patch("improvements.tasks.unregister_batch_check_schedule")
     @patch("improvements.tasks.invoke_improvements_check_lambda")

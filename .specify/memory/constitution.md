@@ -6,7 +6,7 @@
 
 Nexus Conversations owns conversation metadata, closed-message storage (Postgres),
 in-progress message storage (DynamoDB), classification, and batch lifecycle jobs.
-Features MUST stay within the **nexus-conversations MS** boundary. Cross-repo consumers (nexus-ai, legacy Nexus DB) are out of scope for this feature.
+Features MUST stay within the **nexus-conversations MS backend** boundary. Frontend and cross-repo consumers are out of scope.
 
 ### II. Data Safety (NON-NEGOTIABLE)
 
@@ -59,7 +59,7 @@ natively rather than coupling to unrelated microservices.
 1. Spec → plan → tasks → analyze → implement.
 2. Ship API retention filter **before** enabling deletion (Phase 1 before Phase 3).
 3. Staging dry-run validation of S3 payloads is mandatory before production delete.
-4. Manual restore runbook (engineering) + support archive consult API (required) before spec complete; product self-service restore is out of scope.
+4. Support archive API (Supervisor V2 shape from S3) required before spec complete; **no Postgres restore**.
 
 ## Governance
 
@@ -67,4 +67,4 @@ This constitution supersedes ad-hoc implementation choices for retention/archiva
 Amendments require documented rationale. `/speckit-analyze` MUST flag constitution violations
 as CRITICAL.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-01 | **Last Amended**: 2026-07-01
+**Version**: 1.3.0 | **Ratified**: 2026-07-01 | **Last Amended**: 2026-07-03

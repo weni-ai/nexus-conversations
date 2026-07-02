@@ -10,7 +10,7 @@
 
 **Decision**: Use Django `Coalesce("end_date", "start_date", "created_at")` compared to `timezone.now() - timedelta(days=RETENTION_DAYS)`.
 
-**API filter**: Exclude rows where `eligible_ts < cutoff` **unless** `resolution = "2"` (In Progress).
+**API filter**: Exclude rows where `eligible_ts < cutoff` **unless** `resolution = "2"` (In Progress). Cutoff computed in **project timezone** (same helper as archival).
 
 **Archive eligibility**: Same cutoff **and** `resolution != "2"` **and** must have `ConversationMessages` row (closed snapshot exists).
 
@@ -43,25 +43,38 @@
 
 ---
 
-## R3 — Archive orchestration pattern
+## R3 — Archive orchestration pattern (Livedesk-style)
 
-**Decision**: New module `conversation_ms/archive/runner.py` mirroring `close_daily/runner.py`:
+**Decision**: Two-task pattern mirroring Livedesk chat-room archiving (Kallil) and `close_daily` fan-out:
 
+**Task 1 — `archive_dispatcher_task`** (Celery Beat, **every hour**):
 1. Acquire global Redis lock (`ARCHIVE_CONVERSATIONS_LOCK_KEY`)
-2. Query eligible conversations with `.iterator(chunk_size=500)`
-3. Per conversation: build payload → gzip → `put_object` → `head_object` verify etag
-4. If not dry-run: `conversation.delete()` (CASCADE messages + classification)
-5. Release lock; emit metrics
+2. For each project (timezone from `Project.timezone`, fallback `FALLBACK_TIMEZONE`):
+   - Compute 90-day cutoff in **project local context** (same principle as `close_daily`)
+   - Query eligible conversations (closed, past cutoff, has `messages_data`)
+   - Select up to `ARCHIVE_BATCH_SIZE` per dispatcher run (global or per-project cap — default global cap with fair project iteration)
+3. Enqueue `archive_conversation_task.delay(conversation_uuid, project_uuid)` per selected row
+4. Release lock; emit `enqueued`, `backlog_remaining` metrics
 
-**Schedule**: Celery Beat crontab `minute=0, hour=3` UTC (after `close_daily` window).
+**Task 2 — `archive_conversation_task`** (dedicated queue, one conversation):
+1. Build payload → gzip → `put_object` → `head_object` verify
+2. If not dry-run: `conversation.delete()` (CASCADE)
+3. Structured log per conversation
 
-**Idempotency**: If S3 key exists and etag matches expected checksum, safe to delete DB row on retry.
+**Schedule**: `crontab(minute=0)` — every hour, 24/7. Rate spread via batch cap avoids DB overload vs single nightly drain.
+
+**Queue**: All archive tasks use `CONVERSATION_ARCHIVE_CELERY_QUEUE` (default `conversations-archive`). Beat `options: {queue: ...}`.
+
+**Infrastructure**: Dedicated Celery worker deployment in Argo CD (reference: `chats-engine-celery-archive`). Cloud team provisions separate worker pool.
+
+**Idempotency**: Deterministic S3 key; if object exists and etag matches, safe to delete DB row on retry.
 
 **Alternatives considered**:
-- **Reuse rp-archiver Go service** — Rejected: wrong data model, high coupling (see technical scope doc §3).
-- **Per-project sub-tasks like close_daily** — Optional future optimization; v1 uses single global batch with iterator unless profiling shows need to split.
+- **Single daily job at 03:00 UTC** — Rejected: Sandro/Kallil — backlog can outpace single run.
+- **Reuse rp-archiver Go service** — Rejected: wrong data model, high coupling.
+- **Monolithic iterator in one task** — Rejected: no independent scaling; blocks queue.
 
-**Codebase anchor**: `conversation_ms/close_daily/runner.py`, `conversation_ms/close_daily/constants.py`.
+**Codebase anchor**: `conversation_ms/close_daily/runner.py`, Livedesk Miro `uXjVGco8kDY`.
 
 ---
 
@@ -93,21 +106,38 @@ Messages reuse `MessageMigrationService._format_messages_for_storage()` for cons
 
 ---
 
-## R5 — Restore mechanism (v1)
+## R5 — Archive retrieval for support (Phase D, required)
 
-**Decision**: Django management command `restore_conversation_from_archive`:
+**Decision**: Dedicated internal API reads S3 and returns **Supervisor Public V2** conversation shape. **No Postgres write.**
 
-1. `get_object` from S3 by deterministic key (or list prefix if month unknown)
-2. Validate `schema_version` and `content_sha256`
-3. `transaction.atomic()`: upsert Conversation, ConversationMessages, ConversationClassification
-4. Idempotent: if UUID exists, abort with clear message unless `--force`
+**Response shape** (aligned with `SupervisorPublicConversationItemSerializer` / nexus-ai `_transform_conversation`):
 
-**Support API (Phase D, required)**: Dedicated internal DRF view under `archived-conversations` route namespace — reads S3 only; does not modify standard list/detail APIs.
+```json
+{
+  "conversation_uuid": "uuid",
+  "start_date": "ISO8601 | null",
+  "created_at": "ISO8601",
+  "ended_at": "ISO8601 | null",
+  "status": "string",
+  "topic": "string",
+  "channel_uuid": "uuid | null",
+  "contact_urn": "string",
+  "messages": [
+    { "text": "...", "source": "...", "created_at": "..." }
+  ],
+  "archived_at": "ISO8601",
+  "is_archived": true
+}
+```
+
+Implementation: `archive/response_adapter.py` maps S3 archive payload → V2 shape; reuse message normalization from `MessageMigrationService` storage format.
 
 **Alternatives considered**:
-- **Product UI restore** — Out of scope per product decision.
-- **Automatic S3 rehydration on 404** — Rejected: hides latency/cost; explicit restore only.
-- **`include_archived` query param on list/detail** — Rejected: weaker auth boundary; dedicated endpoint is safer.
+- **Re-insert into Postgres** — Rejected: Sandro — org pattern is document retrieval, not DB restore.
+- **Raw S3 archive JSON to support** — Rejected: support tools expect supervisor-shaped payload.
+- **Product UI self-service** — Out of scope.
+
+**Codebase anchor**: `conversation_ms/views_archived.py`, `nexus-ai/.../supervisor_public.py` `_transform_conversation`, `conversation_ms/serializers.py` `ConversationDetailSerializer`.
 
 ---
 
@@ -160,6 +190,13 @@ Sentry: capture upload/delete exceptions with tags `project_uuid`, `conversation
 | `CONVERSATION_ARCHIVE_LOCK_ENABLED` | `true` | Distributed lock |
 | `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `7200` | Lock TTL |
 | `CONVERSATION_ARCHIVE_ENABLED` | `false` | Master kill switch |
+| `CONVERSATION_ARCHIVE_BATCH_SIZE` | `500` | Max conversations enqueued per hourly dispatcher run |
+| `CONVERSATION_ARCHIVE_CELERY_QUEUE` | `conversations-archive` | Dedicated Celery queue name |
+| `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS` | `3600` | Celery expires on enqueued worker tasks |
+| `CONVERSATION_ARCHIVE_WINDOW_START_HOUR` | `null` | Optional processing window start (**project timezone**) |
+| `CONVERSATION_ARCHIVE_WINDOW_END_HOUR` | `null` | Optional processing window end (**project timezone**) |
+
+Support archive API auth: existing `INTERNAL_API_TOKENS` only (no separate env var).
 
 Add to `nexus_conversations/environment.py` and `settings.py`.
 
@@ -167,36 +204,88 @@ Add to `nexus_conversations/environment.py` and `settings.py`.
 
 ## R9 — Archived conversation access API design
 
-**Decision**: **Dedicated endpoint namespace** — never a query param on standard list/detail.
-
-**Routes** (internal auth, support scope):
+**Decision**: **Dedicated endpoint** returning **Supervisor Public V2** JSON shape — never a query param on standard list/detail.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/` | Archive metadata from S3 HEAD + payload header parse |
-| GET | `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/?include_payload=true` | Full decompressed archive JSON in response body |
+| GET | `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/` | Retrieve archived conversation (V2 shape) from S3 |
 
-Optional future: presigned URL variant if payload size exceeds API limit — document in contracts if needed.
+**Auth**: Same as `ConversationViewSet` — `InternalTokenAuthentication` + `IsAuthenticated`.
 
-**Auth**: `InternalTokenAuthentication` + dedicated permission class (support/archive scope). Standard conversation read tokens MUST NOT grant access.
-
-**Rationale**:
-- Separates public retention-filtered API from archive consult path
-- Clearer audit trail and permission model
-- Prevents accidental exposure via forgotten query-param checks
+**Behavior**: S3 `get_object` → validate → `response_adapter` → V2 JSON. No Postgres write. Audit log every access.
 
 **Alternatives considered**:
-- **`include_archived=true` on list/detail** — Rejected: same route + conditional auth is error-prone.
-- **Support API optional / post-v1** — Rejected: required to complete spec (can merge last).
+- **`include_archived` on list/detail** — Rejected.
+- **Raw archive payload / `include_payload` param** — Rejected: support needs V2 shape (Sandro).
+- **Postgres restore** — Rejected.
 
-**Codebase anchor**: new `conversation_ms/views_archived.py`, register in `nexus_conversations/urls.py`.
+**Codebase anchor**: `conversation_ms/views_archived.py`, `conversation_ms/archive/response_adapter.py`.
 
 ---
 
-## R10 — Frontend retention notice
+## R10 — Dedicated Celery worker (Argo CD)
 
-**Decision**: Backend does not render UI copy. agent-builder-webapp conversations module adds i18n key (4 locales per VTEX Content Guide) explaining 90-day history limit.
+**Decision**: Provision a separate Kubernetes deployment for archive workers, consuming only `conversations-archive` queue.
 
-**Backend responsibility**: Enforce filter consistently so frontend notice matches behavior.
+**Reference**: `chats-engine-celery-archive` in Argo CD (Livedesk pattern per Sandro).
 
-**Suggested i18n namespace**: `conversations.retention.notice` (frontend ticket, out of nexus-conversations v1 code path except API behavior).
+**Worker command**: `celery -A nexus_conversations worker -Q conversations-archive --concurrency=N`
+
+**Rationale**: Archive is I/O-heavy (S3, gzip, large JSON); isolates from `close_daily`, `reclassify`, and API-triggered tasks.
+
+**Owner**: **Cloud** (time de infra) — Argo CD manifest; engineering provides queue name + env contract.
+
+**Alternatives considered**:
+- **Shared default queue** — Rejected: Sandro — concurrency starvation risk.
+
+---
+
+## R11 — Archive tracking tables (make unreasonable states invalid)
+
+**Decision**: Add `ConversationArchiveBatch` + `ConversationArchiveRecord` with strict state machine.
+
+**Principle**: Follow **make unreasonable states invalid** — invalid states are unrepresentable (DB) or rejected (service), not caught only at runtime.
+
+**Mechanisms**:
+- Enum status with explicit transition graph in `ArchiveRecordStateMachine`
+- UNIQUE(`conversation_uuid`) — one archive record per conversation
+- Conditional NOT NULL: `s3_key` required when status ≥ ARCHIVED
+- `errors` JSON stores `{ "message": "...", "sentry_event_id": "..." }` on FAILED
+- Dispatcher skips UUIDs with record in non-retryable terminal/active states
+
+**Reference**: Livedesk Miro `roomarchivedconversation` + status sticky note.
+
+**Alternatives considered**:
+- **`archived_at` column on Conversation** — Rejected: row deleted in Phase C; tracking table survives.
+- **Logs/metrics only** — Rejected: no post-delete audit, weak fail-safe.
+
+**Codebase anchor**: `conversation_ms/models.py`, `conversation_ms/archive/state_machine.py`.
+
+---
+
+## R12 — Celery expires & processing window
+
+**Decision**:
+- Dispatcher enqueues `archive_conversation_task.apply_async(..., expires=now + CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS)`
+- Worker checks `is_in_archive_window()` at start in **project timezone**; if false, exit without state change (record stays `PENDING`)
+
+**Rationale**: Livedesk Miro task 2 + quick notes; prevents stale queue backlog from hammering DB.
+
+**Alternatives considered**:
+- **Hard 1h–5h only window** — Rejected as sole strategy; Sandro prefers hourly + batch cap. Window is optional guardrail.
+
+---
+
+## R13 — Idempotent already-archived path
+
+**Decision**: Before upload, HEAD S3 object. If exists and `content_sha256` matches (or etag valid), transition to ARCHIVED without re-upload. If dry-run off and Postgres row exists, proceed to delete.
+
+**Rationale**: Livedesk fail-safe "fail archival of already archived rooms"; safe retries.
+
+---
+
+## R14 — Scope: backend only
+
+**Decision**: No frontend deliverables. Retention enforcement is API behavior only. Product/UI comms out of engineering scope.
+
+**Out of scope**: Frontend deliverables; retention enforced via API only.

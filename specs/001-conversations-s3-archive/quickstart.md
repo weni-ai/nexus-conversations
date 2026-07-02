@@ -1,16 +1,8 @@
 # Quickstart: Conversations S3 Archive
 
-**Feature**: `001-conversations-s3-archive` | **Date**: 2026-07-01
-
-## Prerequisites
-
-- nexus-conversations running locally with Postgres + Redis
-- AWS credentials or moto for S3 tests
-- Platform: S3 bucket + IAM for staging/prod (Phase B+)
+**Spec**: v1.3.0 | **Scope**: backend only
 
 ## Local configuration
-
-Add to `.env`:
 
 ```bash
 CONVERSATION_RETENTION_DAYS=90
@@ -18,106 +10,71 @@ CONVERSATION_ARCHIVE_ENABLED=true
 CONVERSATION_ARCHIVE_DRY_RUN=true
 CONVERSATION_ARCHIVE_S3_BUCKET=your-bucket
 CONVERSATION_ARCHIVE_S3_PREFIX=conversations-archive
-AWS_REGION=us-east-1
+CONVERSATION_ARCHIVE_BATCH_SIZE=500
+CONVERSATION_ARCHIVE_CELERY_QUEUE=conversations-archive
+CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS=3600
+# Optional: CONVERSATION_ARCHIVE_WINDOW_START_HOUR=1
+# Optional: CONVERSATION_ARCHIVE_WINDOW_END_HOUR=5
 ```
 
-## Phase A — Verify API retention filter
+Run archive workers on dedicated queue:
 
 ```bash
-cd nexus-conversations
+poetry run celery -A nexus_conversations worker -Q conversations-archive -l info
+```
+
+## Phase A — Retention filter
+
+```bash
 poetry run pytest conversation_ms/tests/test_retention_filter.py -v
 ```
 
-Manual check:
-
-1. Create closed conversation with `end_date` 91 days ago → list API excludes it
-2. Create in-progress conversation with `start_date` 100 days ago → list API includes it
-3. Boundary: exactly 90 days → included (cutoff is `<`, not `<=`)
-
-## Phase B — Dry-run archive job
+## Phase B — Archive (dry-run)
 
 ```bash
 poetry run python manage.py shell -c "
-from conversation_ms.tasks import archive_expired_conversations_task
-print(archive_expired_conversations_task.apply().result)
+from conversation_ms.tasks import archive_dispatcher_task
+print(archive_dispatcher_task.apply().result)
 "
 ```
 
-Verify S3:
+Verify:
+- S3 objects created
+- `ConversationArchiveRecord` rows: PENDING → IN_PROGRESS → ARCHIVED
+- Postgres conversation rows unchanged (`DRY_RUN=true`)
 
 ```bash
-aws s3 ls s3://your-bucket/conversations-archive/ --recursive | head
-aws s3 cp s3://your-bucket/conversations-archive/{project}/{yyyy}/{mm}/{uuid}.json.gz - | gunzip | jq .
+poetry run pytest conversation_ms/tests/test_archive_state_machine.py \
+  conversation_ms/tests/test_archive_tracking_models.py \
+  conversation_ms/tests/test_archive_dispatcher.py \
+  conversation_ms/tests/test_archive_worker.py -v
 ```
 
-Confirm Postgres row count unchanged (`DRY_RUN=true`).
+## Phase C — Enable deletion
 
-## Phase C — Enable deletion (staging only)
+`CONVERSATION_ARCHIVE_DRY_RUN=false` → records reach `DELETED`, conversation rows removed.
 
-```bash
-CONVERSATION_ARCHIVE_DRY_RUN=false
-```
-
-Re-run task; confirm row deleted and S3 object remains.
-
-## Restore archived conversation
+## Phase D — Support API
 
 ```bash
-poetry run python manage.py restore_conversation_from_archive \
-  --conversation-uuid=<uuid> \
-  --project-uuid=<project-uuid> \
-  --dry-run
-
-# After dry-run OK:
-poetry run python manage.py restore_conversation_from_archive \
-  --conversation-uuid=<uuid> \
-  --project-uuid=<project-uuid>
-```
-
-Verify via detail API.
-
-## Phase D — Support archive API
-
-```bash
-# Metadata only (requires support-scoped internal token)
-curl -H "Authorization: Token <support-token>" \
+curl -H "Authorization: Bearer <support-team-token>" \
   "http://localhost:8000/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/"
-
-# Full payload
-curl -H "Authorization: Token <support-token>" \
-  "http://localhost:8000/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/?include_payload=true"
 ```
 
-```bash
-poetry run pytest conversation_ms/tests/test_archived_conversations_api.py -v
-```
+## Staging checklist
 
-## Test suite
-
-```bash
-poetry run pytest conversation_ms/tests/test_archive_runner.py \
-  conversation_ms/tests/test_archive_payload.py \
-  conversation_ms/tests/test_retention_filter.py \
-  conversation_ms/tests/test_restore_archive.py \
-  conversation_ms/tests/test_archived_conversations_api.py -v
-```
-
-## Staging rollout checklist
-
-- [ ] Phase A deployed; UI shows ≤90 days
-- [ ] S3 bucket + IAM verified
-- [ ] Dry-run 7 days; sample payloads validated
-- [ ] Metrics dashboard live
-- [ ] Restore runbook tested on one sample
-- [ ] Product rollout comms scheduled
+- [ ] Phase A deployed
+- [ ] Cloud: S3 + IAM + Argo archive worker
+- [ ] Dry-run 7 days; tracking table states valid
+- [ ] Idempotency + FAILED + sentry_event_id tested
 - [ ] `DRY_RUN=false` enabled
-- [ ] Support archive API (`archived-conversations` endpoints) deployed and tested
+- [ ] Support API returns Supervisor V2 shape
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---------|--------|
-| Task status `skipped` | Redis lock held; another worker running |
-| Upload failures | IAM `s3:PutObject`; bucket region |
-| Delete without upload | Must never happen — check verify step logs |
-| 404 on old conversation after Phase A | Expected — use archived-conversations API or restore |
+| Worker no-ops | Processing window config; `is_in_archive_window()` |
+| Stale tasks | `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS`; queue depth |
+| Invalid state error | State machine — expected for bad transitions |
+| Record stuck FAILED | `errors.sentry_event_id` in DB |

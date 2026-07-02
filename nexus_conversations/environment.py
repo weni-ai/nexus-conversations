@@ -39,4 +39,5 @@ env = environ.Env(
     CORS_ORIGIN_ALLOW_ALL=(bool, False),
     CORS_ALLOWED_ORIGINS=(list, []),
     CORS_ALLOW_CREDENTIALS=(bool, False),
+    CONVERSATION_RETENTION_DAYS=(int, 90),
 )

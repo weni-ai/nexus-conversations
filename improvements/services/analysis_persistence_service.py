@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db import transaction
+
 from improvements.enums import ImprovementRunStatus
 from improvements.models import ImprovementAnalysisRun
 from improvements.services.analysis_run_service import (
@@ -45,6 +47,7 @@ def mark_run_building(run: ImprovementAnalysisRun) -> ImprovementAnalysisRun:
     return mark_run_status(run, ImprovementRunStatus.BUILDING)
 
 
+@transaction.atomic
 def persist_analysis_build_phase(
     run: ImprovementAnalysisRun,
     *,

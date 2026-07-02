@@ -10,7 +10,7 @@ repos:
       - id: check-toml
 
   - repo: https://github.com/iamthefij/docker-pre-commit
-    rev: master
+    rev: 62a24686f7675bd45dabe32efe0473b746adac73
     hooks:
       - id: docker-compose-check
 

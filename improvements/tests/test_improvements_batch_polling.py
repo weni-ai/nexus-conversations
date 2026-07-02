@@ -1,5 +1,6 @@
 from unittest.mock import ANY, patch
 
+import pendulum
 import pytest
 from django.core.cache import cache
 from django.test import override_settings
@@ -20,7 +21,7 @@ from improvements.tasks import (
     cancel_improvements_batches,
     check_improvements_batches,
 )
-from improvements.utils.time import utc_datetime
+from improvements.utils.time import format_schedule_registered_at, utc_datetime
 
 
 def _build_state_data(conversation_uuid: str) -> dict:
@@ -170,6 +171,60 @@ class TestCheckImprovementsBatchesTask:
         assert result["status"] == "partial"
         mock_upload.assert_called_once()
         mock_unregister.assert_not_called()
+
+    @override_settings(IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=3600)
+    @patch("improvements.tasks.sentry_sdk.capture_message")
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_polling_timeout_expires_run_without_lambda(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_unregister,
+        mock_capture_message,
+    ):
+        project = Project.objects.create(name="Timeout Project", timezone="UTC")
+        run = ImprovementAnalysisRun.objects.create(
+            project=project,
+            target_date="2026-05-29",
+            triggered_on_date="2026-05-30",
+            status=ImprovementRunStatus.POLLING,
+            sample_size=1,
+            conversations_total=1,
+            range_start_utc=utc_datetime(2026, 5, 29),
+            range_end_utc=utc_datetime(2026, 5, 29, 23, 59, 59),
+        )
+        registered_at = format_schedule_registered_at(pendulum.now("UTC").subtract(hours=2))
+        save_run_metadata(
+            str(project.uuid),
+            "2026-05-29",
+            [{"batch_id": "b1"}],
+            run_uuid=str(run.uuid),
+        )
+        cache.set(
+            f"improvements:run:{project.uuid}:2026-05-29",
+            {
+                **cache.get(f"improvements:run:{project.uuid}:2026-05-29"),
+                "schedule_registered_at": registered_at,
+            },
+            timeout=604800,
+        )
+
+        result = check_improvements_batches.run(
+            project_uuid=str(project.uuid),
+            target_date="2026-05-29",
+        )
+
+        assert result["expired"] is True
+        assert result["status"] == "cancelled"
+        assert result["reason"] == "polling_timeout"
+        mock_invoke.assert_not_called()
+        mock_unregister.assert_called_once_with(str(project.uuid), "2026-05-29", status="cancelled")
+        run.refresh_from_db()
+        assert run.status == ImprovementRunStatus.CANCELLED
+        assert run.failure_reason
+        mock_capture_message.assert_called_once()
 
     @patch("improvements.tasks.unregister_batch_check_schedule")
     @patch("improvements.tasks.invoke_improvements_check_lambda")

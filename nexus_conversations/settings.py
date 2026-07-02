@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "django_filters",
     "nexus_conversations.sentry",
     "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
+    "improvements.apps.ImprovementsConfig",
 ]
 
 MIDDLEWARE = [
@@ -133,7 +134,16 @@ CLOSE_DAILY_CLASSIFICATION_THREADS = env.int("CLOSE_DAILY_CLASSIFICATION_THREADS
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = "static/"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 AUTHENTICATION_BACKENDS = [
     "nexus_conversations.backends.InternalTokenBackend",
@@ -157,7 +167,6 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
 }
-STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -181,6 +190,9 @@ CELERY_BROKER_URL = env.str("CELERY_BROKER_URL", default="redis://localhost:6379
 CELERY_ACCEPT_CONTENT = ["application/json"]
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SERIALIZER = "json"
+CELERY_BEAT_SCHEDULER = "redbeat.RedBeatScheduler"
+CELERY_REDBEAT_REDIS_URL = env.str("CELERY_REDBEAT_REDIS_URL", default=CELERY_BROKER_URL)
+CELERY_REDBEAT_KEY_PREFIX = env.str("CELERY_REDBEAT_KEY_PREFIX", default="redbeat:")
 
 # SQS Configuration for Conversation MS
 SQS_MESSAGES_QUEUE_URL = env.str("SQS_MESSAGES_QUEUE_URL", default="")
@@ -200,6 +212,28 @@ CONVERSATION_RESOLUTION_NAME = env.str("CONVERSATION_RESOLUTION_NAME", default=N
 CONVERSATION_RESOLUTION_V2_NAME = env.str("CONVERSATION_RESOLUTION_V2_NAME", default=None)
 CONVERSATION_RESOLUTION_LEGACY_PROJECTS = env.list("CONVERSATION_RESOLUTION_LEGACY_PROJECTS", default=[])
 CLASSIFICATION_LAMBDA_NAME = env.str("CLASSIFICATION_LAMBDA_NAME", default="nexus-classification-prod")
+GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = env.str("GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN", default=None)
+
+# Nexus API (project customization)
+NEXUS_API_BASE_URL = env.str("NEXUS_API_BASE_URL", default="https://nexus.stg.cloud.weni.ai")
+
+# Improvements JSON output
+IMPROVEMENTS_S3_BUCKET = env.str("IMPROVEMENTS_S3_BUCKET", default="")
+IMPROVEMENTS_S3_PREFIX = env.str("IMPROVEMENTS_S3_PREFIX", default="improvements")
+IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION = env.int("IMPROVEMENTS_S3_PRESIGNED_URL_EXPIRATION", default=3600)
+IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = env.str(
+    "IMPROVEMENTS_ANALYSIS_LAMBDA_NAME",
+    default="conversations_improvements_analisys",
+)
+IMPROVEMENTS_SAMPLING_MODE = env.str("IMPROVEMENTS_SAMPLING_MODE", default="stratified_by_time_window")
+IMPROVEMENTS_COMPLETION_WINDOW = env.str("IMPROVEMENTS_COMPLETION_WINDOW", default="24h")
+IMPROVEMENTS_CONVERSATION_BATCH_SIZE = env.int("IMPROVEMENTS_CONVERSATION_BATCH_SIZE", default=50)
+IMPROVEMENTS_BATCH_CHECK_INTERVAL_SECONDS = env.int("IMPROVEMENTS_BATCH_CHECK_INTERVAL_SECONDS", default=300)
+IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS = env.int("IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS", default=86400)
+IMPROVEMENTS_RUN_METADATA_TTL_SECONDS = env.int("IMPROVEMENTS_RUN_METADATA_TTL_SECONDS", default=604800)
+IMPROVEMENTS_KNOWLEDGE_BASE_FETCH_ENABLED = env.bool("IMPROVEMENTS_KNOWLEDGE_BASE_FETCH_ENABLED", default=True)
+IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = env.int("IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS", default=0)
+CONVERSATIONS_IMPROVEMENTS_THRESHOLD = env.int("CONVERSATIONS_IMPROVEMENTS_THRESHOLD", default=0)
 
 # DynamoDB Configuration
 DYNAMODB_REGION = env.str("DYNAMODB_REGION", default="us-east-1")
@@ -258,6 +292,12 @@ BILLING_TOKEN = env.str("BILLING_TOKEN", default="")
 PROJECTS_API_BASE_URL = env.str("PROJECTS_API_BASE_URL", default="")
 PROJECTS_API_TOKEN = env.str("PROJECTS_API_TOKEN", default="")
 PROJECTS_PAGE_SIZE = env.int("PROJECTS_PAGE_SIZE", default=100)
+PROJECT_AUTH_API_TIMEOUT_SECONDS = env.int("PROJECT_AUTH_API_TIMEOUT_SECONDS", default=5)
+
+# Keycloak OIDC (client_credentials for internal service-to-service calls)
+OIDC_OP_TOKEN_ENDPOINT = env.str("OIDC_OP_TOKEN_ENDPOINT", default="")
+OIDC_RP_CLIENT_ID = env.str("OIDC_RP_CLIENT_ID", default="")
+OIDC_RP_CLIENT_SECRET = env.str("OIDC_RP_CLIENT_SECRET", default="")
 
 AWS_REGION = env.str("AWS_REGION", default="sa-east-1")
 LAMBDA_AWS_REGION = env.str("LAMBDA_AWS_REGION", default="us-east-1")

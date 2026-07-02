@@ -36,6 +36,33 @@ def _metadata_cache_key(project_uuid: str, target_date: str) -> str:
     return f"{RUN_METADATA_KEY_PREFIX}:{improvements_run_key(project_uuid, target_date)}"
 
 
+def _schedule_registered_at_cache_key(metadata_cache_key: str) -> str:
+    return f"{metadata_cache_key}:schedule_registered_at"
+
+
+def _get_or_init_schedule_registered_at(
+    metadata_cache_key: str,
+    *,
+    ttl: int,
+    existing_metadata: dict[str, Any] | None = None,
+) -> str:
+    schedule_key = _schedule_registered_at_cache_key(metadata_cache_key)
+
+    legacy_value = (existing_metadata or {}).get("schedule_registered_at")
+    if legacy_value:
+        cache.add(schedule_key, str(legacy_value), ttl)
+        return str(legacy_value)
+
+    cached = cache.get(schedule_key)
+    if cached:
+        return str(cached)
+
+    new_value = format_schedule_registered_at()
+    if cache.add(schedule_key, new_value, ttl):
+        return new_value
+    return str(cache.get(schedule_key) or new_value)
+
+
 def _resolve_schedule_registered_at(metadata: dict[str, Any], run: Any | None) -> str | None:
     registered_at = metadata.get("schedule_registered_at")
     if registered_at:
@@ -75,7 +102,12 @@ def save_run_metadata(
 ) -> dict[str, Any]:
     cache_key = _metadata_cache_key(project_uuid, target_date)
     existing = cache.get(cache_key) or {}
-    schedule_registered_at = existing.get("schedule_registered_at") or format_schedule_registered_at()
+    ttl = getattr(settings, "IMPROVEMENTS_RUN_METADATA_TTL_SECONDS", 604800)
+    schedule_registered_at = _get_or_init_schedule_registered_at(
+        cache_key,
+        ttl=ttl,
+        existing_metadata=existing,
+    )
 
     metadata = {
         "batches": batches,
@@ -85,7 +117,6 @@ def save_run_metadata(
     }
     if run_uuid:
         metadata["run_uuid"] = str(run_uuid)
-    ttl = getattr(settings, "IMPROVEMENTS_RUN_METADATA_TTL_SECONDS", 604800)
     cache.set(cache_key, metadata, ttl)
     return metadata
 

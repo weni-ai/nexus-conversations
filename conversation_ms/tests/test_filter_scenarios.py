@@ -36,14 +36,14 @@ class TestComplexFilters:
         Test the specific user scenario with multiple filters:
         start_date, end_date, resolution (list), csat (list), topics (list).
 
-        URL: ?page=1&start_date=04-02-2026&end_date=10-02-2026&resolution=0,1,4,2,3&csat=5,4,3,2,1&
+        URL: ?page=1&start_date=04-06-2026&end_date=10-06-2026&resolution=0,1,4,2,3&csat=5,4,3,2,1&
             topics=Atendimento,Produto,Pagamento,Entrega,Reclamação
         """
 
-        # Date inside range (04-02-2026 to 10-02-2026)
-        date_inside = datetime(2026, 2, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
+        # Date inside range (04-06-2026 to 10-06-2026)
+        date_inside = datetime(2026, 6, 5, 12, 0, 0, tzinfo=dt_timezone.utc)
         # Date outside range
-        date_outside = datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt_timezone.utc)
+        date_outside = datetime(2026, 5, 1, 12, 0, 0, tzinfo=dt_timezone.utc)
 
         # 1. Match Perfect (Inside date, valid resolution, valid csat, valid topic)
         c1 = Conversation.objects.create(
@@ -114,8 +114,8 @@ class TestComplexFilters:
         base_url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
         params = {
             "page": 1,
-            "start_date": "2026-02-04",
-            "end_date": "2026-02-10",
+            "start_date": "2026-06-04",
+            "end_date": "2026-06-10",
             "resolution": "0,1,4,2,3",
             "csat": "5,4,3,2,1",
             "topics": "Atendimento,Produto,Pagamento,Entrega,Reclamação",

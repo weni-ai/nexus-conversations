@@ -42,14 +42,14 @@ class TestConversationEndpoint:
             project=project,
             contact_urn="whatsapp:+1234567890",
             resolution="0",  # Resolved
-            start_date="2024-01-01T10:00:00Z",
-            end_date="2024-01-01T10:30:00Z",
+            start_date="2026-06-01T10:00:00Z",
+            end_date="2026-06-01T10:30:00Z",
         )
         Conversation.objects.create(
             project=project,
             contact_urn="whatsapp:+0987654321",
             resolution="2",  # In Progress
-            start_date="2024-01-02T10:00:00Z",
+            start_date="2026-06-02T10:00:00Z",
         )
 
         url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
@@ -258,13 +258,13 @@ class TestConversationEndpoint:
         conversation = Conversation.objects.create(
             project=project,
             resolution="0",
-            start_date="2026-01-01T10:00:00Z",
-            end_date="2026-01-01T12:00:00Z",
+            start_date="2026-06-01T10:00:00Z",
+            end_date="2026-06-01T12:00:00Z",
         )
         messages_data = [
-            {"source": "user", "text": "Before", "created_at": "2026-01-01T09:59:00Z"},
-            {"source": "user", "text": "Inside", "created_at": "2026-01-01T11:00:00Z"},
-            {"source": "assistant", "text": "After", "created_at": "2026-01-01T12:01:00Z"},
+            {"source": "user", "text": "Before", "created_at": "2026-06-01T09:59:00Z"},
+            {"source": "user", "text": "Inside", "created_at": "2026-06-01T11:00:00Z"},
+            {"source": "assistant", "text": "After", "created_at": "2026-06-01T12:01:00Z"},
         ]
         ConversationMessages.objects.create(conversation=conversation, messages=messages_data)
 

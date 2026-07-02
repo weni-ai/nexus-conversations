@@ -1,228 +1,124 @@
 # Tasks: Conversations S3 Archive & 90-Day Retention
 
-**Input**: Design documents from `specs/001-conversations-s3-archive/`
-
-**Prerequisites**: spec.md, plan.md, research.md, data-model.md, contracts/README.md, quickstart.md
-
-## Format: `[ID] [P?] [Story] Description`
-
-- **[P]**: Parallelizable
-- **[Story]**: User story label from spec.md
+**Spec**: v1.3.0 | **Scope**: backend only
 
 ---
 
-## Phase 1: Setup — Configuration & scaffolding
+## Phase 1: Setup
 
-**Purpose**: Environment variables, settings, module scaffold
-
-- [ ] T001 [P] Add archive env vars to `nexus_conversations/environment.py` per research R8
-- [ ] T002 [P] Wire settings in `nexus_conversations/settings.py` (`CONVERSATION_RETENTION_DAYS`, `CONVERSATION_ARCHIVE_*`)
-- [ ] T003 [P] Document new env vars in `nexus-conversations/.env.example`
-- [ ] T004 Create `conversation_ms/archive/` package: `__init__.py`, `constants.py` with lock keys in `conversation_ms/archive/constants.py`
+- [ ] T001 [P] Archive env vars in `nexus_conversations/environment.py` (incl. `CONVERSATION_ARCHIVE_*` — batch size, queue, expires, lock, region, optional window hours)
+- [ ] T002 [P] Settings in `nexus_conversations/settings.py`
+- [ ] T003 [P] Document in `nexus-conversations/.env.example`
+- [ ] T004 Create `conversation_ms/archive/` package with `constants.py`
 
 ---
 
-## Phase 2: Foundational — Eligibility logic & shared helpers
+## Phase 2: Foundational
 
-**Purpose**: Core query logic blocking all user stories
-
-**⚠️ CRITICAL**: No user story work until this phase completes
-
-- [ ] T005 Implement eligibility helpers (`cutoff`, `Coalesce`, in-progress exclusion) in `conversation_ms/archive/eligibility.py`
-- [ ] T006 [P] Unit tests for eligibility edge cases in `conversation_ms/tests/test_archive_eligibility.py`
-- [ ] T007 [P] Add stale in-progress counter helper in `conversation_ms/archive/metrics.py`
-
-**Checkpoint**: Eligibility Q object tested for archive and API paths
+- [ ] T005 Eligibility + project timezone in `conversation_ms/archive/eligibility.py` (shared by API filter and archive; requires `ConversationMessages` row for archive)
+- [ ] T006 [P] Tests in `conversation_ms/tests/test_archive_eligibility.py`
+- [ ] T007 [P] Metrics helpers in `conversation_ms/archive/metrics.py`
+- [ ] T008 Add `ConversationArchiveBatch` + `ConversationArchiveRecord` models + migration in `conversation_ms/models.py`
+- [ ] T009 Implement `ArchiveRecordStateMachine` in `conversation_ms/archive/state_machine.py` (make unreasonable states invalid)
+- [ ] T010 [P] Tests invalid transitions + DB constraints in `conversation_ms/tests/test_archive_state_machine.py` and `test_archive_tracking_models.py`
 
 ---
 
-## Phase 3: User Story 1 — 90-day conversation list (Priority: P1) 🎯 MVP
+## Phase 3: US1 — API retention filter (MVP)
 
-**Goal**: API list/detail exclude expired closed conversations; in-progress always visible
+- [ ] T011 [US1] Retention filter in `conversation_ms/views.py`
+- [ ] T012 [US1] Aggregates use filtered queryset in `conversation_ms/views.py`
+- [ ] T013 [P] [US1] Tests in `conversation_ms/tests/test_retention_filter.py`
 
-**Independent Test**: `test_retention_filter.py` — day 89/90/91 boundary + in-progress >90 visible
-
-### Implementation
-
-- [ ] T008 [US1] Apply retention filter in `ConversationViewSet.get_queryset()` in `conversation_ms/views.py`
-- [ ] T009 [US1] Ensure `list()` aggregates (`total_count`, `status_summary`) use filtered queryset in `conversation_ms/views.py`
-- [ ] T010 [P] [US1] API tests for list/retrieve retention in `conversation_ms/tests/test_retention_filter.py`
-- [ ] T011 [P] [US1] Boundary tests (exactly 90 days, in-progress exclusion) in `conversation_ms/tests/test_retention_filter.py`
-
-**Checkpoint**: Phase A deployable — no deletion, API-only
+**Checkpoint**: Phase A deployable
 
 ---
 
-## Phase 4: User Story 2 — Daily archival (Priority: P1)
+## Phase 4: US2 — Hourly archival
 
-**Goal**: Daily job uploads gzip JSON to S3, verifies, deletes when dry-run off
-
-**Independent Test**: moto S3 integration — upload verified, delete only when `DRY_RUN=false`
-
-### Implementation
-
-- [ ] T012 [P] [US2] Implement payload builder in `conversation_ms/archive/payload_builder.py` (schema v1, sha256)
-- [ ] T013 [P] [US2] Unit tests for payload builder in `conversation_ms/tests/test_archive_payload.py`
-- [ ] T014 [P] [US2] Implement S3 upload + HEAD verify wrapper in `conversation_ms/archive/s3_client.py`
-- [ ] T015 [US2] Implement runner orchestration in `conversation_ms/archive/runner.py` (lock, iterator, batch loop; skip rows without `messages_data`)
-- [ ] T016 [US2] Add Celery task `archive_expired_conversations_task` in `conversation_ms/tasks.py`
-- [ ] T017 [US2] Register Beat schedule (03:00 UTC) in `nexus_conversations/celery.py`
-- [ ] T018 [P] [US2] Integration tests with moto in `conversation_ms/tests/test_archive_runner.py`
-- [ ] T019 [P] [US2] Test dry-run skips delete in `conversation_ms/tests/test_archive_runner.py`
-- [ ] T020 [P] [US2] Test verify failure retains Postgres row in `conversation_ms/tests/test_archive_runner.py`
-
-**Checkpoint**: Phase B dry-run ready for staging
+- [ ] T014 [P] [US2] Payload builder in `conversation_ms/archive/payload_builder.py`
+- [ ] T015 [P] [US2] S3 client in `conversation_ms/archive/s3_client.py`
+- [ ] T016 [US2] Dispatcher in `conversation_ms/archive/dispatcher.py` (lock, TZ, batch cap, create PENDING records, enqueue with `expires`)
+- [ ] T017 [US2] Worker in `conversation_ms/archive/worker.py` (project-TZ window check, idempotent S3, state machine, sentry_event_id on failure)
+- [ ] T018 [US2] Celery tasks in `conversation_ms/tasks.py` → dedicated queue
+- [ ] T019 [US2] Hourly Beat in `nexus_conversations/celery.py`
+- [ ] T020 [P] [US2] Request Cloud: Argo worker `nexus-conversations-celery-archive`
+- [ ] T021 [P] [US2] Dispatcher tests in `conversation_ms/tests/test_archive_dispatcher.py`
+- [ ] T022 [P] [US2] Worker + moto tests (dry-run, idempotency, failure) in `conversation_ms/tests/test_archive_worker.py`
 
 ---
 
-## Phase 5: User Story 3 — On-demand restore (Priority: P2)
+## Phase 5: Rollout
 
-**Goal**: Engineering can restore archived conversation from S3 to Postgres
+- [ ] T023 [P] 90-day max for `reconcile_cohort_export` in `conversation_ms/services/reconcile_cohort_export.py`
+- [ ] T024 [P] Request S3 bucket + IAM from **Cloud** (time de infra)
 
-**Independent Test**: Archive → delete → restore → detail API returns conversation
-
-### Implementation
-
-- [ ] T021 [US3] Implement `restore_conversation_from_archive` management command in `conversation_ms/management/commands/restore_conversation_from_archive.py`
-- [ ] T022 [P] [US3] Tests for restore idempotency and schema validation in `conversation_ms/tests/test_restore_archive.py`
-- [ ] T023 [US3] Write engineering runbook section in `specs/001-conversations-s3-archive/quickstart.md` (restore procedure)
-
-**Checkpoint**: Phase C restore path validated
+**Checkpoint**: Safe for `DRY_RUN=false`
 
 ---
 
-## Phase 6: User Story 4 — Retention transparency (Priority: P2)
+## Phase 6: Polish
 
-**Goal**: Frontend displays 90-day notice (cross-repo)
-
-**Independent Test**: Conversations list shows i18n notice in all 4 locales
-
-### Implementation
-
-- [ ] T024 [US4] Create frontend ticket: add `conversations.retention.notice` to `agent-builder-webapp` locale files (`en.json`, `pt_br.json`, `es.json`, `ro.json`)
-- [ ] T025 [US4] Create frontend ticket: render notice on conversations list view in agent-builder-webapp
-
-**Note**: T024–T025 are tracked here for traceability; implementation is in agent-builder-webapp repo.
+- [ ] T025 [P] Structured logging in `conversation_ms/archive/worker.py`
+- [ ] T026 [P] Sentry tags + `sentry_event_id` persistence in worker
+- [ ] T027 [P] Stale in-progress metric in dispatcher
+- [ ] T028 Run test suite on modified modules; capture list API p95 baseline pre/post Phase A (SC-006)
+- [ ] T029 Validate `quickstart.md` in staging
 
 ---
 
-## Phase 7: Rollout & in-service alignment
+## Phase 7: US3 — Support archive API (required)
 
-**Purpose**: Platform prerequisites and nexus-conversations MS internal consistency (no nexus-ai / legacy DB work)
+- [ ] T030 [US3] Document auth in `contracts/README.md` (same as `ConversationViewSet`: `InternalTokenAuthentication` + `IsAuthenticated`)
+- [ ] T031 [P] [US3] `response_adapter.py` → Supervisor V2 shape
+- [ ] T032 [P] [US3] Adapter tests in `conversation_ms/tests/test_archive_response_adapter.py`
+- [ ] T033 [US3] `ArchivedConversationView` in `conversation_ms/views_archived.py`
+- [ ] T034 [US3] Routes in `nexus_conversations/urls.py`
+- [ ] T035 [P] [US3] API tests in `conversation_ms/tests/test_archived_conversations_api.py`
+- [ ] T036 [US3] Audit logging in `views_archived.py`
 
-- [ ] T026 [P] Document or enforce 90-day max window for `reconcile_cohort_export` in `conversation_ms/services/reconcile_cohort_export.py`
-- [ ] T027 [P] Request S3 bucket + IAM from platform (track in plan prerequisites)
-- [ ] T027a Coordinate product/ops internal rollout comms for 90-day limit (FR-014; no eng-to-customer direct contact)
-
-**Checkpoint**: Safe to enable `CONVERSATION_ARCHIVE_DRY_RUN=false` in production
-
----
-
-## Phase 8: Polish & cross-cutting
-
-- [ ] T028 [P] Structured logging fields in `conversation_ms/archive/runner.py` per research R6
-- [ ] T029 [P] Sentry tags on upload/delete failures in `conversation_ms/archive/runner.py`
-- [ ] T030 [P] Emit stale in-progress metric during daily scan in `conversation_ms/archive/runner.py`
-- [ ] T031 Run full test suite via project test skill on modified modules
-- [ ] T032 Validate quickstart.md steps in staging
+**Checkpoint**: Spec complete
 
 ---
 
-## Phase 9: User Story 5 — Support archive API (Priority: P2, Phase D — required)
+## Phase 8: Hardening (optional)
 
-**Goal**: Dedicated internal endpoints to consult S3 archives — separate from standard list/detail; required to complete spec
-
-**Independent Test**: Support-scoped token → `GET .../archived-conversations/{uuid}/` returns metadata; standard list never exposes archived rows; wrong scope → 403
-
-### Implementation
-
-- [ ] T033 [US5] Design support/archive auth scope and permission class (document in `contracts/README.md`)
-- [ ] T034 [US5] Implement `ArchivedConversationView` in `conversation_ms/views_archived.py` (S3 HEAD + optional payload fetch)
-- [ ] T035 [US5] Register routes in `nexus_conversations/urls.py` under `archived-conversations/` namespace
-- [ ] T036 [P] [US5] API tests: metadata, include_payload, 403, 404 in `conversation_ms/tests/test_archived_conversations_api.py`
-- [ ] T037 [US5] Add access audit logging for archive consult requests in `conversation_ms/views_archived.py`
-
-**Checkpoint**: Spec complete — support can consult S3 without engineering
+- [ ] T037 [P] Grafana dashboard spec from tracking tables (with Cloud/SRE)
+- [ ] T038 [P] Glacier lifecycle policy (Cloud)
 
 ---
 
-## Phase 10: Hardening (optional, Phase E)
-
-- [ ] T038 [P] Optional migration: `archived_at` column on Conversation (future PR)
-
----
-
-## Dependencies & Execution Order
-
-### Phase dependencies
+## Dependencies
 
 ```text
-Phase 1 (Setup) → Phase 2 (Foundational) → Phase 3 (US1 MVP)
-                                      ↘
-                                       Phase 4 (US2) → Phase 7 (Rollout) → Phase 8 (Polish)
-                                      ↗
-                               Phase 5 (US3 restore)
-Phase 6 (US4 frontend) — parallel after Phase 3
-Phase 9 (US5 support API) — after Phase 4 stable; REQUIRED before spec sign-off
-Phase 10 (Phase E hardening) — optional
+Phase 1–2 (incl. tracking models) → Phase 3 (MVP)
+                                 → Phase 4 (archive) + T020 (Cloud/Argo)
+                                 → Phase 5 (delete enable)
+                                 → Phase 7 (US3) — sign-off
+Phase 6 — polish
+Phase 8 — optional
 ```
 
-### User story dependencies
-
-| Story | Depends on | Independent test |
-|-------|------------|------------------|
-| US1 | Phase 2 | API filter tests |
-| US2 | Phase 2, T027 (S3 for staging) | moto integration |
-| US3 | US2 (archive exists) | restore tests |
-| US4 | US1 (behavior live) | frontend RTL |
-| US5 | US2 (archives in S3) | dedicated archive API tests |
-
-### Parallel opportunities
-
-- T001–T004 (Setup) all parallel
-- T012–T014 (payload, S3 client) parallel before T015 runner
-- T018–T020 (US2 tests) parallel after T015
-- T024–T025 (frontend) parallel with Phase 4 backend work
-- T033–T036 (US5) parallel after T014 s3_client exists
+| Story | Depends on |
+|-------|------------|
+| US1 | Phase 2 |
+| US2 | Phase 2 (models + state machine), T024 S3 |
+| US3 | US2 (S3 archives + records) |
 
 ---
 
-## Implementation strategy
+## Summary
 
-### MVP first (Phase A only)
+| Phase | Tasks | Count |
+|-------|-------|-------|
+| Setup | T001–T004 | 4 |
+| Foundational | T005–T010 | 6 |
+| US1 | T011–T013 | 3 |
+| US2 | T014–T022 | 9 |
+| Rollout | T023–T024 | 2 |
+| Polish | T025–T029 | 5 |
+| US3 | T030–T036 | 7 |
+| Hardening | T037–T038 | 2 |
+| **Total** | | **38** |
 
-1. Complete Phase 1 + 2 + 3 (T001–T011)
-2. Deploy to staging/prod — **no data deletion**
-3. Validate list/detail behavior and performance
-
-### Incremental delivery
-
-1. MVP (US1) → deploy
-2. US2 dry-run → staging validation 7 days
-3. US3 restore runbook → test one sample
-4. Phase 7 rollout → enable delete
-5. US4 frontend notice → product rollout
-6. US5 support archive API → **required before spec sign-off**
-7. Phase E hardening (optional)
-
----
-
-## Task summary
-
-| Phase | Task IDs | Story | Count |
-|-------|----------|-------|-------|
-| Setup | T001–T004 | — | 4 |
-| Foundational | T005–T007 | — | 3 |
-| US1 | T008–T011 | P1 | 4 |
-| US2 | T012–T020 | P1 | 9 |
-| US3 | T021–T023 | P2 | 3 |
-| US4 | T024–T025 | P2 | 2 |
-| Rollout | T026–T027, T027a | — | 3 |
-| Polish | T028–T032 | — | 5 |
-| US5 (required) | T033–T037 | P2 | 5 |
-| Hardening (optional) | T038 | — | 1 |
-| **Total** | | | **38** |
-
-**Suggested MVP scope**: T001–T011 (Phase A, 11 tasks)
-
-**Parallelizable tasks**: 18 marked [P]
+**MVP**: T001–T013 | **Sign-off**: T030–T036

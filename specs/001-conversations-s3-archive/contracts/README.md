@@ -1,144 +1,127 @@
 # Contracts: Conversations S3 Archive
 
-**Feature**: `001-conversations-s3-archive` | **Date**: 2026-07-01 (updated v1.1)
+**Feature**: `001-conversations-s3-archive` | **v1.3.0**
 
 ## Standard API behavior (Phase A)
 
 ### GET `/api/v1/projects/{project_uuid}/conversations/`
 
-**Change**: Default queryset excludes conversations where eligibility timestamp is older than `CONVERSATION_RETENTION_DAYS` (default 90), except in-progress (`resolution=2`).
-
-**Unchanged**: Pagination, filters (`ConversationFilter`), `total_count`, `status_summary` — all respect retention window.
-
-**Explicit constraint**: This endpoint MUST NOT accept query params to bypass retention (no `include_archived`, no `all_history`, etc.).
-
-**Response shape**: No schema change.
+Default queryset excludes expired closed conversations; in-progress always visible. **No query-param bypass.**
 
 ### GET `/api/v1/projects/{project_uuid}/conversations/{uuid}/`
 
-**Change**: Returns `404` for conversations outside retention window (same rule as list).
-
-**Explicit constraint**: No query-param bypass. Archived-only data is accessed exclusively via the archived-conversations endpoints below.
+`404` outside retention window. **No query-param bypass.**
 
 ---
 
-## Archived conversations API (Phase D — required)
-
-Dedicated route namespace — separate view, separate permission class, separate audit log.
+## Support archive API (Phase D — required)
 
 ### GET `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/`
 
-**Auth**: Internal token with support/archive scope (distinct from standard conversation read).
+**Auth**: Same as other conversation endpoints — `InternalTokenAuthentication` + `permissions.IsAuthenticated` (Bearer token from `INTERNAL_API_TOKENS`). No separate token or permission class.
 
-**Behavior**: Reads S3 only; does not query Postgres for conversation body (row may be deleted).
+**Behavior**: Read S3 → map to Supervisor Public V2 shape → return JSON. **Never writes Postgres.** Audit log every access (conversation UUID, project UUID, caller team, timestamp).
 
-**Query params**:
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `include_payload` | `false` | When `true`, returns full decompressed archive JSON in response |
-
-**Response 200** (metadata only, `include_payload=false`):
+**Response 200** (Supervisor Public V2 compatible):
 
 ```json
 {
-  "conversation_uuid": "uuid",
-  "project_uuid": "uuid",
-  "archived_at": "ISO8601",
-  "s3_key": "conversations-archive/{project}/{yyyy}/{mm}/{uuid}.json.gz",
-  "schema_version": 1,
-  "message_count": 42,
-  "eligibility_timestamp": "ISO8601"
+  "conversation_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "start_date": "2026-01-15T14:30:00Z",
+  "created_at": "2026-01-15T14:25:00Z",
+  "ended_at": "2026-01-15T15:00:00Z",
+  "status": "closed",
+  "topic": "Sales",
+  "channel_uuid": "660e8400-e29b-41d4-a716-446655440001",
+  "contact_urn": "whatsapp:5511999999999",
+  "messages": [
+    {
+      "text": "Hello",
+      "source": "user",
+      "created_at": "2026-01-15T14:30:00Z"
+    }
+  ],
+  "archived_at": "2026-04-20T03:00:00Z",
+  "is_archived": true
 }
 ```
 
-**Response 200** (`include_payload=true`): above fields plus `"payload": { ... full archive document ... }`
+Field alignment: matches `SupervisorPublicConversationItemSerializer` in nexus-ai (`supervisor_public.py`) and `ConversationDetailSerializer` in nexus-conversations. Extra fields `archived_at`, `is_archived` are additive for support context.
 
-**Response 403**: Token lacks support/archive scope
+**Response 401**: Missing or invalid Bearer token
 
-**Response 404**: No S3 object at deterministic key, or conversation still in Postgres (not archived)
-
-**Safety rules**:
-- MUST NOT register these routes on `ConversationViewSet`
-- MUST NOT reuse list/detail serializers without explicit archive schema
-- All access MUST be logged with `conversation_uuid`, `project_uuid`, caller identity
-
----
-
-## Archive payload contract (S3 object)
-
-**Content-Type**: `application/gzip`
-
-**Key pattern**:
-
-```text
-{CONVERSATION_ARCHIVE_S3_PREFIX}/{project_uuid}/{yyyy}/{mm}/{conversation_uuid}.json.gz
-```
-
-**JSON schema (uncompressed)** — see [data-model.md](../data-model.md).
-
-**Versioning**: `schema_version` integer; restore command rejects unknown versions.
-
-**Integrity**: `metadata.content_sha256` must match SHA-256 of canonical JSON (sorted keys, UTF-8) before gzip.
+**Response 404**: S3 object not found, or conversation still in Postgres
 
 ---
 
 ## Celery tasks (internal)
 
-### `conversation_ms.tasks.archive_expired_conversations_task`
+### `conversation_ms.tasks.archive_dispatcher_task`
 
-**Trigger**: Celery Beat daily 03:00 UTC
+**Trigger**: Celery Beat **every hour** (`crontab(minute=0)`)
 
-**Input kwargs**: None (reads settings)
+**Queue**: `CONVERSATION_ARCHIVE_CELERY_QUEUE`
 
-**Return payload**:
+**Behavior**:
+1. Acquire lock; create `ConversationArchiveBatch`
+2. Select eligible conversations (timezone-aware); skip UUIDs with active/terminal records (except FAILED retry)
+3. Create `ConversationArchiveRecord` (PENDING) per UUID
+4. Enqueue `archive_conversation_task` with **`expires`** = now + `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS`
 
-```json
-{
-  "status": "success" | "skipped" | "failed",
-  "reason": "string optional",
-  "uploaded": 0,
-  "deleted": 0,
-  "failed": 0,
-  "dry_run": true
-}
-```
+### `conversation_ms.tasks.archive_conversation_task`
 
-**Skip reasons**: `archive_already_running` (lock held), `archive_disabled` (master switch off)
+**Behavior**:
+1. If outside optional processing window (evaluated in **project timezone**) → exit; record stays `PENDING`
+2. State machine: PENDING → IN_PROGRESS → ARCHIVED → DELETED (or FAILED)
+3. Idempotent S3 HEAD if object exists
+4. On failure: FAILED + `errors.sentry_event_id`
 
 ---
 
-## Management command (Phase C)
+## S3 archive object
 
-### `python manage.py restore_conversation_from_archive`
+**Key**: `{CONVERSATION_ARCHIVE_S3_PREFIX}/{project_uuid}/{yyyy}/{mm}/{conversation_uuid}.json.gz`
 
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--conversation-uuid` | yes | UUID to restore |
-| `--project-uuid` | yes | Project scope for S3 key |
-| `--dry-run` | no | Validate S3 payload without DB write |
-| `--force` | no | Overwrite existing Postgres row (dangerous) |
+**Format**: gzip-compressed JSON, `schema_version: 1`. Full field definitions and example: [data-model.md](../data-model.md#s3-archive-document-schema_version-1).
 
-**Exit codes**: 0 success, 1 validation error, 2 S3 not found, 3 DB conflict
-
-**Note**: Restore re-inserts into Postgres (engineering operation). Support API consults S3 only unless a separate restore action is added later.
+**Integrity**: `metadata.content_sha256` must match SHA-256 of canonical uncompressed JSON (sorted keys, UTF-8) before gzip. Restore/re-read rejects unknown `schema_version`.
 
 ---
 
 ## Environment contract
 
-| Variable | Required Phase | Default |
-|----------|----------------|---------|
-| `CONVERSATION_RETENTION_DAYS` | A | `90` |
-| `CONVERSATION_ARCHIVE_ENABLED` | B | `false` |
-| `CONVERSATION_ARCHIVE_DRY_RUN` | B | `true` |
-| `CONVERSATION_ARCHIVE_S3_BUCKET` | B | — |
-| `CONVERSATION_ARCHIVE_S3_PREFIX` | B | `conversations-archive` |
+| Variable | Default | Phase |
+|----------|---------|-------|
+| `CONVERSATION_RETENTION_DAYS` | `90` | A |
+| `CONVERSATION_ARCHIVE_ENABLED` | `false` | B |
+| `CONVERSATION_ARCHIVE_DRY_RUN` | `true` | B |
+| `CONVERSATION_ARCHIVE_S3_BUCKET` | — | B |
+| `CONVERSATION_ARCHIVE_S3_PREFIX` | `conversations-archive` | B |
+| `CONVERSATION_ARCHIVE_S3_REGION` | falls back to `AWS_REGION` | B |
+| `CONVERSATION_ARCHIVE_LOCK_ENABLED` | `true` | B |
+| `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `7200` | B |
+| `CONVERSATION_ARCHIVE_BATCH_SIZE` | `500` | B |
+| `CONVERSATION_ARCHIVE_CELERY_QUEUE` | `conversations-archive` | B |
+| `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS` | `3600` | B |
+| `CONVERSATION_ARCHIVE_WINDOW_START_HOUR` | — | B (optional, project TZ) |
+| `CONVERSATION_ARCHIVE_WINDOW_END_HOUR` | — | B (optional, project TZ) |
+
+Support archive API auth uses existing `INTERNAL_API_TOKENS` (no additional env var).
+
+---
+
+## Infrastructure contract (Argo CD)
+
+Dedicated worker deployment consuming **only** `conversations-archive` queue.
+
+**Reference**: `chats-engine-celery-archive`
+
+**Owner**: **Cloud** (time de infra)
+
+**Suggested name**: `nexus-conversations-celery-archive`
 
 ---
 
 ## Scope boundary
 
-This spec covers **nexus-conversations MS only**. Legacy Nexus DB, nexus-ai V1 supervisor, and other external direct-Postgres consumers are **out of scope**.
-
-Within MS: align `reconcile_cohort_export` and similar services to the 90-day window (see tasks T028).
+nexus-conversations **backend only**. No frontend. No Postgres restore. No nexus-ai / legacy DB changes.

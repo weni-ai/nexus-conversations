@@ -1,37 +1,31 @@
-# Specification Quality Checklist: Conversations S3 Archive & 90-Day Retention
+# Specification Quality Checklist
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning
-
-**Created**: 2026-07-01
-
-**Feature**: [spec.md](./spec.md)
+**Feature**: [spec.md](./spec.md) v1.3.0
 
 ## Content Quality
 
-- [x] No implementation details (languages, frameworks, APIs) — spec is behavior-focused; stack deferred to plan
-- [x] Focused on user value and business needs
-- [x] Written for non-technical stakeholders
+- [x] Backend scope only — no frontend references
 - [x] All mandatory sections completed
+- [x] Cloud (time de infra) as infra owner — not individual names
 
 ## Requirement Completeness
 
-- [x] No [NEEDS CLARIFICATION] markers remain — resolved in Clarifications session
-- [x] Requirements are testable and unambiguous
-- [x] Success criteria are measurable
-- [x] Success criteria are technology-agnostic where applicable
-- [x] All acceptance scenarios are defined
-- [x] Edge cases are identified
-- [x] Scope is clearly bounded
-- [x] Dependencies and assumptions identified
+- [x] Tracking tables + state machine (FR-018/019)
+- [x] Celery expires (FR-020)
+- [x] Processing window (FR-021)
+- [x] Idempotent already-archived (FR-022)
+- [x] sentry_event_id (FR-023)
+- [x] Media explicitly out of scope
 
 ## Feature Readiness
 
-- [x] All functional requirements have clear acceptance criteria
-- [x] User scenarios cover primary flows
-- [x] Feature meets measurable outcomes defined in Success Criteria
-- [x] No implementation details leak into specification (Phase D API noted as future capability only)
+- [x] Sign-off requires Phase D (US3 support API)
+- [x] Support API auth same as `ConversationViewSet` (`InternalTokenAuthentication`)
+- [x] SC-008 invalid states impossible
+- [x] API + archive share project-timezone eligibility (FR-001/002)
 
 ## Notes
 
-- Clarifications updated 2026-07-01: support API required (Phase D); dedicated archived-conversations endpoints; nexus-ai/legacy DB out of scope.
-- Ready for `/speckit-implement`. **Spec complete** only after Phase D (US5) ships.
+- v1.3.0: Miro alignment, backend-only, make unreasonable states invalid
+- 2026-07-04: spec-clarify + analyze pass — auth, timezone, window behavior resolved
+- Ready for `/speckit-implement`

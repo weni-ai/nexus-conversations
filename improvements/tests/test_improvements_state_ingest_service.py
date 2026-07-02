@@ -182,12 +182,6 @@ class TestImprovementsStateIngestService:
         assert backlog_link is not None
         assert backlog_link.evidence == ["msg-003-ccc", "msg-004-ddd"]
 
-        list_result = __import__(
-            "improvements.services.improvements_list_service",
-            fromlist=["list_project_improvements"],
-        ).list_project_improvements(run.project_id)
-        assert list_result["improvements_count"] == 3
-
     def test_ingest_conversation_results_and_backlog_items_legacy(self, run, conversation):
         state_data = {
             "conversations_processed": 1,

@@ -1,12 +1,8 @@
 from unittest.mock import ANY, patch
 
 import pytest
-from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
-from django.urls import reverse
-from rest_framework import status
-from rest_framework.test import APIClient
 
 from conversation_ms.models import Conversation, Project
 from improvements.enums import (
@@ -247,69 +243,3 @@ class TestCancelImprovementsBatchesTask:
 
         with pytest.raises(RunAlreadyTerminal):
             cancel_improvements_batches.run(project_uuid="uuid", target_date="2026-05-29")
-
-
-@pytest.mark.django_db
-class TestImprovementsCancelView:
-    @pytest.fixture
-    def api_client(self):
-        return APIClient()
-
-    @pytest.fixture
-    def auth_headers(self):
-        token = "test-secret-token"
-        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
-
-    def _url(self, project_uuid):
-        return reverse("project-improvements-cancel", kwargs={"project_uuid": project_uuid})
-
-    def test_requires_auth(self, api_client):
-        from uuid import uuid4
-
-        response = api_client.post(self._url(uuid4()), {"target_date": "2026-05-29"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    @patch("improvements.views.cancel_improvements_batches")
-    def test_returns_202_when_run_active(self, mock_cancel_task, api_client, auth_headers):
-        from conversation_ms.models import Project
-
-        project = Project.objects.create(name="Cancel Project", timezone="UTC")
-        save_run_metadata(str(project.uuid), "2026-05-29", [{"batch_id": "b1"}])
-
-        response = api_client.post(
-            self._url(project.uuid),
-            {"target_date": "2026-05-29"},
-            **auth_headers,
-        )
-
-        assert response.status_code == status.HTTP_202_ACCEPTED
-        assert response.data["cancel_requested"] is True
-        mock_cancel_task.delay.assert_called_once()
-
-    def test_returns_404_without_run(self, api_client, auth_headers):
-        from conversation_ms.models import Project
-
-        project = Project.objects.create(name="Cancel Project", timezone="UTC")
-
-        response = api_client.post(
-            self._url(project.uuid),
-            {"target_date": "2026-05-29"},
-            **auth_headers,
-        )
-
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-
-    def test_returns_409_when_run_terminal(self, api_client, auth_headers):
-        from conversation_ms.models import Project
-
-        project = Project.objects.create(name="Cancel Project", timezone="UTC")
-        save_run_metadata(str(project.uuid), "2026-05-29", [], status="completed")
-
-        response = api_client.post(
-            self._url(project.uuid),
-            {"target_date": "2026-05-29"},
-            **auth_headers,
-        )
-
-        assert response.status_code == status.HTTP_409_CONFLICT

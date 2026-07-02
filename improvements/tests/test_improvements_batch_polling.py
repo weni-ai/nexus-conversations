@@ -21,9 +21,6 @@ from improvements.tasks import (
     cancel_improvements_batches,
     check_improvements_batches,
 )
-from improvements.utils.time import utc_datetime
-from improvements.services.improvements_redbeat_service import save_run_metadata
-from improvements.tasks import cancel_improvements_batches, check_improvements_batches
 from improvements.utils.time import format_schedule_registered_at, utc_datetime
 
 

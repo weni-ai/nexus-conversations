@@ -196,7 +196,7 @@ Sentry: capture upload/delete exceptions with tags `project_uuid`, `conversation
 | `CONVERSATION_ARCHIVE_WINDOW_START_HOUR` | `null` | Optional processing window start (**project timezone**) |
 | `CONVERSATION_ARCHIVE_WINDOW_END_HOUR` | `null` | Optional processing window end (**project timezone**) |
 
-Support archive API auth: existing `INTERNAL_API_TOKENS` only (no separate env var).
+Archive API auth (Phase D): reuses `PROJECTS_API_BASE_URL` + `PROJECT_AUTH_API_TIMEOUT_SECONDS` from improvements Connect RBAC (PR #95).
 
 Add to `nexus_conversations/environment.py` and `settings.py`.
 
@@ -210,9 +210,9 @@ Add to `nexus_conversations/environment.py` and `settings.py`.
 |--------|------|---------|
 | GET | `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/` | Retrieve archived conversation (V2 shape) from S3 |
 
-**Auth**: Same as `ConversationViewSet` — `InternalTokenAuthentication` + `IsAuthenticated`.
+**Auth**: User JWT + Connect project authorization (improvements pattern, PR #95). Permission class `ArchiveReadProjectPermission` requires Connect role **support (4) or moderator (3)** for GET.
 
-**Behavior**: S3 `get_object` → validate → `response_adapter` → V2 JSON. No Postgres write. Audit log every access.
+**Behavior**: S3 `get_object` → validate → `response_adapter` → V2 JSON. No Postgres write. Audit log every access (`project_auth_user_email`).
 
 **Alternatives considered**:
 - **`include_archived` on list/detail** — Rejected.

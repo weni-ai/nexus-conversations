@@ -20,12 +20,12 @@
 ## Feature Readiness
 
 - [x] Sign-off requires Phase D (US3 support API)
-- [x] Support API auth same as `ConversationViewSet` (`InternalTokenAuthentication`)
+- [x] Support API auth: user JWT + Connect RBAC (Support UI; PR #95 pattern)
 - [x] SC-008 invalid states impossible
 - [x] API + archive share project-timezone eligibility (FR-001/002)
 
 ## Notes
 
 - v1.3.0: Miro alignment, backend-only, make unreasonable states invalid
-- 2026-07-04: spec-clarify + analyze pass — auth, timezone, window behavior resolved
+- 2026-07-04: Support UI auth — user JWT + Connect RBAC (not internal token)
 - Ready for `/speckit-implement`

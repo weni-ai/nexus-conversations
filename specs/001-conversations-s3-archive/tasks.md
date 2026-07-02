@@ -69,12 +69,12 @@
 
 ## Phase 7: US3 — Support archive API (required)
 
-- [ ] T030 [US3] Document auth in `contracts/README.md` (same as `ConversationViewSet`: `InternalTokenAuthentication` + `IsAuthenticated`)
+- [ ] T030 [US3] `ArchiveReadProjectPermission` in `conversation_ms/api/permissions.py` (Connect RBAC; support/moderator roles) + document in `contracts/README.md`
 - [ ] T031 [P] [US3] `response_adapter.py` → Supervisor V2 shape
 - [ ] T032 [P] [US3] Adapter tests in `conversation_ms/tests/test_archive_response_adapter.py`
 - [ ] T033 [US3] `ArchivedConversationView` in `conversation_ms/views_archived.py`
 - [ ] T034 [US3] Routes in `nexus_conversations/urls.py`
-- [ ] T035 [P] [US3] API tests in `conversation_ms/tests/test_archived_conversations_api.py`
+- [ ] T035 [P] [US3] API tests in `conversation_ms/tests/test_archived_conversations_api.py` (mock Connect authorization)
 - [ ] T036 [US3] Audit logging in `views_archived.py`
 
 **Checkpoint**: Spec complete
@@ -103,7 +103,7 @@ Phase 8 — optional
 |-------|------------|
 | US1 | Phase 2 |
 | US2 | Phase 2 (models + state machine), T024 S3 |
-| US3 | US2 (S3 archives + records) |
+| US3 | US2 (S3 archives + records), improvements Connect auth (PR #95) |
 
 ---
 

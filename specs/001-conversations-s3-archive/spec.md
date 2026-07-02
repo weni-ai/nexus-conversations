@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Spec version**: 1.3.0
+**Spec version**: 1.3.1
 
 **Related artifacts**: [plan.md](./plan.md), [tasks.md](./tasks.md), [research.md](./research.md), [data-model.md](./data-model.md), [contracts/README.md](./contracts/README.md)
 
@@ -74,7 +74,7 @@ The team validated a similar pattern internally (Studio/Flows ~100-day archival 
 - Q: API retention filter timezone? → **A:** Same project-timezone eligibility helper as archival (`Project.timezone`, fallback `FALLBACK_TIMEZONE`); one cutoff per project-scoped request.
 - Q: Processing window timezone? → **A:** Project timezone (same as `close_daily`), not UTC.
 - Q: Worker outside processing window? → **A:** Exit without state transition; record stays `PENDING` for next dispatcher/worker cycle.
-- Q: Support archive API auth? → **A:** Same as existing conversation endpoints — `InternalTokenAuthentication` + `IsAuthenticated`; Bearer token from `INTERNAL_API_TOKENS`.
+- Q: Support archive API auth? → **A:** **Support UI** user JWT + Connect project authorization (improvements/PR #95); roles **support (4) or moderator (3)** for GET. Not `InternalTokenAuthentication`.
 - Q: Archive without message snapshot? → **A:** Skip — require existing `ConversationMessages` row (closed snapshot in Postgres).
 - Q: S3 key `{yyyy}/{mm}` bucket? → **A:** UTC month derived from eligibility timestamp (deterministic keys).
 
@@ -113,15 +113,16 @@ As the **platform**, export eligible closed conversations to S3 and delete from 
 
 ### User Story 3 — Support archive retrieval (Priority: P2, Phase D — required)
 
-As **support staff**, retrieve an archived conversation via dedicated internal API in **Supervisor Public V2** shape without Postgres write.
+As **support staff** (Support UI, logged-in user), retrieve an archived conversation via dedicated project-scoped API in **Supervisor Public V2** shape without Postgres write.
 
 **Independent Test**: After archive + delete, support endpoint returns V2 JSON; standard list still excludes conversation.
 
 **Acceptance Scenarios**:
 
-1. **Given** valid S3 archive + support token, **When** `GET .../archived-conversations/{uuid}/`, **Then** Supervisor V2 fields returned.
+1. **Given** valid S3 archive + user JWT with **support or moderator** role on project, **When** `GET .../archived-conversations/{uuid}/`, **Then** Supervisor V2 fields returned.
 2. **Given** conversation still in Postgres, **When** archived endpoint called, **Then** `404`.
-3. **Given** missing or invalid Bearer token, **When** called, **Then** `401`.
+3. **Given** missing `Authorization` header or Connect denial, **When** called, **Then** `403`.
+4. **Given** user JWT with insufficient role (e.g. viewer), **When** called, **Then** `403`.
 
 ---
 
@@ -133,7 +134,7 @@ As **support staff**, retrieve an archived conversation via dedicated internal A
 - Worker outside processing window: no state change; record stays `PENDING`.
 - Conversation without `ConversationMessages` row: excluded from archive eligibility.
 - Large backlog: hourly batches drain over time; Grafana on tracking tables.
-- Reconcile/export >90d window: fail-fast within MS.
+- Connect authorization unavailable: archive endpoint returns `503` (same as improvements).
 
 ## Requirements *(mandatory)*
 
@@ -153,7 +154,7 @@ As **support staff**, retrieve an archived conversation via dedicated internal A
 - **FR-012**: Archive tasks on **dedicated Celery queue** with separate Argo workers (Cloud).
 - **FR-013**: Archive access via dedicated `archived-conversations/` endpoints only.
 - **FR-014**: Support API retrieves from S3; **required for spec completion**.
-- **FR-015**: Support API uses the **same auth as other conversation endpoints** (`InternalTokenAuthentication`, `IsAuthenticated`, `INTERNAL_API_TOKENS`).
+- **FR-015**: Support API auth: caller **`Authorization: Bearer <user-jwt>`**; verify via Connect Projects API (`GET /v2/projects/{project_uuid}/authorization`) — same infrastructure as improvements ([PR #95](https://github.com/weni-ai/nexus-conversations/pull/95)). Archive GET requires Connect role **`support` (4) or `moderator` (3)**.
 - **FR-016**: Support API response matches **Supervisor Public V2** shape.
 - **FR-017**: Support API must not write to Postgres.
 - **FR-018**: Persist **archive tracking records** with state machine: `PENDING → IN_PROGRESS → ARCHIVED → DELETED` or `→ FAILED`.

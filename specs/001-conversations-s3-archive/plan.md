@@ -48,7 +48,8 @@ conversation_ms/
 |--------------|-------|
 | S3 bucket + IAM | Cloud |
 | Argo `nexus-conversations-celery-archive` | Cloud |
-| `INTERNAL_API_TOKENS` (same as other endpoints) | Platform/Security |
+| Improvements Connect auth merged (PR #95) | Engineering (prerequisite for Phase D) |
+| `PROJECTS_API_BASE_URL` configured | Platform/Security |
 
 ## Merge order
 

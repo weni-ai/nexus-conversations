@@ -9,7 +9,7 @@
 | ID | Category | Severity | Location(s) | Summary | Resolution |
 |----|----------|----------|-------------|---------|------------|
 | C1 | Inconsistency | HIGH | spec.md FR-001 vs FR-002 | API retention timezone not explicit; archival used project TZ only | FR-001/002 unified: shared project-timezone eligibility helper |
-| C2 | Underspec | HIGH | contracts/README.md, FR-015 | Support auth described as vague "scope" | `InternalTokenAuthentication` + `INTERNAL_API_TOKENS` (token only) |
+| C2 | Underspec | HIGH | contracts/README.md, FR-015 | Support auth | User JWT + Connect RBAC (Support UI; PR #95); support/moderator roles |
 | C3 | Inconsistency | MEDIUM | tasks.md, contracts, quickstart | Shorthand env names (`ARCHIVE_*`) vs `CONVERSATION_ARCHIVE_*` | Normalized to full prefix everywhere |
 | C4 | Underspec | MEDIUM | FR-003, data-model | Archive requires `ConversationMessages` row — only in research | Added to FR-003, T005, edge cases |
 | C5 | Ambiguity | MEDIUM | FR-021, US2 | Worker outside window behavior unclear | Exit without transition; record stays `PENDING` |

@@ -48,9 +48,7 @@ natively rather than coupling to unrelated microservices.
 ## Additional Constraints
 
 - **Stack**: Python 3.x, Django, DRF, Celery, Postgres, DynamoDB (in-progress only), boto3/IRSA.
-- **API auth**: Internal token authentication for service-to-service calls; retention filters
-  apply on standard list/detail APIs; archived data access MUST use dedicated internal
-  endpoints with a separate support/archive permission scope — never query-param bypass.
+- **API auth**: Standard list/detail APIs keep `InternalTokenAuthentication` (service-to-service). Archived data access uses a **dedicated endpoint** with **user JWT + Connect project authorization** (support/moderator roles) — never query-param bypass.
 - **In-service alignment**: Before enabling DB deletes, align export/reconcile services within
   nexus-conversations MS to the 90-day window.
 
@@ -67,4 +65,4 @@ This constitution supersedes ad-hoc implementation choices for retention/archiva
 Amendments require documented rationale. `/speckit-analyze` MUST flag constitution violations
 as CRITICAL.
 
-**Version**: 1.3.0 | **Ratified**: 2026-07-01 | **Last Amended**: 2026-07-03
+**Version**: 1.3.1 | **Ratified**: 2026-07-01 | **Last Amended**: 2026-07-04

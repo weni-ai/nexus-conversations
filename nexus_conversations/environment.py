@@ -29,4 +29,7 @@ env = environ.Env(
     OIDC_RP_CLIENT_ID=(str, ""),
     OIDC_RP_CLIENT_SECRET=(str, ""),
     IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=(int, 86400),
+    CORS_ORIGIN_ALLOW_ALL=(bool, False),
+    CORS_ALLOWED_ORIGINS=(list, []),
+    CORS_ALLOW_CREDENTIALS=(bool, False),
 )

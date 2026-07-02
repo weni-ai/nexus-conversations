@@ -57,9 +57,11 @@ poetry run pytest conversation_ms/tests/test_archive_state_machine.py \
 ## Phase D — Support API
 
 ```bash
-curl -H "Authorization: Bearer <support-team-token>" \
+curl -H "Authorization: Bearer <user-jwt-from-support-ui>" \
   "http://localhost:8000/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/"
 ```
+
+Requires Connect role **support** or **moderator** on the project (`PROJECTS_API_BASE_URL` must be configured).
 
 ## Staging checklist
 

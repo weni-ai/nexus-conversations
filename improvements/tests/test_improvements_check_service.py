@@ -17,13 +17,20 @@ from improvements.services.improvements_check_service import (
 class TestBuildCheckStateS3Key:
     def test_builds_key_with_prefix(self):
         settings.IMPROVEMENTS_S3_PREFIX = "improvements"
-        key = build_check_state_s3_key("76396786-80de-4dd1-b65a-31bf006435cc", "2026-05-29")
-        assert key == "improvements/76396786-80de-4dd1-b65a-31bf006435cc/2026-05-29/check_state.json"
+        key = build_check_state_s3_key(
+            "76396786-80de-4dd1-b65a-31bf006435cc",
+            "2026-05-29",
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        )
+        assert key == (
+            "improvements/76396786-80de-4dd1-b65a-31bf006435cc/"
+            "2026-05-29/a1b2c3d4-e5f6-7890-abcd-ef1234567890/check_state.json"
+        )
 
     def test_builds_key_without_prefix(self):
         settings.IMPROVEMENTS_S3_PREFIX = ""
-        key = build_check_state_s3_key("uuid", "2026-05-29")
-        assert key == "uuid/2026-05-29/check_state.json"
+        key = build_check_state_s3_key("uuid", "2026-05-29", "run-uuid")
+        assert key == "uuid/2026-05-29/run-uuid/check_state.json"
 
 
 class TestBuildCheckLambdaPayload:
@@ -35,6 +42,12 @@ class TestBuildCheckLambdaPayload:
             "batches": batches,
             "state_url": "https://example.com/state",
         }
+
+    def test_includes_classification_classes(self):
+        batches = [{"batch_id": "b1"}]
+        classes = [{"name": "resposta-muito-longa", "definition": "Definition"}]
+        payload = build_check_lambda_payload(batches, classification_classes=classes)
+        assert payload["classification_classes"] == classes
 
     def test_includes_cancel_if_incomplete(self):
         batches = [{"batch_id": "b1"}]
@@ -68,10 +81,15 @@ class TestUploadCheckStateToS3:
         mock_s3 = mock_get_client.return_value
         state_data = {"classifications": []}
 
-        result = upload_check_state_to_s3(state_data, "uuid", "2026-05-29")
+        result = upload_check_state_to_s3(
+            state_data,
+            "uuid",
+            "2026-05-29",
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        )
 
         assert result["bucket"] == "test-bucket"
-        assert result["key"] == "improvements/uuid/2026-05-29/check_state.json"
+        assert result["key"] == ("improvements/uuid/2026-05-29/a1b2c3d4-e5f6-7890-abcd-ef1234567890/check_state.json")
         mock_s3.put_object.assert_called_once()
         uploaded_body = mock_s3.put_object.call_args.kwargs["Body"]
         assert json.loads(uploaded_body.decode("utf-8")) == state_data

@@ -22,6 +22,7 @@ from improvements.services.conversation_count_service import (
     select_random_conversation_uuids_in_range,
 )
 from improvements.services.conversation_normalizer import iter_normalized_conversations
+from improvements.services.custom_analysis_service import build_check_classification_classes
 from improvements.services.improvements_check_service import (
     build_check_lambda_payload,
     build_check_state_s3_key,
@@ -128,17 +129,18 @@ def _load_active_run_metadata(project_uuid: str, target_date: str) -> dict[str, 
     return metadata
 
 
-def _resolve_check_state_url(project_uuid: str, target_date: str) -> str | None:
+def _resolve_check_state_url(project_uuid: str, target_date: str, run_uuid: str) -> str | None:
     bucket = getattr(settings, "IMPROVEMENTS_S3_BUCKET", "")
     if not bucket:
         return None
-    state_key = build_check_state_s3_key(project_uuid, target_date)
+    state_key = build_check_state_s3_key(project_uuid, target_date, run_uuid)
     if check_state_exists(bucket, state_key):
         logger.info(
             "[check_improvements_batches] Sending check_state.json to Lambda "
-            "project_uuid=%s target_date=%s bucket=%s key=%s",
+            "project_uuid=%s target_date=%s run_uuid=%s bucket=%s key=%s",
             project_uuid,
             target_date,
+            run_uuid,
             bucket,
             state_key,
         )
@@ -374,12 +376,14 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             return metadata
 
         run = _resolve_check_run(project_uuid, target_date, metadata)
+        run_uuid = str(run.uuid) if run is not None else str(metadata.get("run_uuid", ""))
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _resolve_check_batches(project_uuid, target_date, metadata)
         check_payload = build_check_lambda_payload(
             batches,
-            state_url=_resolve_check_state_url(project_uuid, target_date),
+            state_url=_resolve_check_state_url(project_uuid, target_date, run_uuid) if run_uuid else None,
             cancel_if_incomplete=cancel_if_incomplete,
+            classification_classes=build_check_classification_classes(project_uuid),
         )
         check_result = invoke_improvements_check_lambda(
             check_payload,
@@ -393,6 +397,7 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             check_result=check_result,
             project_uuid=project_uuid,
             target_date=target_date,
+            run_uuid=run_uuid,
         )
         if ingest_result is not None:
             logger.info(

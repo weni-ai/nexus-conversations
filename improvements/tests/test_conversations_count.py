@@ -197,7 +197,11 @@ class TestStartConversationsImprovements:
             run.run_conversations.filter(processing_status=ImprovementConversationProcessingStatus.PENDING).count() == 2
         )
         assert run.s3_build_key == build_conversations_s3_key(payload)
-        assert run.s3_state_key == build_check_state_s3_key(str(project.uuid), "2026-02-05")
+        assert run.s3_state_key == build_check_state_s3_key(
+            str(project.uuid),
+            "2026-02-05",
+            str(run.uuid),
+        )
 
         uploaded_conversations = captured["conversations"]
         assert len(uploaded_conversations) == 2

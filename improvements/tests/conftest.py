@@ -1,9 +1,31 @@
 import logging
 import sys
+from unittest.mock import Mock
 
 import pytest
 
 E2E_LOGGER_NAME = "improvements.tests.e2e"
+
+
+@pytest.fixture
+def auth_headers():
+    return {"HTTP_AUTHORIZATION": "Bearer test-jwt-token"}
+
+
+@pytest.fixture(autouse=True)
+def mock_project_auth(monkeypatch, settings):
+    settings.PROJECTS_API_BASE_URL = "https://project-auth.example.com"
+
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.ok = True
+    mock_response.json.return_value = {
+        "project_authorization": 3,
+        "user": "user@example.com",
+    }
+    mock_get = Mock(return_value=mock_response)
+    monkeypatch.setattr("conversation_ms.permissions.requests.get", mock_get)
+    return mock_get
 
 
 @pytest.fixture(autouse=True)

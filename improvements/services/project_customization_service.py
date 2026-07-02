@@ -3,6 +3,7 @@ from typing import Any
 from django.conf import settings
 
 from improvements.dependencies import get_improvements_dependencies
+from improvements.services.custom_analysis_service import build_classification_classes
 from improvements.services.kb_chunk_registry import build_kb_chunks_dict
 
 
@@ -34,11 +35,16 @@ def build_customization_for_lambda_upload(project_uuid: str) -> dict[str, Any]:
 def build_customization_artifact(
     customization: dict[str, Any],
     normalized_conversations: list[dict[str, Any]] | None = None,
+    *,
+    project_uuid: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    artifact: dict[str, Any] = {
         "customization": customization,
         "kb_chunks_dict": build_kb_chunks_dict(normalized_conversations or []),
     }
+    if project_uuid is not None:
+        artifact["classification_classes"] = build_classification_classes(project_uuid)
+    return artifact
 
 
 def enrich_customization_for_improvements(

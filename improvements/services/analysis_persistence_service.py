@@ -71,6 +71,7 @@ def persist_analysis_build_phase(
         s3_state_key=build_check_state_s3_key(
             str(payload["project_uuid"]),
             str(payload["target_date"]),
+            str(run.uuid),
         ),
     )
     return mark_run_status(run, ImprovementRunStatus.POLLING)
@@ -82,12 +83,13 @@ def persist_analysis_check_result(
     check_result: dict[str, Any],
     project_uuid: str,
     target_date: str,
+    run_uuid: str,
 ) -> dict[str, Any] | None:
     state_data = check_result.get("state_data")
     if state_data is None:
         return None
 
-    upload_check_state_to_s3(state_data, project_uuid, target_date)
+    upload_check_state_to_s3(state_data, project_uuid, target_date, run_uuid)
     if run is None:
         return None
 

@@ -18,7 +18,17 @@ Default queryset excludes expired closed conversations; in-progress always visib
 
 ### GET `/api/v1/projects/{project_uuid}/archived-conversations/{uuid}/`
 
-**Auth**: Same as other conversation endpoints — `InternalTokenAuthentication` + `permissions.IsAuthenticated` (Bearer token from `INTERNAL_API_TOKENS`). No separate token or permission class.
+**Auth**: User JWT + Connect project authorization (same pattern as improvements API, PR #95):
+
+1. Caller sends `Authorization: Bearer <user-jwt>` (Support UI session token).
+2. `ArchiveReadProjectPermission` forwards the header to Connect:
+   `GET {PROJECTS_API_BASE_URL}/v2/projects/{project_uuid}/authorization`
+3. Archive GET allowed only when Connect returns `project_authorization` **`support` (4) or `moderator` (3)**.
+4. On success, `request.project_auth_user_email` is available for audit logging.
+
+**Not** `InternalTokenAuthentication` / `INTERNAL_API_TOKENS` — that pattern remains for service-to-service conversation list/detail APIs.
+
+Reference: `improvements/docs/project_authorization.md`, `conversation_ms/permissions.py`, `conversation_ms/api/permissions.py`.
 
 **Behavior**: Read S3 → map to Supervisor Public V2 shape → return JSON. **Never writes Postgres.** Audit log every access (conversation UUID, project UUID, caller team, timestamp).
 
@@ -48,7 +58,9 @@ Default queryset excludes expired closed conversations; in-progress always visib
 
 Field alignment: matches `SupervisorPublicConversationItemSerializer` in nexus-ai (`supervisor_public.py`) and `ConversationDetailSerializer` in nexus-conversations. Extra fields `archived_at`, `is_archived` are additive for support context.
 
-**Response 401**: Missing or invalid Bearer token
+**Response 403**: Missing `Authorization`, Connect denial, or insufficient project role
+
+**Response 503**: Connect authorization service unavailable
 
 **Response 404**: S3 object not found, or conversation still in Postgres
 
@@ -106,7 +118,12 @@ Field alignment: matches `SupervisorPublicConversationItemSerializer` in nexus-a
 | `CONVERSATION_ARCHIVE_WINDOW_START_HOUR` | — | B (optional, project TZ) |
 | `CONVERSATION_ARCHIVE_WINDOW_END_HOUR` | — | B (optional, project TZ) |
 
-Support archive API auth uses existing `INTERNAL_API_TOKENS` (no additional env var).
+Archive API auth reuses improvements Connect settings (no additional env var):
+
+| Variable | Default | Phase |
+|----------|---------|-------|
+| `PROJECTS_API_BASE_URL` | — | D |
+| `PROJECT_AUTH_API_TIMEOUT_SECONDS` | `5` | D |
 
 ---
 

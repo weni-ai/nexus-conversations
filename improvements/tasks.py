@@ -162,6 +162,15 @@ def _resolve_check_run(project_uuid: str, target_date: str, metadata: dict[str, 
     )
 
 
+def _resolve_check_run_uuid(metadata: dict[str, Any], run) -> str | None:
+    run_uuid = metadata.get("run_uuid")
+    if run_uuid:
+        return str(run_uuid)
+    if run is not None:
+        return str(run.uuid)
+    return None
+
+
 def _finalize_db_run_after_check(
     run,
     *,
@@ -448,6 +457,7 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
             return metadata
 
         run = _resolve_check_run(project_uuid, target_date, metadata)
+        run_uuid = _resolve_check_run_uuid(metadata, run)
         if is_polling_past_timeout(metadata, run):
             return _expire_stale_improvements_run(
                 project_uuid=project_uuid,

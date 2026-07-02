@@ -37,7 +37,7 @@ def list_affected_conversations(
     links_qs = item.affected_conversations.select_related(
         "conversation",
         "conversation__messages_data",
-    ).order_by("pk")
+    ).order_by("created_at", "pk")
     total_count = links_qs.count()
     offset = (page - 1) * page_size
     links = list(links_qs[offset : offset + page_size])

@@ -18,7 +18,7 @@ def mock_project_auth(monkeypatch, settings):
     settings.IMPROVEMENTS_LAMBDA_AWS_REGION = getattr(
         settings,
         "IMPROVEMENTS_LAMBDA_AWS_REGION",
-        settings.AWS_REGION,
+        "sa-east-1",
     )
 
     mock_response = Mock()

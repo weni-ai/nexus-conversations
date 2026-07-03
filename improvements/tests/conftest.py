@@ -15,6 +15,11 @@ def auth_headers():
 @pytest.fixture(autouse=True)
 def mock_project_auth(monkeypatch, settings):
     settings.PROJECTS_API_BASE_URL = "https://project-auth.example.com"
+    settings.IMPROVEMENTS_LAMBDA_AWS_REGION = getattr(
+        settings,
+        "IMPROVEMENTS_LAMBDA_AWS_REGION",
+        "sa-east-1",
+    )
 
     mock_response = Mock()
     mock_response.status_code = 200

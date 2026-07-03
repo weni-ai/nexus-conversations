@@ -133,7 +133,8 @@ As **support staff** (Support UI, logged-in user), retrieve an archived conversa
 - Stale Celery task after `expires`: dropped; conversation picked up on next dispatcher run.
 - Worker outside processing window: no state change; record stays `PENDING`.
 - Conversation without `ConversationMessages` row: excluded from archive eligibility.
-- Large backlog: hourly batches drain over time; Grafana on tracking tables.
+- Large backlog: hourly batches drain over time; Grafana on tracking tables. **Prod baseline (03/07/2026 07:06 BRT):** 748.747 archive-eligible — see [quickstart.md](./quickstart.md#backlog-sizing-production).
+- Dispatcher does **not** pre-mark the full backlog: each hourly run re-queries Postgres, enqueues up to `CONVERSATION_ARCHIVE_BATCH_SIZE`, creates `PENDING` records, and skips UUIDs with active archive records.
 - Connect authorization unavailable: archive endpoint returns `503` (same as improvements).
 
 ## Requirements *(mandatory)*

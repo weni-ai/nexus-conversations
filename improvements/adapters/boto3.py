@@ -89,7 +89,7 @@ class Boto3ImprovementsLambdaClient:
             raise ValueError("GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN is not configured")
 
         lambda_payload = {key: payload[key] for key in LAMBDA_PAYLOAD_KEYS}
-        lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
+        lambda_client = get_boto3_client("lambda", region_name=settings.IMPROVEMENTS_LAMBDA_AWS_REGION)
         response = lambda_client.invoke(
             FunctionName=lambda_arn,
             InvocationType="RequestResponse",
@@ -113,7 +113,7 @@ class Boto3ImprovementsLambdaClient:
         if not lambda_name:
             raise ValueError("IMPROVEMENTS_ANALYSIS_LAMBDA_NAME is not configured")
 
-        lambda_client = get_boto3_client("lambda", region_name=settings.LAMBDA_AWS_REGION)
+        lambda_client = get_boto3_client("lambda", region_name=settings.IMPROVEMENTS_LAMBDA_AWS_REGION)
         response = lambda_client.invoke(
             FunctionName=lambda_name,
             InvocationType="RequestResponse",

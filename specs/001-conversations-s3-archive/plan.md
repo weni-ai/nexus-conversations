@@ -59,7 +59,8 @@ conversation_ms/
 
 | Risk | Mitigation |
 |------|------------|
-| Backlog | Hourly batch + scale archive workers |
+| Backlog | Hourly batch + scale archive workers. **Prod sizing (03/07/2026 07:06 BRT):** 748.747 archive-eligible; ~62 d enqueue floor @ 500/h — raise `CONVERSATION_ARCHIVE_BATCH_SIZE` and worker concurrency after dry-run validation ([quickstart.md](./quickstart.md)) |
 | Invalid state bugs | State machine + DB constraints + tests (SC-008) |
 | Stale Celery tasks | `expires` on enqueue |
 | Queue contention | Dedicated queue (Cloud/Argo) |
+| Phase C delete rollback | Flip `CONVERSATION_ARCHIVE_DRY_RUN=true` and `CONVERSATION_ARCHIVE_ENABLED=false`; no automatic Postgres restore (out of scope) |

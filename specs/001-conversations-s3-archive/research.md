@@ -289,3 +289,27 @@ Add to `nexus_conversations/environment.py` and `settings.py`.
 **Decision**: No frontend deliverables. Retention enforcement is API behavior only. Product/UI comms out of engineering scope.
 
 **Out of scope**: Frontend deliverables; retention enforced via API only.
+
+---
+
+## R15 — S3 upload/verify retry policy
+
+**Decision**: Transient S3 errors (timeouts, 5xx) use Celery task autoretry with exponential backoff (in addition to boto3 client retries). Terminal failures transition record to `FAILED` with `sentry_event_id` (`FR-023`). **Never delete Postgres** unless upload + verify succeeded in the same worker attempt (or idempotent HEAD path per R13).
+
+**Rationale**: `FR-006` requires verify before delete but leaves retry mechanics to implementation; explicit policy avoids ambiguous worker behavior.
+
+---
+
+## R16 — Production backlog baseline
+
+**Decision**: Size backlog before Phase B/C rollout using the sizing script in [quickstart.md](./quickstart.md#backlog-sizing-production).
+
+**Snapshot (production, 03/07/2026 07:06 BRT / 2026-07-03T10:06:45Z):**
+
+| Metric | Count |
+|--------|------:|
+| archive_eligible | 748.747 |
+| api_hidden_closed | 810.693 |
+| stale_in_progress | 127.473 |
+
+Enqueue floor @ 500/h: ~62 days. Mitigation: raise `CONVERSATION_ARCHIVE_BATCH_SIZE` and scale archive workers after dry-run validation — not a separate code phase.

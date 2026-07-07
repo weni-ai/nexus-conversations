@@ -128,6 +128,9 @@ USE_TZ = True
 # Timezone Configuration
 FALLBACK_TIMEZONE = env.str("FALLBACK_TIMEZONE", default="America/Sao_Paulo")
 
+# Closed-conversation retention window for list/detail APIs (calendar days, project timezone)
+CONVERSATION_RETENTION_DAYS = env.int("CONVERSATION_RETENTION_DAYS", default=90)
+
 # Close daily Celery task: distributed lock (TTL should exceed typical run; tune via metrics)
 CLOSE_DAILY_LOCK_ENABLED = env.bool("CLOSE_DAILY_LOCK_ENABLED", default=not TESTING)
 CLOSE_DAILY_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_LOCK_TTL_SECONDS", default=7200)

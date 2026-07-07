@@ -41,6 +41,13 @@ app.conf.beat_schedule = {
         "task": "conversation_ms.tasks.reclassify_unclassified_conversations",
         "schedule": schedules.crontab(minute=0),
     },
+    "archive_dispatcher": {
+        "task": "conversation_ms.tasks.archive_dispatcher_task",
+        "schedule": schedules.crontab(minute=0),
+        "options": {
+            "queue": getattr(settings, "CONVERSATION_ARCHIVE_CELERY_QUEUE", "conversations-archive"),
+        },
+    },
 }
 
 if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):

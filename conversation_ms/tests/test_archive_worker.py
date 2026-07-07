@@ -141,6 +141,60 @@ class TestArchiveWorkerDryRun:
 
 
 @pytest.mark.django_db
+class TestArchiveWorkerDelete:
+    def test_not_dry_run_deletes_postgres_after_verified_upload(self, archive_bucket):
+        project = ProjectFactory(timezone="UTC")
+        conversation = _eligible_conversation(project)
+        record = _pending_record(conversation)
+        conv_uuid = conversation.uuid
+
+        with override_settings(CONVERSATION_ARCHIVE_DRY_RUN=False):
+            result = process_archive_conversation(str(record.id))
+
+        assert result["status"] == "success"
+        assert result["dry_run"] is False
+        assert result["deleted"] is True
+        assert not Conversation.objects.filter(uuid=conv_uuid).exists()
+        assert not ConversationMessages.objects.filter(conversation_id=conv_uuid).exists()
+
+        record.refresh_from_db()
+        assert record.status == ArchiveRecordStatus.DELETED
+        assert record.deleted_at is not None
+        assert record.finished_at is not None
+        assert record.s3_key
+
+    def test_idempotent_s3_skip_still_deletes_postgres(self, archive_bucket):
+        project = ProjectFactory(timezone="UTC")
+        conversation = _eligible_conversation(project)
+        record = _pending_record(conversation)
+        conv_uuid = conversation.uuid
+
+        with override_settings(CONVERSATION_ARCHIVE_DRY_RUN=True):
+            process_archive_conversation(str(record.id))
+
+        record.refresh_from_db()
+        assert record.status == ArchiveRecordStatus.ARCHIVED
+        assert Conversation.objects.filter(uuid=conv_uuid).exists()
+
+        record.status = ArchiveRecordStatus.PENDING
+        record.archived_at = None
+        record.s3_key = None
+        record.content_sha256 = None
+        record.finished_at = None
+        record.save(update_fields=["status", "archived_at", "s3_key", "content_sha256", "finished_at"])
+
+        with override_settings(CONVERSATION_ARCHIVE_DRY_RUN=False):
+            with patch("conversation_ms.archive.s3_client.ArchiveS3Client.put_gzip_object") as mock_put:
+                result = process_archive_conversation(str(record.id))
+                mock_put.assert_not_called()
+
+        assert result["deleted"] is True
+        assert not Conversation.objects.filter(uuid=conv_uuid).exists()
+        record.refresh_from_db()
+        assert record.status == ArchiveRecordStatus.DELETED
+
+
+@pytest.mark.django_db
 class TestArchiveWorkerWindow:
     def test_outside_window_leaves_record_pending(self, archive_bucket):
         project = ProjectFactory(timezone="UTC")

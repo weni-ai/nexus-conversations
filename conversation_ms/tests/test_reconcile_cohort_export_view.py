@@ -4,12 +4,15 @@ from uuid import uuid4
 
 import pytest
 from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from conversation_ms.models import Conversation, Project
 from conversation_ms.services.reconcile_cohort_export import (
+    export_reconcile_cohort,
+    max_reconcile_calendar_days,
     parse_api_utc,
     validate_reconcile_date_range,
     validate_reconcile_window_seconds,
@@ -112,13 +115,48 @@ class TestReconcileCohortExportView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_rejects_calendar_range_over_retention_days(self, api_client, project, auth_headers):
+        url = reverse("project-reconcile-cohort-export", kwargs={"project_uuid": project.uuid})
+        with override_settings(CONVERSATION_RETENTION_DAYS=90):
+            response = api_client.get(
+                url,
+                {
+                    "date_start": "2026-01-01",
+                    "date_end": "2026-05-15",
+                },
+                **auth_headers,
+            )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "90" in str(response.data)
+
 
 class TestReconcileCohortExportHelpers:
+    def test_max_reconcile_calendar_days_follows_retention_setting(self):
+        with override_settings(CONVERSATION_RETENTION_DAYS=45):
+            assert max_reconcile_calendar_days() == 45
+
     def test_validate_reconcile_date_range_max_days(self):
         start = parse_api_utc("2026-01-01T00:00:00Z")
         end = parse_api_utc("2026-02-15T00:00:00Z")
         with pytest.raises(ValueError, match="maximum is 31"):
             validate_reconcile_date_range(start, end, 31)
+
+    def test_export_reconcile_cohort_rejects_calendar_range_over_retention(self):
+        from conversation_ms.services.reconcile_window import resolve_reconcile_cfg_dates
+
+        with override_settings(CONVERSATION_RETENTION_DAYS=90):
+            cfg = resolve_reconcile_cfg_dates(
+                {
+                    "project": str(uuid4()),
+                    "date_start": "2026-01-01",
+                    "date_end": "2026-05-15",
+                    "use_date_end": True,
+                    "apply_terminal_cohort_filter": True,
+                },
+                "UTC",
+            )
+            with pytest.raises(ValueError, match="maximum is 90"):
+                export_reconcile_cohort(cfg)
 
     def test_validate_reconcile_window_seconds_ordering(self):
         start = parse_api_utc("2026-01-02T00:00:00Z")

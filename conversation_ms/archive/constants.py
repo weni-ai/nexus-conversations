@@ -43,3 +43,5 @@ FINISHED_AT_REQUIRED_STATUSES = frozenset(
 )
 
 RETRY_ELIGIBLE_ARCHIVE_STATUSES = frozenset({ArchiveRecordStatus.FAILED})
+
+ARCHIVE_DISPATCHER_LOCK_KEY = "conversation_ms:archive_dispatcher_active"

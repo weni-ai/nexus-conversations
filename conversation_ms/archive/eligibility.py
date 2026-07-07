@@ -76,3 +76,29 @@ def apply_retention_filter(
     return queryset.annotate(
         _retention_eligible_ts=Coalesce("end_date", "start_date", "created_at"),
     ).filter(Q(resolution=RESOLUTION_IN_PROGRESS) | Q(_retention_eligible_ts__gte=cutoff))
+
+
+def apply_archive_eligibility_filter(
+    queryset: QuerySet[Conversation],
+    project_timezone: str | None,
+    *,
+    retention_days_override: int | None = None,
+    now: pendulum.DateTime | None = None,
+) -> QuerySet[Conversation]:
+    """
+    Closed conversations past retention with a Postgres message snapshot.
+
+    In-progress conversations are excluded (same rules as archive dispatcher).
+    """
+    cutoff = retention_cutoff_utc(
+        project_timezone,
+        retention_days_override=retention_days_override,
+        now=now,
+    )
+    return queryset.annotate(
+        _archive_eligible_ts=Coalesce("end_date", "start_date", "created_at"),
+    ).filter(
+        ~Q(resolution=RESOLUTION_IN_PROGRESS),
+        _archive_eligible_ts__lt=cutoff,
+        messages_data__isnull=False,
+    )

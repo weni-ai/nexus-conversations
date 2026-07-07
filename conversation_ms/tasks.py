@@ -11,6 +11,9 @@ from django.conf import settings
 
 from conversation_ms import cache_access
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.archive.dispatcher import dispatch_archive_conversations
+from conversation_ms.archive.s3_client import TransientS3Error
+from conversation_ms.archive.worker import process_archive_conversation
 from conversation_ms.api.internal.jwt_service import resolve_project_uuid
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.exceptions import BillingPermanentError
@@ -754,3 +757,42 @@ def drain_close_pipeline_task():
     from conversation_ms.close_daily.drain import run_close_pipeline_drain
 
     return run_close_pipeline_drain()
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.archive_dispatcher_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+)
+def archive_dispatcher_task(self):
+    """Hourly dispatcher: select eligible conversations and enqueue archive workers."""
+    try:
+        return dispatch_archive_conversations(enqueue_task=archive_conversation_task)
+    except Exception as exc:
+        logger.exception("[ArchiveDispatcherTask] Fatal error")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.archive_conversation_task",
+    bind=True,
+    max_retries=3,
+    autoretry_for=(TransientS3Error,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    default_retry_delay=60,
+)
+def archive_conversation_task(self, record_id: str):
+    """Per-conversation archive worker (dedicated queue)."""
+    try:
+        return process_archive_conversation(record_id)
+    except TransientS3Error as exc:
+        logger.warning("[ArchiveConversationTask] Transient S3 error record_id=%s: %s", record_id, exc)
+        raise self.retry(exc=exc)
+    except SoftTimeLimitExceeded:
+        logger.error("[ArchiveConversationTask] Soft time limit exceeded record_id=%s", record_id)
+        raise
+    except Exception:
+        logger.exception("[ArchiveConversationTask] Fatal error record_id=%s", record_id)
+        raise

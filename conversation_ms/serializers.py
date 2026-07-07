@@ -410,11 +410,17 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
     apply_terminal_cohort_filter = serializers.BooleanField(default=True)
 
     def validate(self, attrs):
-        from conversation_ms.services.reconcile_cohort_export import parse_api_utc, validate_reconcile_window_seconds
+        from conversation_ms.services.reconcile_cohort_export import (
+            max_reconcile_calendar_days,
+            parse_api_utc,
+            validate_reconcile_date_range,
+            validate_reconcile_window_seconds,
+        )
         from conversation_ms.services.reconcile_window import calendar_range_day_count, parse_requested_calendar_range
 
         start_raw = str(attrs["date_start"]).strip()
         end_raw = str(attrs["date_end"]).strip()
+        max_days = max_reconcile_calendar_days()
         try:
             cal_range = parse_requested_calendar_range(start_raw, end_raw)
         except ValueError as e:
@@ -422,9 +428,14 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
 
         if cal_range is not None:
             cal_start, cal_end = cal_range
-            if calendar_range_day_count(cal_start, cal_end) > 1:
+            day_count = calendar_range_day_count(cal_start, cal_end)
+            if day_count > max_days:
                 raise serializers.ValidationError(
-                    {"date_end": "Reconcile cohort export supports one project calendar day per request"}
+                    {
+                        "date_end": (
+                            f"Reconcile cohort export supports at most {max_days} project calendar days per request"
+                        )
+                    }
                 )
         else:
             try:
@@ -439,6 +450,11 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
 
             try:
                 validate_reconcile_window_seconds(start_bound, end_bound)
+            except ValueError as e:
+                raise serializers.ValidationError({"date_end": str(e)}) from e
+
+            try:
+                validate_reconcile_date_range(start_bound, end_bound, max_days)
             except ValueError as e:
                 raise serializers.ValidationError({"date_end": str(e)}) from e
 

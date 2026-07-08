@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from django.db import models
 
+from conversation_ms.archive.constants import ArchiveRecordStatus
+
 
 class Project(models.Model):
     """
@@ -164,3 +166,96 @@ class ConversationMessages(models.Model):
 
     def __str__(self):
         return f"ConversationMessages - {self.conversation.uuid}"
+
+
+class ConversationArchiveBatch(models.Model):
+    """One row per hourly archive dispatcher run."""
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    enqueued_count = models.IntegerField(default=0)
+    dry_run = models.BooleanField()
+
+    class Meta:
+        db_table = "conversation_ms_conversationarchivebatch"
+
+    def __str__(self):
+        return f"ArchiveBatch {self.id} ({self.started_at})"
+
+
+class ConversationArchiveRecord(models.Model):
+    """Per-conversation archive lifecycle; survives conversation row deletion."""
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    conversation_uuid = models.UUIDField(unique=True)
+    project_uuid = models.UUIDField(db_index=True)
+    batch = models.ForeignKey(
+        ConversationArchiveBatch,
+        on_delete=models.CASCADE,
+        related_name="records",
+        db_column="batch_id",
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=ArchiveRecordStatus.choices,
+    )
+    s3_key = models.CharField(max_length=512, null=True, blank=True)
+    started_at = models.DateTimeField()
+    archived_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    errors = models.JSONField(null=True, blank=True)
+    content_sha256 = models.CharField(max_length=64, null=True, blank=True)
+
+    class Meta:
+        db_table = "conversation_ms_conversationarchiverecord"
+        indexes = [
+            models.Index(fields=["status", "project_uuid"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(status__in=[ArchiveRecordStatus.ARCHIVED, ArchiveRecordStatus.DELETED])
+                    | models.Q(s3_key__isnull=False)
+                ),
+                name="archive_record_s3_key_when_persisted",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(status__in=[ArchiveRecordStatus.ARCHIVED, ArchiveRecordStatus.DELETED])
+                    | models.Q(archived_at__isnull=False)
+                ),
+                name="archive_record_archived_at_when_persisted",
+            ),
+            models.CheckConstraint(
+                check=(~models.Q(status=ArchiveRecordStatus.DELETED) | models.Q(deleted_at__isnull=False)),
+                name="archive_record_deleted_at_when_deleted",
+            ),
+            models.CheckConstraint(
+                check=(models.Q(status=ArchiveRecordStatus.DELETED) | models.Q(deleted_at__isnull=True)),
+                name="archive_record_deleted_at_only_when_deleted",
+            ),
+            models.CheckConstraint(
+                check=(~models.Q(status=ArchiveRecordStatus.FAILED) | models.Q(failed_at__isnull=False)),
+                name="archive_record_failed_at_when_failed",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(status__in=[ArchiveRecordStatus.DELETED, ArchiveRecordStatus.FAILED])
+                    | models.Q(finished_at__isnull=False)
+                ),
+                name="archive_record_finished_at_when_terminal",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(status__in=[ArchiveRecordStatus.PENDING, ArchiveRecordStatus.IN_PROGRESS])
+                    | models.Q(finished_at__isnull=True)
+                ),
+                name="archive_record_no_finished_at_while_active",
+            ),
+        ]
+
+    def __str__(self):
+        return f"ArchiveRecord {self.conversation_uuid} ({self.status})"

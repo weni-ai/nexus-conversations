@@ -1,13 +1,35 @@
+from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from django.conf import settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from conversation_ms.models import Conversation, ConversationClassification, ConversationMessages, Project, Topic
+from improvements.enums import ImprovementRunStatus
+from improvements.models import ImprovementAnalysisRun, ImprovementRunConversation
+from improvements.utils.time import utc_datetime
+
+
+def _create_improvement_run(
+    project: Project,
+    *,
+    triggered_on_date: str,
+    started_at,
+) -> ImprovementAnalysisRun:
+    return ImprovementAnalysisRun.objects.create(
+        project=project,
+        target_date="2026-02-05",
+        triggered_on_date=triggered_on_date,
+        status=ImprovementRunStatus.COMPLETED,
+        range_start_utc=utc_datetime(2026, 2, 5),
+        range_end_utc=utc_datetime(2026, 2, 5, 23, 59, 59),
+        started_at=started_at,
+    )
 
 
 @pytest.mark.django_db
@@ -348,3 +370,75 @@ class TestConversationEndpoint:
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data["messages"]["results"]) == 2
+
+    def test_list_conversations_is_amazing_false_without_improvement_run(self, api_client, project, auth_headers):
+        Conversation.objects.create(project=project, resolution="0")
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["results"][0]["is_amazing"] is False
+
+    def test_retrieve_conversation_is_amazing_false_without_improvement_run(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(project=project, resolution="0")
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["is_amazing"] is False
+
+    def test_list_conversations_is_amazing_from_latest_run(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        older_run = _create_improvement_run(
+            project,
+            triggered_on_date="2026-02-06",
+            started_at=timezone.now() - timedelta(days=2),
+        )
+        newer_run = _create_improvement_run(
+            project,
+            triggered_on_date="2026-02-07",
+            started_at=timezone.now() - timedelta(days=1),
+        )
+        ImprovementRunConversation.objects.create(
+            run=older_run,
+            conversation=conversation,
+            is_amazing_conversation=True,
+        )
+        ImprovementRunConversation.objects.create(
+            run=newer_run,
+            conversation=conversation,
+            is_amazing_conversation=False,
+        )
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["results"][0]["is_amazing"] is False
+
+    def test_retrieve_conversation_is_amazing_true_from_latest_run(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        run = _create_improvement_run(
+            project,
+            triggered_on_date="2026-02-06",
+            started_at=timezone.now(),
+        )
+        ImprovementRunConversation.objects.create(
+            run=run,
+            conversation=conversation,
+            is_amazing_conversation=True,
+        )
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["is_amazing"] is True

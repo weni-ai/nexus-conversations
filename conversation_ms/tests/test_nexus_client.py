@@ -208,3 +208,26 @@ class TestNexusClient:
         result = client.get_knowledge_base_chunks(project_uuid)
 
         assert result == []
+
+    def test_open_support_ticket(self):
+        project_uuid = "017cd5df-cfc8-4d5c-b659-347fe7a4bee9"
+        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        payload = {
+            "improvement_item": {"uuid": "item-uuid", "text": "Title"},
+            "affected_conversations": [],
+            "project_uuid": project_uuid,
+            "user_email": "user@example.com",
+        }
+        expected = {"ticket_id": "support-ticket-123"}
+        client, mock_auth = _client_with_mock_auth(_mock_response(json_payload=expected))
+
+        result = client.open_support_ticket(project_uuid, payload)
+
+        assert result == expected
+        mock_auth.make_request_with_retry.assert_called_once_with(
+            "POST",
+            f"https://nexus.stg.cloud.weni.ai/api/{project_uuid}/improvements/open-support-ticket/",
+            params=None,
+            timeout=30,
+            json=payload,
+        )

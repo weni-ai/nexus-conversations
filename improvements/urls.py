@@ -3,6 +3,7 @@ from django.urls import path
 from improvements.views import (
     ConversationsImprovements,
     ConversationsImprovementsCancel,
+    ImprovementsOpenSupportTicket,
     ProjectCustomAnalysisDetail,
     ProjectCustomAnalysisListCreate,
     ProjectImprovementAffectedConversations,
@@ -35,6 +36,11 @@ urlpatterns = [
         "projects/<uuid:project_uuid>/improvements/custom_analysis/<uuid:monitor_uuid>/",
         ProjectCustomAnalysisDetail.as_view(),
         name="project-custom-analysis-detail",
+    ),
+    path(
+        "projects/<uuid:project_uuid>/improvements/open-support-ticket/",
+        ImprovementsOpenSupportTicket.as_view(),
+        name="project-improvements-open-support-ticket",
     ),
     path(
         "projects/<uuid:project_uuid>/improvements/<uuid:improvement_uuid>/affected_conversations/",

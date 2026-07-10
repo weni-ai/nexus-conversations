@@ -4,6 +4,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+import sentry_sdk
 from django.db import transaction
 
 from conversation_ms.models import Conversation
@@ -24,6 +25,36 @@ from improvements.models import (
 from improvements.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_uuid(value: Any) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _ignore_invalid_conversation_uuid(
+    value: Any,
+    *,
+    project_uuid: UUID | str,
+    run_uuid: UUID | str,
+) -> None:
+    logger.warning(
+        "[ingest_improvements_state_data] Ignoring invalid conversation_uuid=%s " "project_uuid=%s run_uuid=%s",
+        value,
+        project_uuid,
+        run_uuid,
+    )
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("project_uuid", str(project_uuid))
+        scope.set_tag("run_uuid", str(run_uuid))
+        scope.set_extra("conversation_uuid", value)
+        sentry_sdk.capture_exception(
+            ValueError(f"badly formed conversation_uuid: {value!r}"),
+        )
 
 
 def _normalize_dimension_results(
@@ -74,11 +105,20 @@ def _upsert_conversation_result(
     if not conversation_uuid:
         return
 
-    if not Conversation.objects.filter(uuid=conversation_uuid).exists():
+    parsed_uuid = _parse_uuid(conversation_uuid)
+    if parsed_uuid is None:
+        _ignore_invalid_conversation_uuid(
+            conversation_uuid,
+            project_uuid=run.project_id,
+            run_uuid=run.uuid,
+        )
+        return
+
+    if not Conversation.objects.filter(uuid=parsed_uuid).exists():
         logger.warning(
             "[ingest_improvements_state_data] Conversation not found run=%s conversation_uuid=%s",
             run.uuid,
-            conversation_uuid,
+            parsed_uuid,
         )
         return
 
@@ -108,7 +148,7 @@ def _upsert_conversation_result(
 
     ImprovementRunConversation.objects.update_or_create(
         run=run,
-        conversation_id=conversation_uuid,
+        conversation_id=parsed_uuid,
         defaults=defaults,
     )
 
@@ -159,11 +199,21 @@ def _upsert_backlog_item(
         if not isinstance(affected_entry, dict):
             continue
         conv_uuid = affected_entry.get("conversation_uuid")
-        if not conv_uuid or not Conversation.objects.filter(uuid=conv_uuid).exists():
+        if not conv_uuid:
+            continue
+        parsed_uuid = _parse_uuid(conv_uuid)
+        if parsed_uuid is None:
+            _ignore_invalid_conversation_uuid(
+                conv_uuid,
+                project_uuid=run.project_id,
+                run_uuid=run.uuid,
+            )
+            continue
+        if not Conversation.objects.filter(uuid=parsed_uuid).exists():
             continue
         ImprovementBacklogItemConversation.objects.update_or_create(
             backlog_item=backlog_item,
-            conversation_id=conv_uuid,
+            conversation_id=parsed_uuid,
             defaults={
                 "confidence_score": affected_entry.get("confidence_score"),
                 "evidence": affected_entry.get("evidence") or [],
@@ -223,12 +273,23 @@ def _affected_conversations_from_uuids(
     conversation_uuids: list[Any],
     confidence_lookup: dict[str, float | None],
     message_uuids_lookup: dict[str, list[str]],
+    *,
+    project_uuid: UUID | str,
+    run_uuid: UUID | str,
 ) -> list[dict[str, Any]]:
     affected: list[dict[str, Any]] = []
     for conv_uuid in conversation_uuids:
         if not conv_uuid:
             continue
-        conv_uuid_str = str(conv_uuid)
+        parsed_uuid = _parse_uuid(conv_uuid)
+        if parsed_uuid is None:
+            _ignore_invalid_conversation_uuid(
+                conv_uuid,
+                project_uuid=project_uuid,
+                run_uuid=run_uuid,
+            )
+            continue
+        conv_uuid_str = str(parsed_uuid)
         affected.append(
             {
                 "conversation_uuid": conv_uuid_str,
@@ -348,6 +409,8 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                             conversation_uuids if isinstance(conversation_uuids, list) else [],
                             confidence_lookup,
                             message_uuids_lookup,
+                            project_uuid=run.project_id,
+                            run_uuid=run.uuid,
                         ),
                     },
                 ):
@@ -371,6 +434,8 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                     class_conversation_uuids if isinstance(class_conversation_uuids, list) else [],
                     confidence_lookup,
                     message_uuids_lookup,
+                    project_uuid=run.project_id,
+                    run_uuid=run.uuid,
                 ),
             },
         ):

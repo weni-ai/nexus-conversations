@@ -1,5 +1,6 @@
 """Tests for archive dispatcher (lock, batch, expires)."""
 
+import json
 from datetime import timedelta
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -25,6 +26,9 @@ def archive_settings():
         CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS=1800,
         CONVERSATION_ARCHIVE_CELERY_QUEUE="conversations-archive",
         CONVERSATION_ARCHIVE_LOCK_ENABLED=True,
+        CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS=120,
+        CONVERSATION_ARCHIVE_LOCK_HEARTBEAT_EVERY=2,
+        CONVERSATION_ARCHIVE_LOCK_STALE_SECONDS=1800,
         CONVERSATION_RETENTION_DAYS=90,
     )
 
@@ -45,6 +49,13 @@ def _eligible_conversation(project, *, days_ago=120):
     return conversation
 
 
+def _lock_json(*, started_at=None, batch_id=None) -> str:
+    data = {"started_at": (started_at or timezone.now()).isoformat()}
+    if batch_id is not None:
+        data["batch_id"] = str(batch_id)
+    return json.dumps(data, separators=(",", ":"))
+
+
 @pytest.mark.django_db
 class TestArchiveDispatcher:
     @patch("conversation_ms.cache_access.cache")
@@ -62,13 +73,67 @@ class TestArchiveDispatcher:
         assert result["status"] == "skipped"
         assert result["reason"] == "missing_s3_bucket"
 
+    @patch("conversation_ms.archive.dispatcher.sentry_sdk")
     @patch("conversation_ms.cache_access.cache")
-    def test_skips_when_lock_held(self, mock_cache, archive_settings):
+    def test_skips_when_lock_held_by_active_batch(self, mock_cache, mock_sentry, archive_settings):
         with archive_settings:
+            owner = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now(),
+                dry_run=True,
+            )
             mock_cache.add.return_value = False
+            mock_cache.get.return_value = _lock_json(started_at=owner.started_at, batch_id=owner.id)
+
             result = dispatch_archive_conversations(enqueue_task=Mock())
+
         assert result["status"] == "skipped"
         assert result["reason"] == "dispatcher_locked"
+        mock_cache.delete.assert_not_called()
+        mock_sentry.capture_message.assert_called_once()
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_steals_lock_when_owner_batch_finished(self, mock_cache, archive_settings):
+        with archive_settings:
+            owner = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(minutes=5),
+                finished_at=timezone.now() - timedelta(minutes=4),
+                enqueued_count=1,
+                dry_run=True,
+            )
+            project = ProjectFactory(timezone="UTC")
+            _eligible_conversation(project)
+
+            mock_cache.add.side_effect = [False, True]
+            mock_cache.get.return_value = _lock_json(started_at=owner.started_at, batch_id=owner.id)
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["status"] == "dispatched"
+            assert result["enqueued_count"] == 1
+            assert mock_cache.delete.call_count >= 1
+            assert mock_cache.add.call_count == 2
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_steals_lock_when_owner_batch_stale(self, mock_cache, archive_settings):
+        with archive_settings:
+            owner = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(hours=2),
+                dry_run=True,
+            )
+            project = ProjectFactory(timezone="UTC")
+            _eligible_conversation(project)
+
+            mock_cache.add.side_effect = [False, True]
+            mock_cache.get.return_value = _lock_json(started_at=owner.started_at, batch_id=owner.id)
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["status"] == "dispatched"
+            assert result["enqueued_count"] == 1
 
     @patch("conversation_ms.cache_access.cache")
     def test_enqueues_with_expires_and_creates_pending_records(self, mock_cache, archive_settings):
@@ -98,7 +163,24 @@ class TestArchiveDispatcher:
             expires = call_kwargs["expires"]
             assert before + timedelta(seconds=1800) <= expires <= after + timedelta(seconds=1800)
 
+            mock_cache.set.assert_called()
             mock_cache.delete.assert_called_with(ARCHIVE_DISPATCHER_LOCK_KEY)
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_heartbeats_lock_during_enqueue(self, mock_cache, archive_settings):
+        with archive_settings, override_settings(CONVERSATION_ARCHIVE_BATCH_SIZE=5):
+            mock_cache.add.return_value = True
+            project = ProjectFactory(timezone="UTC")
+            for _ in range(5):
+                _eligible_conversation(project)
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["enqueued_count"] == 5
+            # Initial set after batch create + heartbeats every 2 enqueues (2, 4) = at least 3 sets
+            assert mock_cache.set.call_count >= 3
 
     @patch("conversation_ms.cache_access.cache")
     def test_skips_conversations_with_active_records(self, mock_cache, archive_settings):

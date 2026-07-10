@@ -188,7 +188,9 @@ Sentry: capture upload/delete exceptions with tags `project_uuid`, `conversation
 | `CONVERSATION_ARCHIVE_S3_REGION` | falls back to `AWS_REGION` | Region |
 | `CONVERSATION_ARCHIVE_DRY_RUN` | `true` | Safety gate |
 | `CONVERSATION_ARCHIVE_LOCK_ENABLED` | `true` | Distributed lock |
-| `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `7200` | Lock TTL |
+| `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `120` | Lock TTL (heartbeat renews while dispatcher runs) |
+| `CONVERSATION_ARCHIVE_LOCK_HEARTBEAT_EVERY` | `100` | Renew lock every N enqueues |
+| `CONVERSATION_ARCHIVE_LOCK_STALE_SECONDS` | `1800` | Steal lock when owner batch older than this |
 | `CONVERSATION_ARCHIVE_ENABLED` | `false` | Master kill switch |
 | `CONVERSATION_ARCHIVE_BATCH_SIZE` | `500` | Max conversations enqueued per hourly dispatcher run |
 | `CONVERSATION_ARCHIVE_CELERY_QUEUE` | `conversations-archive` | Dedicated Celery queue name |

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pendulum
 import pytest
 
@@ -392,3 +394,105 @@ class TestImprovementsStateIngestService:
         assert result["ingested"] is True
         assert backlog_item.custom_monitor_id == monitor.uuid
         assert backlog_item.item_type == "custom"
+
+    @patch("improvements.services.improvements_state_ingest_service.sentry_sdk.capture_exception")
+    def test_ingest_skips_invalid_conversation_uuid_in_summaries(self, mock_capture_exception, run, conversation):
+        invalid_uuid = "a3aef...?"
+        state_data = {
+            "classifications": [
+                {
+                    "conversation_uuid": str(conversation.uuid),
+                    "classification": {
+                        "problem_type": "wrong_behavior_due_to_instructions",
+                        "problem_exists": True,
+                        "confidence": 0.86,
+                        "message_uuids_relevant": ["msg-1"],
+                        "improvement_analysis": {"target": "manager_instruction", "details": {}},
+                    },
+                }
+            ],
+            "classification_errors": [],
+            "summaries_by_class": {
+                "wrong_behavior_due_to_instructions": {
+                    "general_summary": "Instruction issues.",
+                    "general_solution": "Review instructions.",
+                    "subproblems": [
+                        {
+                            "title": "Retirada, token de coleta e status de pagamento",
+                            "description": "Inconsistências sobre retirada.",
+                            "target": "manager_instruction",
+                            "suggested_change": "Harmonizar regras de retirada.",
+                            "details": {},
+                            "conversation_uuids": [str(conversation.uuid), invalid_uuid],
+                        }
+                    ],
+                    "conversation_uuids": [str(conversation.uuid), invalid_uuid],
+                },
+            },
+            "batch_status_map": {},
+        }
+
+        result = ingest_improvements_state_data(run, state_data)
+
+        assert result["ingested"] is True
+        assert result["backlog_items"] == 1
+        backlog_item = ImprovementBacklogItem.objects.get(run=run)
+        assert backlog_item.affected_conversations.count() == 1
+        assert backlog_item.affected_conversations.first().conversation_id == conversation.uuid
+        assert backlog_item.affected_conversations_count == 1
+        mock_capture_exception.assert_called()
+        captured = mock_capture_exception.call_args.args[0]
+        assert isinstance(captured, ValueError)
+        assert invalid_uuid in str(captured)
+
+    @patch("improvements.services.improvements_state_ingest_service.sentry_sdk.capture_exception")
+    def test_ingest_skips_invalid_conversation_uuid_in_classifications(
+        self,
+        mock_capture_exception,
+        run,
+        conversation,
+    ):
+        invalid_uuid = "a3aef...?"
+        state_data = {
+            "classifications": [
+                {
+                    "conversation_uuid": invalid_uuid,
+                    "classification": {
+                        "problem_type": "wrong_behavior_due_to_instructions",
+                        "problem_exists": True,
+                        "confidence": 0.5,
+                        "improvement_analysis": {"target": "manager_instruction", "details": {}},
+                    },
+                },
+                {
+                    "conversation_uuid": str(conversation.uuid),
+                    "classification": {
+                        "problem_type": "missing_static_knowledge",
+                        "problem_exists": True,
+                        "confidence": 0.7,
+                        "improvement_analysis": {"target": "knowledge_base", "details": {}},
+                    },
+                },
+            ],
+            "classification_errors": [],
+            "summaries_by_class": {
+                "missing_static_knowledge": {
+                    "general_summary": "Missing return policy in KB.",
+                    "general_solution": "Add return policy content.",
+                    "subproblems": [],
+                    "conversation_uuids": [str(conversation.uuid)],
+                },
+            },
+            "batch_status_map": {},
+        }
+
+        result = ingest_improvements_state_data(run, state_data)
+
+        assert result["ingested"] is True
+        assert result["backlog_items"] == 1
+        assert ImprovementRunConversation.objects.filter(run=run).count() == 1
+        assert ImprovementRunConversation.objects.get(run=run).conversation_id == conversation.uuid
+        mock_capture_exception.assert_called()
+        captured = mock_capture_exception.call_args.args[0]
+        assert isinstance(captured, ValueError)
+        assert invalid_uuid in str(captured)

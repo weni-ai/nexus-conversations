@@ -36,6 +36,7 @@ class NexusClient:
         params: dict[str, str] | None = None,
         log_prefix: str,
         context: dict[str, Any],
+        **kwargs: Any,
     ) -> requests.Response:
         self._require_base_url()
         url = f"{self.base_url}{path}"
@@ -46,6 +47,7 @@ class NexusClient:
                 url,
                 params=params,
                 timeout=self.timeout,
+                **kwargs,
             )
         except requests.RequestException as exc:
             sentry_sdk.capture_exception(exc)
@@ -69,6 +71,35 @@ class NexusClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def _post_json(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any],
+        log_prefix: str,
+        context: dict[str, Any],
+    ) -> Any:
+        response = self._request(
+            "POST",
+            path,
+            log_prefix=log_prefix,
+            context=context,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def open_support_ticket(self, project_uuid: str, payload: dict[str, Any]) -> Any:
+        """
+        POST {NEXUS_API_BASE_URL}/api/{project_uuid}/improvements/open-support-ticket/
+        """
+        return self._post_json(
+            f"/api/{project_uuid}/improvements/open-support-ticket/",
+            payload=payload,
+            log_prefix="NexusClient.open_support_ticket",
+            context={"project_uuid": project_uuid},
+        )
 
     def get_project_customization(self, project_uuid: str) -> dict[str, Any]:
         """

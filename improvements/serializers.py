@@ -186,3 +186,18 @@ class CustomAnalysisUpdateSerializer(serializers.Serializer):
         if definition is not None and not str(definition).strip():
             raise serializers.ValidationError({"definition": "Complete this field"})
         return attrs
+
+
+class OpenSupportTicketRequestSerializer(serializers.Serializer):
+    improvement_uuid = serializers.UUIDField()
+    project_name = serializers.CharField()
+    email = serializers.EmailField()
+
+
+class OpenSupportTicketResponseSerializer(serializers.Serializer):
+    """Pass-through response from the Nexus open-support-ticket endpoint."""
+
+    def to_representation(self, instance):
+        if isinstance(instance, dict):
+            return instance
+        return super().to_representation(instance)

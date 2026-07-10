@@ -1,5 +1,6 @@
 import logging
 
+import requests
 from django.conf import settings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
@@ -21,6 +22,8 @@ from improvements.serializers import (
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
     ImprovementsListResponseSerializer,
+    OpenSupportTicketRequestSerializer,
+    OpenSupportTicketResponseSerializer,
 )
 from improvements.services.analysis_run_service import AnalysisRunAlreadyExistsError, create_analysis_run
 from improvements.services.conversation_count_service import (
@@ -47,6 +50,7 @@ from improvements.services.improvements_redbeat_service import (
     get_run_metadata,
     improvements_run_key,
 )
+from improvements.services.open_support_ticket_service import open_support_ticket_for_improvement
 from improvements.tasks import cancel_improvements_batches, start_conversations_improvements
 
 logger = logging.getLogger(__name__)
@@ -524,3 +528,67 @@ class ProjectCustomAnalysisDetail(APIView):
             raise NotFound(detail="Custom analysis not found") from None
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    summary="Open a support ticket for an improvement backlog item",
+    description=(
+        "Builds a payload from the improvement backlog item and up to 10 affected conversations, "
+        "then forwards the request to the Nexus open-support-ticket endpoint."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Project UUID",
+        ),
+    ],
+    request=OpenSupportTicketRequestSerializer,
+    responses={200: OpenSupportTicketResponseSerializer},
+    auth=BEARER_JWT_AUTH,
+)
+class ImprovementsOpenSupportTicket(APIView):
+    authentication_classes = []
+    permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
+
+    def post(self, request, project_uuid):
+        if not Project.objects.filter(uuid=project_uuid).exists():
+            raise NotFound(detail="Project not found")
+
+        ser = OpenSupportTicketRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        improvement_uuid = ser.validated_data["improvement_uuid"]
+        user_email = ser.validated_data["email"]
+
+        try:
+            nexus_response = open_support_ticket_for_improvement(
+                project_uuid,
+                improvement_uuid,
+                user_email=user_email,
+            )
+        except ImprovementDetailNotFound:
+            raise NotFound(detail="Improvement not found") from None
+        except ValueError as exc:
+            logger.error(
+                "[ImprovementsOpenSupportTicket] Configuration error project_uuid=%s: %s",
+                project_uuid,
+                exc,
+            )
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except requests.HTTPError:
+            logger.exception(
+                "[ImprovementsOpenSupportTicket] Nexus request failed project_uuid=%s improvement_uuid=%s",
+                project_uuid,
+                improvement_uuid,
+            )
+            return Response(
+                {"detail": "Support ticket couldn't be opened due to a technical issue"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(nexus_response, status=status.HTTP_200_OK)

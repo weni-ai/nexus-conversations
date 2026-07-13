@@ -26,7 +26,7 @@ def _client_with_mock_auth(mock_response):
 class TestNexusClient:
     def test_get_project_customization(self):
         project_uuid = "017cd5df-cfc8-4d5c-b659-347fe7a4bee9"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         expected = {
             "agent": {"name": "Taina"},
             "instructions": [],
@@ -38,14 +38,14 @@ class TestNexusClient:
         assert result == expected
         mock_auth.make_request_with_retry.assert_called_once_with(
             "GET",
-            f"https://nexus.stg.cloud.weni.ai/api/{project_uuid}/customization/",
+            f"https://nexus.example.com/api/{project_uuid}/customization/",
             params=None,
             timeout=30,
         )
 
     def test_get_collaborative_agents(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         expected = [
             {
                 "name": "Broadcast Example Agent",
@@ -61,7 +61,7 @@ class TestNexusClient:
         assert result == expected
         mock_auth.make_request_with_retry.assert_called_once_with(
             "GET",
-            f"https://nexus.stg.cloud.weni.ai/api/project/{project_uuid}/active-agents/config",
+            f"https://nexus.example.com/api/project/{project_uuid}/active-agents/config",
             params=None,
             timeout=30,
         )
@@ -69,7 +69,7 @@ class TestNexusClient:
     def test_get_agent_traces(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
         log_id = "f9688af3-2001-41d1-b52d-be0c50ad6bd7"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         expected = [{"trace": {"config": {"type": "executing_tool"}, "trace": {}}}]
         client, mock_auth = _client_with_mock_auth(_mock_response(json_payload=expected))
 
@@ -78,13 +78,13 @@ class TestNexusClient:
         assert result == expected
         mock_auth.make_request_with_retry.assert_called_once_with(
             "GET",
-            "https://nexus.stg.cloud.weni.ai/api/agents/traces/",
+            "https://nexus.example.com/api/agents/traces/",
             params={"project_uuid": project_uuid, "log_id": log_id},
             timeout=30,
         )
 
     def test_get_agent_traces_returns_empty_list_on_404(self):
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         client, _mock_auth = _client_with_mock_auth(_mock_response(status_code=404))
 
         result = client.get_agent_traces(
@@ -95,7 +95,7 @@ class TestNexusClient:
         assert result == []
 
     def test_get_agent_traces_wraps_dict_payload(self):
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         client, _mock_auth = _client_with_mock_auth(
             _mock_response(json_payload={"config": {"type": "executing_tool"}, "trace": {}})
         )
@@ -113,7 +113,7 @@ class TestNexusClient:
 
     def test_get_knowledge_base_chunks_single_page(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 0
         api_payload = {
             "count": 1,
@@ -143,14 +143,14 @@ class TestNexusClient:
         ]
         mock_auth.make_request_with_retry.assert_called_once_with(
             "GET",
-            f"https://nexus.stg.cloud.weni.ai/api/{project_uuid}/knowledge-base/chunks",
+            f"https://nexus.example.com/api/{project_uuid}/knowledge-base/chunks",
             params=None,
             timeout=30,
         )
 
     def test_get_knowledge_base_chunks_paginates_with_cursor(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 0
         first_page = {
             "count": 2,
@@ -183,7 +183,7 @@ class TestNexusClient:
 
     def test_get_knowledge_base_chunks_truncates_at_max_chunks(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         settings.IMPROVEMENTS_KNOWLEDGE_BASE_MAX_CHUNKS = 1
         api_payload = {
             "count": 3,
@@ -202,7 +202,7 @@ class TestNexusClient:
 
     def test_get_knowledge_base_chunks_returns_empty_list_on_404(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         client, _mock_auth = _client_with_mock_auth(_mock_response(status_code=404))
 
         result = client.get_knowledge_base_chunks(project_uuid)
@@ -211,7 +211,7 @@ class TestNexusClient:
 
     def test_open_support_ticket(self):
         project_uuid = "017cd5df-cfc8-4d5c-b659-347fe7a4bee9"
-        settings.NEXUS_API_BASE_URL = "https://nexus.stg.cloud.weni.ai"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
         payload = {
             "improvement_item": {"uuid": "item-uuid", "text": "Title"},
             "affected_conversations": [],
@@ -226,7 +226,7 @@ class TestNexusClient:
         assert result == expected
         mock_auth.make_request_with_retry.assert_called_once_with(
             "POST",
-            f"https://nexus.stg.cloud.weni.ai/api/{project_uuid}/improvements/open-support-ticket/",
+            f"https://nexus.example.com/api/{project_uuid}/improvements/open-support-ticket/",
             params=None,
             timeout=30,
             json=payload,

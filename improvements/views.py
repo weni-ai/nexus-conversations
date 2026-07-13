@@ -553,10 +553,8 @@ class ImprovementsOpenSupportTicket(APIView):
     permission_classes = IMPROVEMENTS_PERMISSION_CLASSES
 
     def post(self, request, project_uuid):
-        try:
-            Project.objects.get(uuid=project_uuid)
-        except Project.DoesNotExist:
-            raise NotFound(detail="Project not found") from None
+        if not Project.objects.filter(uuid=project_uuid).exists():
+            raise NotFound(detail="Project not found")
 
         ser = OpenSupportTicketRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)

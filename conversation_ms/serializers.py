@@ -413,7 +413,6 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
         from conversation_ms.services.reconcile_cohort_export import (
             max_reconcile_calendar_days,
             parse_api_utc,
-            validate_reconcile_date_range,
             validate_reconcile_window_seconds,
         )
         from conversation_ms.services.reconcile_window import calendar_range_day_count, parse_requested_calendar_range
@@ -450,11 +449,6 @@ class ReconcileCohortExportQuerySerializer(serializers.Serializer):
 
             try:
                 validate_reconcile_window_seconds(start_bound, end_bound)
-            except ValueError as e:
-                raise serializers.ValidationError({"date_end": str(e)}) from e
-
-            try:
-                validate_reconcile_date_range(start_bound, end_bound, max_days)
             except ValueError as e:
                 raise serializers.ValidationError({"date_end": str(e)}) from e
 

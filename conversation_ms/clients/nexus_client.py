@@ -36,12 +36,25 @@ class NexusClient:
         params: dict[str, str] | None = None,
         log_prefix: str,
         context: dict[str, Any],
+        authorization: str | None = None,
         **kwargs: Any,
     ) -> requests.Response:
         self._require_base_url()
         url = f"{self.base_url}{path}"
 
         try:
+            if authorization is not None:
+                headers = dict(kwargs.pop("headers", {}) or {})
+                headers["Authorization"] = authorization
+                headers.setdefault("Content-Type", "application/json; charset: utf-8")
+                return requests.request(
+                    method,
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.timeout,
+                    **kwargs,
+                )
             return self.auth.make_request_with_retry(
                 method,
                 url,
@@ -79,26 +92,41 @@ class NexusClient:
         payload: dict[str, Any],
         log_prefix: str,
         context: dict[str, Any],
+        authorization: str | None = None,
     ) -> Any:
         response = self._request(
             "POST",
             path,
             log_prefix=log_prefix,
             context=context,
+            authorization=authorization,
             json=payload,
         )
         response.raise_for_status()
         return response.json()
 
-    def open_support_ticket(self, project_uuid: str, payload: dict[str, Any]) -> Any:
+    def open_support_ticket(
+        self,
+        project_uuid: str,
+        payload: dict[str, Any],
+        *,
+        authorization: str,
+    ) -> Any:
         """
         POST {NEXUS_API_BASE_URL}/api/{project_uuid}/improvements/open-support-ticket/
+
+        Forwards the caller ``Authorization`` header to Nexus. Does not use the internal
+        Keycloak module token.
         """
+        if not str(authorization or "").strip():
+            raise ValueError("Authorization header is required")
+
         return self._post_json(
             f"/api/{project_uuid}/improvements/open-support-ticket/",
             payload=payload,
             log_prefix="NexusClient.open_support_ticket",
             context={"project_uuid": project_uuid},
+            authorization=authorization,
         )
 
     def get_project_customization(self, project_uuid: str) -> dict[str, Any]:

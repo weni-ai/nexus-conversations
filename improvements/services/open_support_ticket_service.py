@@ -45,8 +45,6 @@ def _map_support_ticket_conversation(link: ImprovementBacklogItemConversation) -
 def build_open_support_ticket_payload(
     project_uuid: UUID | str,
     improvement_uuid: UUID | str,
-    *,
-    user_email: str,
 ) -> dict[str, Any]:
     detail = get_improvement_detail(project_uuid, improvement_uuid)
     item = get_backlog_item(project_uuid, improvement_uuid)
@@ -61,7 +59,6 @@ def build_open_support_ticket_payload(
         "improvement_item": improvement_item,
         "affected_conversations": [_map_support_ticket_conversation(link) for link in links],
         "project_uuid": str(project_uuid),
-        "user_email": user_email,
     }
 
 
@@ -69,13 +66,16 @@ def open_support_ticket_for_improvement(
     project_uuid: UUID | str,
     improvement_uuid: UUID | str,
     *,
-    user_email: str,
+    authorization: str,
     nexus_client: NexusClient | None = None,
 ) -> Any:
     payload = build_open_support_ticket_payload(
         project_uuid,
         improvement_uuid,
-        user_email=user_email,
     )
     client = nexus_client or NexusClient()
-    return client.open_support_ticket(str(project_uuid), payload)
+    return client.open_support_ticket(
+        str(project_uuid),
+        payload,
+        authorization=authorization,
+    )

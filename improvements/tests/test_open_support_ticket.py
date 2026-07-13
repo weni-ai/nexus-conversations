@@ -107,11 +107,10 @@ class TestOpenSupportTicketService:
         payload = build_open_support_ticket_payload(
             project.uuid,
             item.uuid,
-            user_email="agent@example.com",
         )
 
         assert payload["project_uuid"] == str(project.uuid)
-        assert payload["user_email"] == "agent@example.com"
+        assert "user_email" not in payload
         assert payload["improvement_item"] == {
             "uuid": str(item.uuid),
             "text": "Cancellation denied",
@@ -150,7 +149,6 @@ class TestOpenSupportTicketService:
         payload = build_open_support_ticket_payload(
             project.uuid,
             item.uuid,
-            user_email="agent@example.com",
         )
 
         assert len(payload["affected_conversations"]) == MAX_AFFECTED_CONVERSATIONS_FOR_SUPPORT_TICKET
@@ -178,15 +176,43 @@ class TestOpenSupportTicketService:
         result = open_support_ticket_for_improvement(
             project.uuid,
             item.uuid,
-            user_email="agent@example.com",
+            authorization="Bearer user-jwt-token",
         )
 
         assert result == {"ticket_id": "abc-123"}
         mock_client.open_support_ticket.assert_called_once()
         call_args = mock_client.open_support_ticket.call_args
         assert call_args.args[0] == str(project.uuid)
-        assert call_args.args[1]["user_email"] == "agent@example.com"
+        assert "user_email" not in call_args.args[1]
         assert call_args.args[1]["improvement_item"]["uuid"] == str(item.uuid)
+        assert call_args.kwargs.get("authorization") == "Bearer user-jwt-token"
+
+    @patch("improvements.services.open_support_ticket_service.NexusClient")
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_open_support_ticket_forwards_authorization(
+        self,
+        mock_customization,
+        mock_nexus_client_class,
+        project,
+    ):
+        run = _create_run(project)
+        item = _create_backlog_item(run)
+        mock_customization.return_value = {"instructions": []}
+        mock_client = Mock()
+        mock_client.open_support_ticket.return_value = {"ticket_id": "abc-123"}
+        mock_nexus_client_class.return_value = mock_client
+
+        open_support_ticket_for_improvement(
+            project.uuid,
+            item.uuid,
+            authorization="Bearer user-jwt-token",
+        )
+
+        mock_client.open_support_ticket.assert_called_once_with(
+            str(project.uuid),
+            mock_client.open_support_ticket.call_args.args[1],
+            authorization="Bearer user-jwt-token",
+        )
 
 
 @pytest.mark.django_db
@@ -209,7 +235,6 @@ class TestImprovementsOpenSupportTicketView:
         return {
             "improvement_uuid": str(improvement_uuid),
             "project_name": project.name,
-            "email": "agent@example.com",
         }
 
     def test_requires_project_authorization(self, api_client, project):
@@ -231,7 +256,6 @@ class TestImprovementsOpenSupportTicketView:
             {
                 "improvement_uuid": str(uuid4()),
                 "project_name": "Missing",
-                "email": "agent@example.com",
             },
             format="json",
             **auth_headers,
@@ -267,7 +291,7 @@ class TestImprovementsOpenSupportTicketView:
         mock_open_support_ticket.assert_called_once_with(
             project.uuid,
             item.uuid,
-            user_email="agent@example.com",
+            authorization="Bearer test-jwt-token",
         )
 
     @patch("improvements.views.open_support_ticket_for_improvement")

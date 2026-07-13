@@ -191,7 +191,6 @@ class CustomAnalysisUpdateSerializer(serializers.Serializer):
 class OpenSupportTicketRequestSerializer(serializers.Serializer):
     improvement_uuid = serializers.UUIDField()
     project_name = serializers.CharField()
-    email = serializers.EmailField()
 
 
 class OpenSupportTicketResponseSerializer(serializers.Serializer):

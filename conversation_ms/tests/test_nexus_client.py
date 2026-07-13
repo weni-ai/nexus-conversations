@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import requests
@@ -216,18 +216,41 @@ class TestNexusClient:
             "improvement_item": {"uuid": "item-uuid", "text": "Title"},
             "affected_conversations": [],
             "project_uuid": project_uuid,
-            "user_email": "user@example.com",
         }
         expected = {"ticket_id": "support-ticket-123"}
-        client, mock_auth = _client_with_mock_auth(_mock_response(json_payload=expected))
+        client = NexusClient(auth=Mock())
 
-        result = client.open_support_ticket(project_uuid, payload)
+        with patch("conversation_ms.clients.nexus_client.requests.request") as mock_request:
+            mock_request.return_value = _mock_response(json_payload=expected)
+            result = client.open_support_ticket(
+                project_uuid,
+                payload,
+                authorization="Bearer user-jwt-token",
+            )
 
         assert result == expected
-        mock_auth.make_request_with_retry.assert_called_once_with(
+        mock_request.assert_called_once_with(
             "POST",
             f"https://nexus.example.com/api/{project_uuid}/improvements/open-support-ticket/",
             params=None,
+            headers={
+                "Authorization": "Bearer user-jwt-token",
+                "Content-Type": "application/json; charset: utf-8",
+            },
             timeout=30,
             json=payload,
         )
+        client.auth.make_request_with_retry.assert_not_called()
+
+    def test_open_support_ticket_requires_authorization(self):
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
+        client = NexusClient(auth=Mock())
+
+        with pytest.raises(ValueError, match="Authorization header is required"):
+            client.open_support_ticket(
+                "017cd5df-cfc8-4d5c-b659-347fe7a4bee9",
+                {"improvement_item": {}},
+                authorization="",
+            )
+
+        client.auth.make_request_with_retry.assert_not_called()

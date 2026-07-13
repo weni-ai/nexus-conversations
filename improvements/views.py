@@ -560,13 +560,15 @@ class ImprovementsOpenSupportTicket(APIView):
         ser.is_valid(raise_exception=True)
 
         improvement_uuid = ser.validated_data["improvement_uuid"]
-        user_email = ser.validated_data["email"]
+        authorization = request.headers.get("Authorization")
+        if not authorization:
+            raise ValidationError({"detail": "Authorization header is required"})
 
         try:
             nexus_response = open_support_ticket_for_improvement(
                 project_uuid,
                 improvement_uuid,
-                user_email=user_email,
+                authorization=authorization,
             )
         except ImprovementDetailNotFound:
             raise NotFound(detail="Improvement not found") from None

@@ -621,6 +621,7 @@ def create_external_billing_ticket_task(self, auth_token: str, urn: str, created
     bind=True,
     max_retries=2,
     default_retry_delay=300,
+    queue=getattr(settings, "CONVERSATION_ARCHIVE_CELERY_QUEUE", "conversations-archive"),
 )
 def archive_dispatcher_task(self):
     """Hourly dispatcher: select eligible conversations and enqueue archive workers."""

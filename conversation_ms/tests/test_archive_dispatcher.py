@@ -29,6 +29,7 @@ def archive_settings():
         CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS=120,
         CONVERSATION_ARCHIVE_LOCK_HEARTBEAT_EVERY=2,
         CONVERSATION_ARCHIVE_LOCK_STALE_SECONDS=1800,
+        CONVERSATION_ARCHIVE_STALE_RECORD_SECONDS=3600,
         CONVERSATION_RETENTION_DAYS=90,
     )
 
@@ -134,6 +135,61 @@ class TestArchiveDispatcher:
 
             assert result["status"] == "dispatched"
             assert result["enqueued_count"] == 1
+            owner.refresh_from_db()
+            assert owner.finished_at is not None
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_steals_opaque_lock_when_no_open_batch(self, mock_cache, archive_settings):
+        with archive_settings:
+            project = ProjectFactory(timezone="UTC")
+            _eligible_conversation(project)
+
+            mock_cache.add.side_effect = [False, True]
+            mock_cache.get.return_value = "1"
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["status"] == "dispatched"
+            assert result["enqueued_count"] == 1
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_steals_opaque_lock_when_open_batch_stale(self, mock_cache, archive_settings):
+        with archive_settings:
+            zombie = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(hours=2),
+                dry_run=True,
+            )
+            project = ProjectFactory(timezone="UTC")
+            _eligible_conversation(project)
+
+            mock_cache.add.side_effect = [False, True]
+            mock_cache.get.return_value = "1"
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["status"] == "dispatched"
+            zombie.refresh_from_db()
+            assert zombie.finished_at is not None
+
+    @patch("conversation_ms.archive.dispatcher.sentry_sdk")
+    @patch("conversation_ms.cache_access.cache")
+    def test_keeps_opaque_lock_when_open_batch_recent(self, mock_cache, mock_sentry, archive_settings):
+        with archive_settings:
+            ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(minutes=5),
+                dry_run=True,
+            )
+            mock_cache.add.return_value = False
+            mock_cache.get.return_value = "1"
+
+            result = dispatch_archive_conversations(enqueue_task=Mock())
+
+            assert result["status"] == "skipped"
+            assert result["reason"] == "dispatcher_locked"
 
     @patch("conversation_ms.cache_access.cache")
     def test_enqueues_with_expires_and_creates_pending_records(self, mock_cache, archive_settings):
@@ -179,7 +235,6 @@ class TestArchiveDispatcher:
             result = dispatch_archive_conversations(enqueue_task=enqueue_task)
 
             assert result["enqueued_count"] == 5
-            # Initial set after batch create + heartbeats every 2 enqueues (2, 4) = at least 3 sets
             assert mock_cache.set.call_count >= 3
 
     @patch("conversation_ms.cache_access.cache")
@@ -232,3 +287,68 @@ class TestArchiveDispatcher:
                 queue="conversations-archive",
                 expires=enqueue_task.apply_async.call_args.kwargs["expires"],
             )
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_reclaims_stale_pending_and_reenqueues(self, mock_cache, archive_settings):
+        with archive_settings, override_settings(CONVERSATION_ARCHIVE_STALE_RECORD_SECONDS=60):
+            mock_cache.add.return_value = True
+            project = ProjectFactory(timezone="UTC")
+            conversation = _eligible_conversation(project)
+            old_batch = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(hours=2),
+                finished_at=timezone.now() - timedelta(hours=2),
+                enqueued_count=1,
+                dry_run=True,
+            )
+            stale = ConversationArchiveRecord.objects.create(
+                conversation_uuid=conversation.uuid,
+                project_uuid=project.uuid,
+                batch=old_batch,
+                status=ArchiveRecordStatus.PENDING,
+                started_at=timezone.now() - timedelta(hours=2),
+            )
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["enqueued_count"] == 1
+            stale.refresh_from_db()
+            assert stale.status == ArchiveRecordStatus.FAILED
+            assert stale.errors["reason"] == "stale_in_flight"
+            enqueue_task.apply_async.assert_called_once_with(
+                args=[str(stale.id)],
+                queue="conversations-archive",
+                expires=enqueue_task.apply_async.call_args.kwargs["expires"],
+            )
+
+    @patch("conversation_ms.cache_access.cache")
+    def test_closes_zombie_unfinished_batches(self, mock_cache, archive_settings):
+        with archive_settings:
+            mock_cache.add.return_value = True
+            zombie = ConversationArchiveBatch.objects.create(
+                started_at=timezone.now() - timedelta(hours=2),
+                dry_run=True,
+            )
+            ConversationArchiveRecord.objects.create(
+                conversation_uuid=uuid4(),
+                project_uuid=uuid4(),
+                batch=zombie,
+                status=ArchiveRecordStatus.ARCHIVED,
+                started_at=timezone.now() - timedelta(hours=2),
+                archived_at=timezone.now() - timedelta(hours=2),
+                finished_at=timezone.now() - timedelta(hours=2),
+                s3_key="conversations-archive/p/2026/01/u.json.gz",
+                content_sha256="a" * 64,
+            )
+            project = ProjectFactory(timezone="UTC")
+            _eligible_conversation(project)
+
+            enqueue_task = Mock()
+            enqueue_task.apply_async = Mock(return_value=Mock(id="task-1"))
+            result = dispatch_archive_conversations(enqueue_task=enqueue_task)
+
+            assert result["status"] == "dispatched"
+            zombie.refresh_from_db()
+            assert zombie.finished_at is not None
+            assert zombie.enqueued_count == 1

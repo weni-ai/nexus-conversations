@@ -76,7 +76,7 @@ Field alignment: matches `SupervisorPublicConversationItemSerializer` in nexus-a
 
 **Behavior**:
 1. Acquire lock; create `ConversationArchiveBatch`
-2. Select eligible conversations (timezone-aware); skip UUIDs with active/terminal records (except FAILED retry)
+2. Reclaim stale PENDING/IN_PROGRESS → FAILED; retry FAILED by re-enqueueing the same record; select eligible conversations (timezone-aware); skip UUIDs that already have any archive record (`conversation_uuid` is unique)
 3. Create `ConversationArchiveRecord` (PENDING) per UUID
 4. Enqueue `archive_conversation_task` with **`expires`** = now + `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS`
 
@@ -114,6 +114,7 @@ Field alignment: matches `SupervisorPublicConversationItemSerializer` in nexus-a
 | `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `120` | B |
 | `CONVERSATION_ARCHIVE_LOCK_HEARTBEAT_EVERY` | `100` | B |
 | `CONVERSATION_ARCHIVE_LOCK_STALE_SECONDS` | `1800` | B |
+| `CONVERSATION_ARCHIVE_STALE_RECORD_SECONDS` | `3600` | B |
 | `CONVERSATION_ARCHIVE_BATCH_SIZE` | `500` | B |
 | `CONVERSATION_ARCHIVE_CELERY_QUEUE` | `conversations-archive` | B |
 | `CONVERSATION_ARCHIVE_TASK_EXPIRES_SECONDS` | `3600` | B |

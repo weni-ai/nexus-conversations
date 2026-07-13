@@ -764,6 +764,7 @@ def drain_close_pipeline_task():
     bind=True,
     max_retries=2,
     default_retry_delay=300,
+    queue=getattr(settings, "CONVERSATION_ARCHIVE_CELERY_QUEUE", "conversations-archive"),
 )
 def archive_dispatcher_task(self):
     """Hourly dispatcher: select eligible conversations and enqueue archive workers."""

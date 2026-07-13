@@ -75,6 +75,16 @@ class TestArchiveRecordStateMachine:
         assert record.deleted_at is not None
         assert record.finished_at is not None
 
+    def test_pending_can_fail_when_reclaimed(self, archive_batch):
+        record = _pending_record(archive_batch)
+        ArchiveRecordStateMachine.transition_to_failed(
+            record,
+            errors={"message": "expired", "reason": "stale_in_flight"},
+        )
+        record.refresh_from_db()
+        assert record.status == ArchiveRecordStatus.FAILED
+        assert record.finished_at is not None
+
     def test_failure_and_retry(self, archive_batch):
         record = _pending_record(archive_batch)
         ArchiveRecordStateMachine.transition_to_in_progress(record)
@@ -161,9 +171,9 @@ class TestArchiveStatusConstants:
                 ArchiveRecordStatus.IN_PROGRESS,
                 ArchiveRecordStatus.ARCHIVED,
                 ArchiveRecordStatus.DELETED,
+                ArchiveRecordStatus.FAILED,
             }
         )
-        assert ArchiveRecordStatus.FAILED not in DISPATCHER_SKIP_STATUSES
 
     def test_finished_at_required_excludes_archived(self):
         assert ArchiveRecordStatus.ARCHIVED not in FINISHED_AT_REQUIRED_STATUSES

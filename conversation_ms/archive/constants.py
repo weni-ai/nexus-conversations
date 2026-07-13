@@ -21,13 +21,13 @@ IN_FLIGHT_ARCHIVE_STATUSES = frozenset(
     }
 )
 
-# Dispatcher must not create a new record / enqueue when status is in this set.
 DISPATCHER_SKIP_STATUSES = frozenset(
     {
         ArchiveRecordStatus.PENDING,
         ArchiveRecordStatus.IN_PROGRESS,
         ArchiveRecordStatus.ARCHIVED,
         ArchiveRecordStatus.DELETED,
+        ArchiveRecordStatus.FAILED,
     }
 )
 

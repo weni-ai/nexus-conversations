@@ -191,6 +191,7 @@ Sentry: capture upload/delete exceptions with tags `project_uuid`, `conversation
 | `CONVERSATION_ARCHIVE_LOCK_TTL_SECONDS` | `120` | Lock TTL (heartbeat renews while dispatcher runs) |
 | `CONVERSATION_ARCHIVE_LOCK_HEARTBEAT_EVERY` | `100` | Renew lock every N enqueues |
 | `CONVERSATION_ARCHIVE_LOCK_STALE_SECONDS` | `1800` | Steal lock when owner batch older than this |
+| `CONVERSATION_ARCHIVE_STALE_RECORD_SECONDS` | `3600` | Reclaim PENDING/IN_PROGRESS older than this as FAILED |
 | `CONVERSATION_ARCHIVE_ENABLED` | `false` | Master kill switch |
 | `CONVERSATION_ARCHIVE_BATCH_SIZE` | `500` | Max conversations enqueued per hourly dispatcher run |
 | `CONVERSATION_ARCHIVE_CELERY_QUEUE` | `conversations-archive` | Dedicated Celery queue name |
@@ -253,7 +254,7 @@ Add to `nexus_conversations/environment.py` and `settings.py`.
 - UNIQUE(`conversation_uuid`) — one archive record per conversation
 - Conditional NOT NULL: `s3_key` required when status ≥ ARCHIVED
 - `errors` JSON stores `{ "message": "...", "sentry_event_id": "..." }` on FAILED
-- Dispatcher skips UUIDs with record in non-retryable terminal/active states
+- Dispatcher skips UUIDs that already have any archive record (unique `conversation_uuid`); FAILED is re-enqueued on the same row, never re-inserted
 
 **Reference**: Livedesk Miro `roomarchivedconversation` + status sticky note.
 

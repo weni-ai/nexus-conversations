@@ -3,7 +3,8 @@ from uuid import uuid4
 
 import pendulum
 from django.core.cache import cache
-from django.db.models import Count
+from django.db.models import BooleanField, Count, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
@@ -34,6 +35,7 @@ from conversation_ms.serializers import (
 from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.tasks import create_external_billing_ticket_task
+from improvements.models import ImprovementRunConversation
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,22 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
 
         queryset = Conversation.objects.filter(project__uuid=project_uuid).select_related(
             "classification", "classification__topic", "classification__subtopic"
+        )
+
+        latest_is_amazing = (
+            ImprovementRunConversation.objects.filter(
+                conversation_id=OuterRef("pk"),
+                run__project_id=OuterRef("project_id"),
+            )
+            .order_by("-run__started_at")
+            .values("is_amazing_conversation")[:1]
+        )
+        queryset = queryset.annotate(
+            is_amazing=Coalesce(
+                Subquery(latest_is_amazing, output_field=BooleanField()),
+                Value(False),
+                output_field=BooleanField(),
+            )
         )
 
         if self.action == "retrieve":

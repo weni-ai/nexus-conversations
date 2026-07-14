@@ -123,6 +123,10 @@ def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
     return None
 
 
+def _conversation_is_amazing(conversation: Conversation) -> bool:
+    return bool(getattr(conversation, "is_amazing", False))
+
+
 class ConversationMessagesSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConversationMessages
@@ -277,6 +281,7 @@ class ConversationListSerializer(ConversationSerializer):
     """
 
     topic = serializers.SerializerMethodField()
+    is_amazing = serializers.SerializerMethodField()
 
     class Meta(ConversationSerializer.Meta):
         fields = [
@@ -292,12 +297,16 @@ class ConversationListSerializer(ConversationSerializer):
             "csat",
             "nps",
             "topic",
+            "is_amazing",
             "messages",
             "created_at",
         ]
 
     def get_topic(self, obj):
         return _conversation_topic_name(obj)
+
+    def get_is_amazing(self, obj):
+        return _conversation_is_amazing(obj)
 
 
 class ConversationListCursorResponseSerializer(serializers.Serializer):
@@ -322,6 +331,7 @@ class ConversationDetailSerializer(ConversationSerializer):
     conversation_uuid = serializers.UUIDField(source="uuid", read_only=True)
     ended_at = serializers.DateTimeField(source="end_date", read_only=True)
     topic = serializers.SerializerMethodField()
+    is_amazing = serializers.SerializerMethodField()
 
     class Meta(ConversationSerializer.Meta):
         fields = [
@@ -332,11 +342,15 @@ class ConversationDetailSerializer(ConversationSerializer):
             "topic",
             "channel_uuid",
             "contact_urn",
+            "is_amazing",
             "messages",
         ]
 
     def get_topic(self, obj):
         return _conversation_topic_name(obj)
+
+    def get_is_amazing(self, obj):
+        return _conversation_is_amazing(obj)
 
 
 class TopicsSerializer(serializers.ModelSerializer):

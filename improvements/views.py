@@ -43,7 +43,10 @@ from improvements.services.improvements_detail_service import (
     ImprovementDetailNotFound,
     get_improvement_detail,
 )
-from improvements.services.improvements_list_service import list_project_improvements
+from improvements.services.improvements_list_service import (
+    IDLE_IMPROVEMENTS_TASK,
+    list_project_improvements,
+)
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
     RunMetadataNotFound,
@@ -273,7 +276,15 @@ class ProjectImprovementsList(APIView):
         try:
             project = Project.objects.get(uuid=project_uuid)
         except Project.DoesNotExist:
-            raise NotFound(detail="Project not found") from None
+            payload = {
+                "yesterday_conversations_count": 0,
+                "improvements_task": dict(IDLE_IMPROVEMENTS_TASK),
+                "improvements": [],
+            }
+            return Response(
+                ImprovementsListResponseSerializer(payload).data,
+                status=status.HTTP_200_OK,
+            )
 
         payload = list_project_improvements(project)
         return Response(

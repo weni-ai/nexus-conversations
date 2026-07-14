@@ -224,10 +224,11 @@ class TestProjectImprovementsListView:
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_returns_404_for_missing_project(self, api_client, auth_headers):
+    def test_returns_empty_list_for_missing_project(self, api_client, auth_headers):
         response = api_client.get(self._url(uuid4()), **auth_headers)
 
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == _empty_list_payload()
 
     def test_returns_empty_list(self, api_client, auth_headers, project):
         response = api_client.get(self._url(project.uuid), **auth_headers)

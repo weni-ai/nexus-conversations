@@ -1,8 +1,10 @@
+import hashlib
 import logging
 
 import requests
 import sentry_sdk
 from django.conf import settings
+from django.core.cache import cache
 from rest_framework.exceptions import APIException
 from rest_framework.permissions import SAFE_METHODS
 
@@ -18,6 +20,7 @@ PROJECT_AUTH_ROLES = {
 }
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+PROJECT_AUTH_CACHE_TTL_SECONDS = 45
 
 
 class ProjectAuthNotFound(Exception):
@@ -61,7 +64,21 @@ def _is_role_authorized_for_method(role: int | None, method: str) -> bool:
     return False
 
 
+def _method_auth_class(method: str) -> str:
+    return "safe" if method.upper() in SAFE_METHODS else "write"
+
+
+def _project_auth_cache_key(token: str, project_uuid: str, method: str) -> str:
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return f"project_auth:{token_hash}:{project_uuid}:{_method_auth_class(method)}"
+
+
 def _check_project_authorization(token: str, project_uuid: str, method: str) -> tuple[bool, str | None]:
+    cache_key = _project_auth_cache_key(token, project_uuid, method)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return True, cached.get("user_email")
+
     base_url = settings.PROJECTS_API_BASE_URL
     if not base_url:
         raise ProjectAuthUnavailable()
@@ -95,6 +112,11 @@ def _check_project_authorization(token: str, project_uuid: str, method: str) -> 
     if not authorized:
         raise ProjectAuthorizationDenied()
 
+    cache.set(
+        cache_key,
+        {"user_email": user_email},
+        PROJECT_AUTH_CACHE_TTL_SECONDS,
+    )
     return True, user_email
 
 

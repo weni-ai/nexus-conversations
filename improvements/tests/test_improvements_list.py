@@ -155,6 +155,31 @@ class TestImprovementsListService:
         assert result["improvements_task"]["progress"] == 0
         assert result["improvements_task"]["total"] == 2
 
+    def test_orders_backlog_items_by_affected_conversations_desc(self, project):
+        run = _create_run(project)
+        low = _create_backlog_item(run, title="Low impact", affected_count=1)
+        high = _create_backlog_item(
+            run,
+            title="High impact",
+            dimension_id="personality_deviation",
+            affected_count=10,
+        )
+        mid = _create_backlog_item(
+            run,
+            title="Mid impact",
+            dimension_id="repetitive_response",
+            affected_count=5,
+        )
+
+        result = list_project_improvements(project)
+
+        assert [item["uuid"] for item in result["improvements"]] == [
+            str(high.uuid),
+            str(mid.uuid),
+            str(low.uuid),
+        ]
+        assert [item["conversations_count"] for item in result["improvements"]] == [10, 5, 1]
+
     def test_returns_running_improvements_task(self, project):
         run = _create_run(
             project,

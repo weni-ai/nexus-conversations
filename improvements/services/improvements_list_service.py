@@ -105,7 +105,7 @@ def list_project_improvements(project: Project) -> dict[str, Any]:
             Q(dimension_id__in=NATIVE_IMPROVEMENT_TYPES) | Q(dimension_id__startswith="custom:"),
         )
         .only(*_BACKLOG_LIST_FIELDS)
-        .order_by("-last_updated_at"),
+        .order_by("-affected_conversations_count", "-last_updated_at"),
     )
 
     current_run = _resolve_current_run(project.uuid)

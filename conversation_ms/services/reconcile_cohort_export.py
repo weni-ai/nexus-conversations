@@ -7,12 +7,18 @@ from typing import Any
 from uuid import UUID
 
 import pendulum
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone as dj_tz
 
 from conversation_ms.models import Conversation
 
 MAX_RECONCILE_DAY_SECONDS = 86_400
+
+
+def max_reconcile_calendar_days() -> int:
+    """Align reconcile export window with conversation retention (default 90 days)."""
+    return int(getattr(settings, "CONVERSATION_RETENTION_DAYS", 90))
 
 
 def terminal_classification_q() -> Q:
@@ -84,10 +90,12 @@ def export_reconcile_cohort(cfg: dict[str, Any]) -> dict[str, Any]:
     ``cfg`` keys: project, date_start, date_end, use_date_end (default True),
     apply_terminal_cohort_filter (default True).
     """
-    validate_reconcile_window_seconds(
-        parse_api_utc(cfg["date_start"]),
-        parse_api_utc(cfg["date_end"]),
-    )
+    start_bound = parse_api_utc(cfg["date_start"])
+    end_bound = parse_api_utc(cfg["date_end"])
+    if cfg.get("_interpreted_as_project_calendar_days"):
+        validate_reconcile_date_range(start_bound, end_bound, max_reconcile_calendar_days())
+    else:
+        validate_reconcile_window_seconds(start_bound, end_bound)
     rows: list[dict[str, str | None]] = []
     qs = _db_cohort_queryset(cfg).values_list("uuid", "start_date", "end_date")
     for uid, start_date, end_date in qs.iterator(chunk_size=500):

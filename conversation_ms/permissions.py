@@ -169,7 +169,7 @@ def has_archive_read_project_permission(request, project_uuid: str) -> bool:
             request.project_auth_user_email = user_email
         return authorized
     except ProjectAuthNotFound:
-        return _fallback_local_permission(request, project_uuid, "GET")
+        return False
     except ProjectAuthorizationDenied:
         return False
     except requests.RequestException as exc:

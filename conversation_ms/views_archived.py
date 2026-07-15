@@ -36,8 +36,7 @@ class ArchivedConversationView(APIView):
         responses={200: dict, 403: dict, 404: dict, 503: dict},
     )
     def get(self, request, project_uuid, conversation_uuid):
-        # Spec: 404 when the live conversation row still exists (not yet deleted / dry-run).
-        if Conversation.objects.filter(uuid=conversation_uuid).exists():
+        if Conversation.objects.filter(uuid=conversation_uuid, project_id=project_uuid).exists():
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         record = (

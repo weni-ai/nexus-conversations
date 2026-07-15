@@ -288,3 +288,13 @@ class TestArchiveReadProjectPermission:
 
         request = self._request()
         assert has_archive_read_project_permission(request, "uuid") is False
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_connect_404_denies_without_improvements_fallback(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_response.ok = False
+        mock_get.return_value = mock_response
+
+        request = self._request()
+        assert has_archive_read_project_permission(request, "uuid") is False

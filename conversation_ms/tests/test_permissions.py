@@ -7,12 +7,15 @@ from rest_framework.exceptions import APIException
 
 from conversation_ms.api.permissions import ProjectPermission
 from conversation_ms.permissions import (
+    ARCHIVE_READ_ROLES,
     PROJECT_AUTH_ROLES,
     ProjectAuthNotFound,
     ProjectAuthorizationDenied,
     _check_project_authorization,
+    _is_archive_read_role,
     _is_role_authorized_for_method,
     _user_email_from_authorization_payload,
+    has_archive_read_project_permission,
     has_external_project_permission,
 )
 
@@ -48,6 +51,28 @@ class TestRoleAuthorizationForMethod:
     )
     def test_role_method_matrix(self, role, method, expected):
         assert _is_role_authorized_for_method(role, method) is expected
+
+
+class TestArchiveReadRole:
+    def test_archive_read_roles_constant(self):
+        assert ARCHIVE_READ_ROLES == frozenset({PROJECT_AUTH_ROLES["moderator"], PROJECT_AUTH_ROLES["support"]})
+
+    @pytest.mark.parametrize(
+        ("role", "method", "expected"),
+        [
+            (PROJECT_AUTH_ROLES["moderator"], "GET", True),
+            (PROJECT_AUTH_ROLES["support"], "GET", True),
+            (PROJECT_AUTH_ROLES["support"], "HEAD", True),
+            (PROJECT_AUTH_ROLES["viewer"], "GET", False),
+            (PROJECT_AUTH_ROLES["contributor"], "GET", False),
+            (PROJECT_AUTH_ROLES["chat_user"], "GET", False),
+            (PROJECT_AUTH_ROLES["support"], "POST", False),
+            (PROJECT_AUTH_ROLES["moderator"], "DELETE", False),
+            (PROJECT_AUTH_ROLES["not_set"], "GET", False),
+        ],
+    )
+    def test_archive_read_matrix(self, role, method, expected):
+        assert _is_archive_read_role(role, method) is expected
 
 
 @pytest.mark.django_db
@@ -224,3 +249,52 @@ class TestProjectPermission:
         permission = ProjectPermission()
 
         assert permission.has_permission(request, view) is False
+
+
+@pytest.mark.django_db
+class TestArchiveReadProjectPermission:
+    @pytest.fixture(autouse=True)
+    def _configure_settings(self, settings):
+        settings.PROJECTS_API_BASE_URL = "https://project-auth.example.com"
+
+    def _request(self, *, authorization="Bearer test-jwt-token"):
+        request = RequestFactory().get("/projects/uuid/archived-conversations/uuid/")
+        if authorization is not None:
+            request.META["HTTP_AUTHORIZATION"] = authorization
+        return request
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_support_allowed(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "project_authorization": PROJECT_AUTH_ROLES["support"],
+            "user": "support@example.com",
+        }
+        mock_get.return_value = mock_response
+
+        request = self._request()
+        assert has_archive_read_project_permission(request, "uuid") is True
+        assert request.project_auth_user_email == "support@example.com"
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_viewer_denied(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {"project_authorization": PROJECT_AUTH_ROLES["viewer"]}
+        mock_get.return_value = mock_response
+
+        request = self._request()
+        assert has_archive_read_project_permission(request, "uuid") is False
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_connect_404_denies_without_improvements_fallback(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_response.ok = False
+        mock_get.return_value = mock_response
+
+        request = self._request()
+        assert has_archive_read_project_permission(request, "uuid") is False

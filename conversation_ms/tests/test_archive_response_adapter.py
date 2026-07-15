@@ -1,9 +1,15 @@
 """Unit tests for archive → Supervisor Public V2 response adapter."""
 
+import pytest
+
 from conversation_ms.archive.response_adapter import archive_payload_to_supervisor_v2
 
 
 class TestArchivePayloadToSupervisorV2:
+    def test_rejects_non_dict_payload(self):
+        with pytest.raises(TypeError, match="dict"):
+            archive_payload_to_supervisor_v2([])  # type: ignore[arg-type]
+
     def test_maps_schema_v1_fields(self):
         payload = {
             "schema_version": 1,

@@ -36,6 +36,9 @@ def archive_payload_to_supervisor_v2(payload: dict[str, Any]) -> dict[str, Any]:
 
     Additive support fields: ``archived_at``, ``is_archived``.
     """
+    if not isinstance(payload, dict):
+        raise TypeError("archive payload must be a dict")
+
     conversation = payload.get("conversation") or {}
     if not isinstance(conversation, dict):
         conversation = {}

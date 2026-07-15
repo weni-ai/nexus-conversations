@@ -24,13 +24,16 @@ class ArchiveRecordStateMachine:
     Allowed graph::
 
         PENDING → IN_PROGRESS → ARCHIVED → DELETED
-                        │           │
-                        └→ FAILED ←─┘
-                             (retry → IN_PROGRESS)
+           │            │           │
+           └→ FAILED ←──┴───────────┘
+                (retry → IN_PROGRESS)
+
+        PENDING → FAILED is used when reclaiming abandoned/expired Celery tasks.
     """
 
     _ALLOWED: dict[str, frozenset[str]] = {
-        ArchiveRecordStatus.PENDING: frozenset({ArchiveRecordStatus.IN_PROGRESS}),
+        # PENDING → FAILED: abandoned / expired Celery task reclaimed by dispatcher.
+        ArchiveRecordStatus.PENDING: frozenset({ArchiveRecordStatus.IN_PROGRESS, ArchiveRecordStatus.FAILED}),
         ArchiveRecordStatus.IN_PROGRESS: frozenset({ArchiveRecordStatus.ARCHIVED, ArchiveRecordStatus.FAILED}),
         ArchiveRecordStatus.ARCHIVED: frozenset({ArchiveRecordStatus.DELETED}),
         ArchiveRecordStatus.FAILED: frozenset({ArchiveRecordStatus.IN_PROGRESS}),

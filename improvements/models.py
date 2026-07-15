@@ -55,6 +55,7 @@ class ImprovementAnalysisRun(models.Model):
         indexes = [
             models.Index(fields=["project", "status"]),
             models.Index(fields=["project", "-target_date"]),
+            models.Index(fields=["project", "-started_at"]),
         ]
 
     def __str__(self) -> str:

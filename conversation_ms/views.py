@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from conversation_ms.archive.eligibility import apply_retention_filter
 from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.filters import ConversationFilter
 from conversation_ms.mixins import JWTModuleMixin
@@ -100,8 +101,8 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
 
         project_uuid = self.kwargs.get("project_uuid")
 
-        # Ensure project exists (optional validation, but good for 404s)
-        if not Project.objects.filter(uuid=project_uuid).exists():
+        project = Project.objects.filter(uuid=project_uuid).only("uuid", "timezone").first()
+        if project is None:
             raise NotFound(detail="Project not found")
 
         queryset = Conversation.objects.filter(project__uuid=project_uuid).select_related(
@@ -127,6 +128,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             queryset = queryset.select_related("messages_data")
 
+        queryset = apply_retention_filter(queryset, project.timezone)
         return queryset.order_by("-created_at", "-uuid")
 
     def _queryset_with_conversation_filters(self, queryset, query_params):

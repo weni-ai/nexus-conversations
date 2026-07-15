@@ -96,11 +96,11 @@ class ArchiveS3Client:
         if self.head_object(key) is None:
             raise RuntimeError(f"S3 object missing after upload: {key}")
 
-    def get_valid_existing_archive(self, key: str, conversation_uuid: str) -> str | None:
+    def _load_validated_archive_payload(self, key: str, conversation_uuid: str) -> dict[str, Any] | None:
         """
-        Return ``content_sha256`` when an object exists at ``key`` for ``conversation_uuid``.
+        Download, gunzip, parse, and validate an archive object.
 
-        Validates internal metadata hash integrity; used for idempotent retries.
+        Returns the payload dict when UUID + content_sha256 integrity checks pass.
         """
         if self.head_object(key) is None:
             return None
@@ -124,6 +124,13 @@ class ArchiveS3Client:
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
 
+        if not isinstance(payload, dict):
+            return None
+
+        schema_version = payload.get("schema_version")
+        if schema_version not in (1, "1"):
+            return None
+
         conversation = payload.get("conversation") or {}
         if str(conversation.get("uuid")) != str(conversation_uuid):
             return None
@@ -139,4 +146,24 @@ class ArchiveS3Client:
         }
         if sha256_hex(canonical_json_bytes(payload_for_hash)) != stored_sha:
             return None
-        return str(stored_sha)
+        return payload
+
+    def get_valid_existing_archive(self, key: str, conversation_uuid: str) -> str | None:
+        """
+        Return ``content_sha256`` when an object exists at ``key`` for ``conversation_uuid``.
+
+        Validates internal metadata hash integrity; used for idempotent retries.
+        """
+        payload = self._load_validated_archive_payload(key, conversation_uuid)
+        if payload is None:
+            return None
+        metadata = payload.get("metadata") or {}
+        return str(metadata.get("content_sha256"))
+
+    def get_archive_document(self, key: str, conversation_uuid: str) -> dict[str, Any] | None:
+        """
+        Return the validated archive JSON payload for support retrieval.
+
+        Returns ``None`` when the object is missing or fails integrity/UUID checks.
+        """
+        return self._load_validated_archive_payload(key, conversation_uuid)

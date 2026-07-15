@@ -8,6 +8,7 @@ from conversation_ms.views import (
     ProjectsResolutionSummaryView,
     ReconcileCohortExportView,
 )
+from conversation_ms.views_archived import ArchivedConversationView
 
 conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
@@ -47,5 +48,10 @@ urlpatterns = [
         "projects/<uuid:project_uuid>/reconcile-cohort/",
         ReconcileCohortExportView.as_view(),
         name="project-reconcile-cohort-export",
+    ),
+    path(
+        "projects/<uuid:project_uuid>/archived-conversations/<uuid:conversation_uuid>/",
+        ArchivedConversationView.as_view(),
+        name="project-archived-conversation-detail",
     ),
 ]

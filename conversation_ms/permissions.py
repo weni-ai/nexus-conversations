@@ -49,6 +49,15 @@ def _user_email_from_authorization_payload(payload: dict) -> str | None:
     return None
 
 
+# Roles allowed to read archived conversations via Support UI (Phase D).
+ARCHIVE_READ_ROLES = frozenset(
+    {
+        PROJECT_AUTH_ROLES["moderator"],
+        PROJECT_AUTH_ROLES["support"],
+    }
+)
+
+
 def _is_role_authorized_for_method(role: int | None, method: str) -> bool:
     if role is None or role == PROJECT_AUTH_ROLES["not_set"]:
         return False
@@ -65,6 +74,13 @@ def _is_role_authorized_for_method(role: int | None, method: str) -> bool:
     return False
 
 
+def _is_archive_read_role(role: int | None, method: str) -> bool:
+    """Archive GET: moderator (3) or support (4) only."""
+    if method.upper() not in SAFE_METHODS:
+        return False
+    return role in ARCHIVE_READ_ROLES
+
+
 def _method_auth_class(method: str) -> str:
     return "safe" if method.upper() in SAFE_METHODS else "write"
 
@@ -74,7 +90,13 @@ def _project_auth_cache_key(token: str, project_uuid: str, method: str) -> str:
     return f"project_auth:{token_hash}:{project_uuid}:{_method_auth_class(method)}"
 
 
-def _check_project_authorization(token: str, project_uuid: str, method: str) -> tuple[bool, str | None]:
+def _check_project_authorization(
+    token: str,
+    project_uuid: str,
+    method: str,
+    *,
+    role_checker=_is_role_authorized_for_method,
+) -> tuple[bool, str | None]:
     cache_key = _project_auth_cache_key(token, project_uuid, method)
     cached = cache.get(cache_key)
     if cached is not None:
@@ -108,7 +130,7 @@ def _check_project_authorization(token: str, project_uuid: str, method: str) -> 
     data = response.json()
     user_email = _user_email_from_authorization_payload(data)
     role = data.get("project_authorization")
-    authorized = _is_role_authorized_for_method(role, method)
+    authorized = role_checker(role, method)
 
     if not authorized:
         raise ProjectAuthorizationDenied()
@@ -173,6 +195,39 @@ def has_external_project_permission(request, project_uuid: str, method: str) -> 
         sentry_sdk.capture_exception(exc)
         logger.error(
             "[ProjectAuth] Authorization API request failed project_uuid=%s error=%s",
+            project_uuid,
+            exc,
+            exc_info=True,
+        )
+        raise ProjectAuthUnavailable() from exc
+
+
+def has_archive_read_project_permission(request, project_uuid: str) -> bool:
+    """
+    Connect RBAC for Support archive API: GET allowed for support/moderator only.
+    """
+    token = request.headers.get("Authorization")
+    if not token:
+        return False
+
+    try:
+        authorized, user_email = _check_project_authorization(
+            token,
+            project_uuid,
+            "GET",
+            role_checker=_is_archive_read_role,
+        )
+        if user_email:
+            request.project_auth_user_email = user_email
+        return authorized
+    except ProjectAuthNotFound:
+        return _fallback_local_permission(request, project_uuid, "GET")
+    except ProjectAuthorizationDenied:
+        return False
+    except requests.RequestException as exc:
+        sentry_sdk.capture_exception(exc)
+        logger.error(
+            "[ProjectAuth] Archive read authorization API failed project_uuid=%s error=%s",
             project_uuid,
             exc,
             exc_info=True,

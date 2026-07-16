@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 from uuid import UUID
 
 import pendulum
 from django.conf import settings
+from django.core.cache import cache
 
 from conversation_ms.models import Conversation, Project
 from conversation_ms.services.reconcile_cohort_export import django_utc_from_pendulum, parse_api_utc
@@ -14,6 +16,8 @@ from conversation_ms.utils.date_helpers import ProjectDay, resolve_effective_pro
 from improvements.dependencies import get_improvements_dependencies
 
 logger = logging.getLogger(__name__)
+
+YESTERDAY_CONVERSATIONS_COUNT_CACHE_TTL_SECONDS = 90
 
 
 def _iso_utc_string(dt: pendulum.DateTime) -> str:
@@ -45,15 +49,38 @@ def count_conversations_in_range(
     end_utc: pendulum.DateTime,
 ) -> int:
     return Conversation.objects.filter(
-        project__uuid=project_uuid,
+        project_id=project_uuid,
         start_date__gte=django_utc_from_pendulum(start_utc),
         start_date__lte=django_utc_from_pendulum(end_utc),
     ).count()
 
 
+def _yesterday_count_cache_key(project_uuid: UUID | str, target_date: str) -> str:
+    return f"improvements:yesterday_count:{project_uuid}:{target_date}"
+
+
 def count_yesterday_conversations(project: Project) -> int:
     start_utc, end_utc = resolve_date_range(project, None, None)
-    return count_conversations_in_range(project.uuid, start_utc, end_utc)
+    tz = resolve_effective_project_timezone(project.timezone)
+    target_date = start_utc.in_timezone(tz).format("YYYY-MM-DD")
+    cache_key = _yesterday_count_cache_key(project.uuid, target_date)
+
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return int(cached)
+
+    started = time.perf_counter()
+    total_count = count_conversations_in_range(project.uuid, start_utc, end_utc)
+    duration_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "[count_yesterday_conversations] cache_miss duration_ms=%.2f project_uuid=%s " "target_date=%s count=%s",
+        duration_ms,
+        project.uuid,
+        target_date,
+        total_count,
+    )
+    cache.set(cache_key, total_count, YESTERDAY_CONVERSATIONS_COUNT_CACHE_TTL_SECONDS)
+    return total_count
 
 
 DEFAULT_SAMPLING_MODE = "srs"

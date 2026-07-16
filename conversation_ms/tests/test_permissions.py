@@ -2,7 +2,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
-from django.test import RequestFactory
+from django.core.cache import cache
+from django.test import RequestFactory, override_settings
 from rest_framework.exceptions import APIException
 
 from conversation_ms.api.permissions import ProjectPermission
@@ -15,6 +16,21 @@ from conversation_ms.permissions import (
     _user_email_from_authorization_payload,
     has_external_project_permission,
 )
+
+LOC_MEM_CACHE = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "project-auth-permissions-test",
+    }
+}
+
+
+@pytest.fixture(autouse=True)
+def use_locmem_cache():
+    with override_settings(CACHES=LOC_MEM_CACHE):
+        cache.clear()
+        yield
+        cache.clear()
 
 
 class TestUserEmailFromAuthorizationPayload:
@@ -122,6 +138,19 @@ class TestCheckProjectAuthorization:
 
         with pytest.raises(requests.Timeout):
             _check_project_authorization("Bearer token", "uuid", "GET")
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_caches_successful_authorization(self, mock_get):
+        mock_get.return_value = self._mock_response(
+            payload={"project_authorization": PROJECT_AUTH_ROLES["moderator"], "user": "mod@example.com"},
+        )
+
+        first = _check_project_authorization("Bearer token", "uuid", "GET")
+        second = _check_project_authorization("Bearer token", "uuid", "GET")
+
+        assert first == (True, "mod@example.com")
+        assert second == (True, "mod@example.com")
+        mock_get.assert_called_once()
 
 
 @pytest.mark.django_db

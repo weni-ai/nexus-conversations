@@ -1,6 +1,9 @@
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from django.core.cache import cache
+from django.test import override_settings
 from django.urls import reverse
 from freezegun import freeze_time
 from rest_framework import status
@@ -19,11 +22,27 @@ from improvements.models import (
     ImprovementBacklogItem,
     ImprovementRunConversation,
 )
+from improvements.services.conversation_count_service import count_yesterday_conversations
 from improvements.services.improvements_list_service import (
     IDLE_IMPROVEMENTS_TASK,
     list_project_improvements,
 )
 from improvements.utils.time import utc_datetime
+
+
+@pytest.fixture(autouse=True)
+def use_locmem_cache():
+    with override_settings(
+        CACHES={
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "improvements-list-cache-test",
+            }
+        }
+    ):
+        cache.clear()
+        yield
+        cache.clear()
 
 
 def _empty_list_payload(*, yesterday_conversations_count: int = 0) -> dict:
@@ -136,6 +155,31 @@ class TestImprovementsListService:
         assert result["improvements_task"]["progress"] == 0
         assert result["improvements_task"]["total"] == 2
 
+    def test_orders_backlog_items_by_affected_conversations_desc(self, project):
+        run = _create_run(project)
+        low = _create_backlog_item(run, title="Low impact", affected_count=1)
+        high = _create_backlog_item(
+            run,
+            title="High impact",
+            dimension_id="personality_deviation",
+            affected_count=10,
+        )
+        mid = _create_backlog_item(
+            run,
+            title="Mid impact",
+            dimension_id="repetitive_response",
+            affected_count=5,
+        )
+
+        result = list_project_improvements(project)
+
+        assert [item["uuid"] for item in result["improvements"]] == [
+            str(high.uuid),
+            str(mid.uuid),
+            str(low.uuid),
+        ]
+        assert [item["conversations_count"] for item in result["improvements"]] == [10, 5, 1]
+
     def test_returns_running_improvements_task(self, project):
         run = _create_run(
             project,
@@ -184,6 +228,32 @@ class TestImprovementsListService:
                 "conversations_count": 1,
             }
         ]
+
+    @freeze_time("2026-06-03T15:00:00Z")
+    def test_yesterday_count_uses_cache_on_second_call(self, project):
+        yesterday = ProjectDay.for_yesterday(project.timezone)
+        start_utc, _ = yesterday.get_utc_range()
+        Conversation.objects.create(
+            project=project,
+            start_date=utc_datetime(start_utc.year, start_utc.month, start_utc.day, start_utc.hour),
+            end_date=utc_datetime(start_utc.year, start_utc.month, start_utc.day, start_utc.hour + 1),
+        )
+
+        assert count_yesterday_conversations(project) == 1
+        with patch(
+            "improvements.services.conversation_count_service.count_conversations_in_range",
+        ) as mock_count:
+            assert count_yesterday_conversations(project) == 1
+            mock_count.assert_not_called()
+
+    def test_list_uses_bounded_queries_with_active_run(self, project, django_assert_num_queries):
+        run = _create_run(project, status=ImprovementRunStatus.IN_PROGRESS)
+        _create_backlog_item(run)
+        cache.clear()
+
+        # 1) backlog list  2) current run  3) yesterday count
+        with django_assert_num_queries(3):
+            list_project_improvements(project)
 
     def test_does_not_append_amazing_conversation_entry(self, project):
         run = _create_run(project)

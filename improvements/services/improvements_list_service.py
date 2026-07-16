@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 
 from conversation_ms.models import Project
 from improvements.enums import (
@@ -35,6 +35,14 @@ IDLE_IMPROVEMENTS_TASK: dict[str, Any] = {
     "created_at": None,
 }
 
+_BACKLOG_LIST_FIELDS = (
+    "uuid",
+    "title",
+    "dimension_id",
+    "affected_conversations_count",
+    "last_updated_at",
+)
+
 
 def _map_list_type(dimension_id: str) -> str:
     if dimension_id.startswith("custom:"):
@@ -52,18 +60,26 @@ def _map_backlog_item(item: ImprovementBacklogItem) -> dict[str, Any]:
 
 
 def _resolve_current_run(project_uuid: UUID) -> ImprovementAnalysisRun | None:
-    active_run = (
-        ImprovementAnalysisRun.objects.filter(
-            project_id=project_uuid,
-            status__in=ACTIVE_RUN_STATUSES,
+    return (
+        ImprovementAnalysisRun.objects.filter(project_id=project_uuid)
+        .annotate(
+            is_active=Case(
+                When(status__in=list(ACTIVE_RUN_STATUSES), then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
         )
-        .order_by("-started_at")
+        .order_by("-is_active", "-started_at")
+        .only(
+            "uuid",
+            "status",
+            "conversations_processed",
+            "conversations_total",
+            "sample_size",
+            "started_at",
+        )
         .first()
     )
-    if active_run is not None:
-        return active_run
-
-    return ImprovementAnalysisRun.objects.filter(project_id=project_uuid).order_by("-started_at").first()
 
 
 def _build_improvements_task(run: ImprovementAnalysisRun | None) -> dict[str, Any]:
@@ -88,8 +104,8 @@ def list_project_improvements(project: Project) -> dict[str, Any]:
         .filter(
             Q(dimension_id__in=NATIVE_IMPROVEMENT_TYPES) | Q(dimension_id__startswith="custom:"),
         )
-        .select_related("run")
-        .order_by("-last_updated_at"),
+        .only(*_BACKLOG_LIST_FIELDS)
+        .order_by("-affected_conversations_count", "-last_updated_at"),
     )
 
     current_run = _resolve_current_run(project.uuid)

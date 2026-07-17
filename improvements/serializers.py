@@ -141,6 +141,10 @@ class ImprovementDetailSerializer(serializers.Serializer):
     affected_instructions = ImprovementAffectedInstructionSerializer(many=True)
 
 
+class ImprovementStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["ignored", "resolved"])
+
+
 class CustomAnalysisListItemSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     title = serializers.CharField()

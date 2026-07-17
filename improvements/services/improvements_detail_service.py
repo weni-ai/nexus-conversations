@@ -15,6 +15,7 @@ from improvements.services.improvements_list_service import (
     NATIVE_IMPROVEMENT_TYPES,
 )
 from improvements.services.project_customization_service import get_project_customization
+from improvements.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -280,3 +281,35 @@ def get_improvement_detail(
             current_instructions=current_instructions,
         ),
     }
+
+
+def update_improvement_status(
+    project_uuid: UUID | str,
+    improvement_uuid: UUID | str,
+    new_status: str,
+    *,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    item = get_backlog_item(project_uuid, improvement_uuid)
+    now = utc_now()
+
+    if new_status == ImprovementItemStatus.RESOLVED:
+        item.status = ImprovementItemStatus.RESOLVED
+        item.resolved_at = now
+        item.ignored_at = None
+    else:
+        item.status = ImprovementItemStatus.IGNORED
+        item.ignored_at = now
+        item.resolved_at = None
+
+    item.status_changed_by_actor = actor
+    item.save(
+        update_fields=[
+            "status",
+            "resolved_at",
+            "ignored_at",
+            "status_changed_by_actor",
+            "last_updated_at",
+        ],
+    )
+    return get_improvement_detail(project_uuid, improvement_uuid)

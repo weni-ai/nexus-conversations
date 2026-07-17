@@ -205,6 +205,21 @@ class TestImprovementsListService:
 
         assert result["improvements"] == []
 
+    @pytest.mark.parametrize(
+        "excluded_status",
+        [
+            ImprovementItemStatus.IGNORED,
+            ImprovementItemStatus.RESOLVED,
+        ],
+    )
+    def test_excludes_ignored_and_resolved_backlog_items(self, project, excluded_status):
+        run = _create_run(project)
+        _create_backlog_item(run, status=excluded_status)
+
+        result = list_project_improvements(project)
+
+        assert result["improvements"] == []
+
     def test_includes_custom_monitor_as_custom_analysis(self, project):
         run = _create_run(project)
         custom_item = ImprovementBacklogItem.objects.create(
@@ -331,6 +346,28 @@ class TestProjectImprovementsListView:
     def test_excludes_superseded_backlog_via_api(self, api_client, auth_headers, project):
         run = _create_run(project)
         _create_backlog_item(run, status=ImprovementItemStatus.SUPERSEDED)
+
+        response = api_client.get(self._url(project.uuid), **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["improvements"] == []
+
+    @pytest.mark.parametrize(
+        "excluded_status",
+        [
+            ImprovementItemStatus.IGNORED,
+            ImprovementItemStatus.RESOLVED,
+        ],
+    )
+    def test_excludes_ignored_and_resolved_via_api(
+        self,
+        api_client,
+        auth_headers,
+        project,
+        excluded_status,
+    ):
+        run = _create_run(project)
+        _create_backlog_item(run, status=excluded_status)
 
         response = api_client.get(self._url(project.uuid), **auth_headers)
 

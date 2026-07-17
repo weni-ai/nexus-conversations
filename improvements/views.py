@@ -22,6 +22,7 @@ from improvements.serializers import (
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
     ImprovementsListResponseSerializer,
+    ImprovementStatusUpdateSerializer,
     OpenSupportTicketRequestSerializer,
     OpenSupportTicketResponseSerializer,
 )
@@ -42,6 +43,7 @@ from improvements.services.improvements_affected_conversations_service import li
 from improvements.services.improvements_detail_service import (
     ImprovementDetailNotFound,
     get_improvement_detail,
+    update_improvement_status,
 )
 from improvements.services.improvements_list_service import (
     IDLE_IMPROVEMENTS_TASK,
@@ -332,6 +334,41 @@ class ProjectImprovementDetail(APIView):
 
         try:
             payload = get_improvement_detail(project_uuid, improvement_uuid)
+        except ImprovementDetailNotFound:
+            raise NotFound(detail="Improvement not found") from None
+
+        return Response(
+            ImprovementDetailSerializer(payload).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        summary="Update improvement backlog item status",
+        description=(
+            "Marks an improvement backlog item as ignored or resolved. "
+            "Ignored and resolved items are excluded from the list endpoint."
+        ),
+        request=ImprovementStatusUpdateSerializer,
+        responses={200: ImprovementDetailSerializer},
+        auth=BEARER_JWT_AUTH,
+    )
+    def patch(self, request, project_uuid, improvement_uuid):
+        try:
+            Project.objects.get(uuid=project_uuid)
+        except Project.DoesNotExist:
+            raise NotFound(detail="Project not found") from None
+
+        ser = ImprovementStatusUpdateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        actor = getattr(request, "project_auth_user_email", None)
+        try:
+            payload = update_improvement_status(
+                project_uuid,
+                improvement_uuid,
+                ser.validated_data["status"],
+                actor=actor,
+            )
         except ImprovementDetailNotFound:
             raise NotFound(detail="Improvement not found") from None
 

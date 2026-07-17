@@ -48,7 +48,21 @@ def _topic_lambda_payload(topic, subtopic, confidence=0.95) -> bytes:
     AWS_REGION="sa-east-1",
 )
 @patch("conversation_ms.services.classification_service.send_data_lake_event")
-def test_classify_conversation_success_v2_lambda(mock_send_data_lake_event, classification_service):
+@patch("conversation_ms.clients.nexus_client.NexusClient.get_ai_resolution_criteria")
+def test_classify_conversation_success_v2_lambda(
+    mock_get_ai_resolution_criteria,
+    mock_send_data_lake_event,
+    classification_service,
+):
+    mock_get_ai_resolution_criteria.return_value = {
+        "base_criteria": [
+            {"id": "base_unresolved", "text": "Base unresolved rule"},
+            {"id": "base_resolved", "text": "Base resolved rule"},
+        ],
+        "custom_criteria": [
+            {"id": "custom-1", "text": "Custom rule for delivery confirmation"},
+        ],
+    }
     project = ProjectFactory(name="Loja Exemplo")
     conversation = ConversationFactory(
         project=project,
@@ -89,8 +103,14 @@ def test_classify_conversation_success_v2_lambda(mock_send_data_lake_event, clas
     assert resolution_request == {
         "conversation": {
             "messages": [{"sender": "user", "content": mock_messages[0]["text"]}],
-        }
+        },
+        "user_rules": [
+            "Base unresolved rule",
+            "Base resolved rule",
+            "Custom rule for delivery confirmation",
+        ],
     }
+    mock_get_ai_resolution_criteria.assert_called_once_with(str(project.uuid))
 
     assert mock_send_data_lake_event.delay.call_count == 2
     payloads = [call[0][0] for call in mock_send_data_lake_event.delay.call_args_list]
@@ -208,7 +228,15 @@ def test_classify_conversation_legacy_lambda(mock_send_data_lake_event, classifi
     CONVERSATION_RESOLUTION_LEGACY_PROJECTS=[],
 )
 @patch("conversation_ms.services.classification_service.send_data_lake_event")
-def test_classify_conversation_v2_lambda_error_response(mock_send_data_lake_event, classification_service):
+@patch(
+    "conversation_ms.clients.nexus_client.NexusClient.get_ai_resolution_criteria",
+    return_value={"base_criteria": [], "custom_criteria": []},
+)
+def test_classify_conversation_v2_lambda_error_response(
+    _mock_get_ai_resolution_criteria,
+    mock_send_data_lake_event,
+    classification_service,
+):
     project = ProjectFactory(name="Loja Exemplo")
     conversation = ConversationFactory(project=project, contact_urn="whatsapp:+5582999887766")
 

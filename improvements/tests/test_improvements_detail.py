@@ -2,6 +2,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from django.core.cache import cache
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -28,8 +30,24 @@ from improvements.services.improvements_affected_conversations_service import li
 from improvements.services.improvements_detail_service import (
     ImprovementDetailNotFound,
     get_improvement_detail,
+    update_improvement_status,
 )
 from improvements.utils.time import utc_datetime
+
+
+@pytest.fixture(autouse=True)
+def use_locmem_cache():
+    with override_settings(
+        CACHES={
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "improvements-detail-cache-test",
+            }
+        }
+    ):
+        cache.clear()
+        yield
+        cache.clear()
 
 
 def _create_run(project: Project) -> ImprovementAnalysisRun:
@@ -246,6 +264,50 @@ class TestImprovementsDetailService:
     def test_raises_not_found_for_missing_item(self, project):
         with pytest.raises(ImprovementDetailNotFound):
             get_improvement_detail(project.uuid, uuid4())
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_marks_item_as_resolved(self, mock_customization, project, backlog_item):
+        mock_customization.return_value = {"instructions": []}
+
+        result = update_improvement_status(
+            project.uuid,
+            backlog_item.uuid,
+            ImprovementItemStatus.RESOLVED,
+            actor="user@example.com",
+        )
+
+        backlog_item.refresh_from_db()
+        assert result["status"] == "resolved"
+        assert backlog_item.status == ImprovementItemStatus.RESOLVED
+        assert backlog_item.resolved_at is not None
+        assert backlog_item.ignored_at is None
+        assert backlog_item.status_changed_by_actor == "user@example.com"
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_marks_item_as_ignored(self, mock_customization, project, backlog_item):
+        mock_customization.return_value = {"instructions": []}
+
+        result = update_improvement_status(
+            project.uuid,
+            backlog_item.uuid,
+            ImprovementItemStatus.IGNORED,
+            actor="user@example.com",
+        )
+
+        backlog_item.refresh_from_db()
+        assert result["status"] == "ignored"
+        assert backlog_item.status == ImprovementItemStatus.IGNORED
+        assert backlog_item.ignored_at is not None
+        assert backlog_item.resolved_at is None
+        assert backlog_item.status_changed_by_actor == "user@example.com"
+
+    def test_update_status_raises_not_found_for_missing_item(self, project):
+        with pytest.raises(ImprovementDetailNotFound):
+            update_improvement_status(
+                project.uuid,
+                uuid4(),
+                ImprovementItemStatus.RESOLVED,
+            )
 
 
 @pytest.mark.django_db
@@ -510,6 +572,64 @@ class TestProjectImprovementDetailView:
                 }
             ],
         }
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    @pytest.mark.parametrize(
+        ("new_status", "api_status"),
+        [
+            ("resolved", "resolved"),
+            ("ignored", "ignored"),
+        ],
+    )
+    def test_patch_updates_status(
+        self,
+        mock_customization,
+        api_client,
+        auth_headers,
+        project,
+        new_status,
+        api_status,
+    ):
+        run = _create_run(project)
+        item = _create_backlog_item(run)
+        mock_customization.return_value = {"instructions": []}
+
+        response = api_client.patch(
+            self._detail_url(project.uuid, item.uuid),
+            {"status": new_status},
+            format="json",
+            **auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == api_status
+        item.refresh_from_db()
+        assert item.status == new_status
+
+    def test_patch_rejects_invalid_status(self, api_client, auth_headers, project):
+        run = _create_run(project)
+        item = _create_backlog_item(run)
+
+        response = api_client.patch(
+            self._detail_url(project.uuid, item.uuid),
+            {"status": "active"},
+            format="json",
+            **auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        item.refresh_from_db()
+        assert item.status == ImprovementItemStatus.ACTIVE
+
+    def test_patch_returns_404_for_missing_item(self, api_client, auth_headers, project):
+        response = api_client.patch(
+            self._detail_url(project.uuid, uuid4()),
+            {"status": "resolved"},
+            format="json",
+            **auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db

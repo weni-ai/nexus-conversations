@@ -149,7 +149,7 @@ class ClassificationService:
             if use_legacy:
                 payload = {"conversation": self._format_messages_for_legacy_lambda(messages)}
             else:
-                payload = self._format_messages_for_v2_lambda(messages)
+                payload = self._format_messages_for_v2_lambda(messages, project_uuid=project_uuid)
 
             lambda_region = get_resolution_lambda_region(project_uuid)
             response = self._invoke_lambda(lambda_name, payload, region_name=lambda_region)
@@ -226,7 +226,11 @@ class ClassificationService:
             )
         return formatted
 
-    def _format_messages_for_v2_lambda(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _format_messages_for_v2_lambda(
+        self,
+        messages: List[Dict[str, Any]],
+        project_uuid: str,
+    ) -> Dict[str, Any]:
         """Format messages for the V2 resolution Lambda (nested conversation.messages)."""
         formatted_messages = []
         # Dynamo returns newest-first; lambdas expect chronological order.
@@ -237,7 +241,35 @@ class ClassificationService:
                     "content": msg.get("text", ""),
                 }
             )
-        return {"conversation": {"messages": formatted_messages}}
+        return {
+            "conversation": {"messages": formatted_messages},
+            "user_rules": self._get_user_rules_for_project(project_uuid),
+        }
+
+    def _get_user_rules_for_project(self, project_uuid: str) -> List[str]:
+        """Load base + custom resolution criteria texts from Nexus for daily close."""
+        try:
+            from conversation_ms.clients.nexus_client import NexusClient
+
+            payload = NexusClient().get_ai_resolution_criteria(project_uuid)
+        except Exception as exc:
+            logger.error(
+                "[ClassificationService] Failed to load AI resolution criteria for project %s: %s",
+                project_uuid,
+                exc,
+                exc_info=True,
+            )
+            return []
+
+        user_rules: List[str] = []
+        for section in ("base_criteria", "custom_criteria"):
+            for item in payload.get(section) or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    user_rules.append(text)
+        return user_rules
 
     @staticmethod
     def _map_source_to_v2_sender(source: Any) -> str:

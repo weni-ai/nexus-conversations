@@ -149,7 +149,7 @@ class ImprovementCustomMonitor(models.Model):
         db_table = "improvements_custom_monitor"
         indexes = [
             models.Index(fields=["project", "is_active"]),
-            models.Index(fields=["project", "slug"]),
+            models.Index(fields=["project", "slug"], name="improvements_project_slug_idx"),
         ]
         constraints = [
             models.UniqueConstraint(

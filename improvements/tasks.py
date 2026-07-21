@@ -25,6 +25,7 @@ from improvements.services.conversation_count_service import (
 from improvements.services.conversation_normalizer import iter_normalized_conversations
 from improvements.services.custom_analysis_service import build_check_classification_classes
 from improvements.services.improvements_check_service import (
+    TERMINAL_CHECK_STATUSES,
     build_check_lambda_payload,
     build_check_state_s3_key,
     check_state_exists,
@@ -97,6 +98,8 @@ def _resolve_or_create_db_run(payload: dict[str, Any]):
 
 
 def _finalize_run_status(run, check_status: str, *, cancel_requested: bool) -> str:
+    if check_status == "cancelled":
+        return ImprovementRunStatus.COMPLETED
     if cancel_requested and check_status == "completed":
         return ImprovementRunStatus.CANCELLED
     if check_status == "completed":
@@ -104,6 +107,99 @@ def _finalize_run_status(run, check_status: str, *, cancel_requested: bool) -> s
     if check_status == "failed":
         return ImprovementRunStatus.FAILED
     return run.status
+
+
+def _batch_completion_percentage(check_result: dict[str, Any]) -> float | None:
+    completed = check_result.get("completed")
+    total = check_result.get("total")
+    if not isinstance(completed, int) or not isinstance(total, int) or total <= 0:
+        return None
+    return (completed / total) * 100
+
+
+def _should_soft_cancel_batches(
+    metadata: dict[str, Any],
+    run,
+    check_result: dict[str, Any],
+) -> bool:
+    soft_time_limit = getattr(settings, "CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT", 21600)
+    soft_percentage = getattr(settings, "CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE", 80)
+
+    elapsed_seconds = polling_timeout_elapsed_seconds(metadata, run)
+    if elapsed_seconds is None or elapsed_seconds < soft_time_limit:
+        return False
+
+    percentage = _batch_completion_percentage(check_result)
+    if percentage is None:
+        return False
+    return percentage >= soft_percentage
+
+
+def _invoke_check_lambda(
+    *,
+    project_uuid: str,
+    target_date: str,
+    batches: list[dict[str, Any]],
+    run_uuid: str | None,
+    cancel_if_incomplete: bool,
+) -> dict[str, Any]:
+    check_payload = build_check_lambda_payload(
+        batches,
+        state_url=_resolve_check_state_url(project_uuid, target_date, run_uuid) if run_uuid else None,
+        cancel_if_incomplete=cancel_if_incomplete,
+        classification_classes=build_check_classification_classes(project_uuid),
+    )
+    return invoke_improvements_check_lambda(
+        check_payload,
+        project_uuid=project_uuid,
+        target_date=target_date,
+    )
+
+
+def _maybe_soft_cancel_and_recheck(
+    *,
+    project_uuid: str,
+    target_date: str,
+    metadata: dict[str, Any],
+    run,
+    run_uuid: str | None,
+    batches: list[dict[str, Any]],
+    check_result: dict[str, Any],
+    cancel_if_incomplete: bool,
+) -> tuple[dict[str, Any], bool]:
+    check_status = check_result["status"]
+    if (
+        check_status in TERMINAL_CHECK_STATUSES
+        or cancel_if_incomplete
+        or not _should_soft_cancel_batches(metadata, run, check_result)
+    ):
+        return check_result, cancel_if_incomplete
+
+    percentage = _batch_completion_percentage(check_result)
+    elapsed_seconds = polling_timeout_elapsed_seconds(metadata, run)
+    logger.info(
+        "[check_improvements_batches] Soft cancel thresholds met project_uuid=%s target_date=%s "
+        "elapsed_seconds=%s batch_completion_pct=%s soft_time_limit=%s soft_percentage=%s",
+        project_uuid,
+        target_date,
+        elapsed_seconds,
+        percentage,
+        getattr(settings, "CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT", 21600),
+        getattr(settings, "CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE", 80),
+    )
+    mark_cancel_requested(project_uuid, target_date)
+    if run is not None:
+        sync_run_cancel_requested(run, cancel_requested=True)
+
+    cancel_if_incomplete = True
+    check_result = _invoke_check_lambda(
+        project_uuid=project_uuid,
+        target_date=target_date,
+        batches=batches,
+        run_uuid=run_uuid,
+        cancel_if_incomplete=True,
+    )
+    return check_result, cancel_if_incomplete
 
 
 def _load_active_run_metadata(project_uuid: str, target_date: str) -> dict[str, Any]:
@@ -468,16 +564,22 @@ def check_improvements_batches(self, *, project_uuid: str, target_date: str) -> 
 
         cancel_if_incomplete = bool(metadata.get("cancel_requested", False))
         batches = _resolve_check_batches(project_uuid, target_date, metadata)
-        check_payload = build_check_lambda_payload(
-            batches,
-            state_url=_resolve_check_state_url(project_uuid, target_date, run_uuid) if run_uuid else None,
-            cancel_if_incomplete=cancel_if_incomplete,
-            classification_classes=build_check_classification_classes(project_uuid),
-        )
-        check_result = invoke_improvements_check_lambda(
-            check_payload,
+        check_result = _invoke_check_lambda(
             project_uuid=project_uuid,
             target_date=target_date,
+            batches=batches,
+            run_uuid=run_uuid,
+            cancel_if_incomplete=cancel_if_incomplete,
+        )
+        check_result, cancel_if_incomplete = _maybe_soft_cancel_and_recheck(
+            project_uuid=project_uuid,
+            target_date=target_date,
+            metadata=metadata,
+            run=run,
+            run_uuid=run_uuid,
+            batches=batches,
+            check_result=check_result,
+            cancel_if_incomplete=cancel_if_incomplete,
         )
         check_status = check_result["status"]
 

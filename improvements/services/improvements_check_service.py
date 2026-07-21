@@ -15,7 +15,7 @@ from improvements.services.improvements_json_builder import (
 logger = logging.getLogger(__name__)
 
 CHECK_ACTION = "check"
-TERMINAL_CHECK_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_CHECK_STATUSES = frozenset({"completed", "failed", "cancelled"})
 VALID_CHECK_STATUSES = TERMINAL_CHECK_STATUSES | frozenset({"partial", "in_progress", "cancelling"})
 
 

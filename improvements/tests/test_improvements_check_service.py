@@ -126,6 +126,7 @@ def test_invoke_improvements_check_lambda_parses_progress_fields(mock_invoke):
     ("status", "state_data"),
     [
         ("completed", {"classifications": []}),
+        ("cancelled", {"classifications": []}),
         ("partial", {"classifications": []}),
         ("in_progress", None),
         ("failed", None),

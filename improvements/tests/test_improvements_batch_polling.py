@@ -278,6 +278,259 @@ class TestCheckImprovementsBatchesTask:
         run_conversation = ImprovementRunConversation.objects.get(run=run, conversation=conversation)
         assert run_conversation.processing_status == ImprovementConversationProcessingStatus.COMPLETED
 
+    def _seed_soft_cancel_run(self, *, elapsed_hours: int = 7):
+        project = Project.objects.create(name="Soft Cancel Project", timezone="UTC")
+        run = ImprovementAnalysisRun.objects.create(
+            project=project,
+            target_date="2026-05-29",
+            triggered_on_date="2026-05-30",
+            status=ImprovementRunStatus.POLLING,
+            sample_size=1,
+            conversations_total=1,
+            range_start_utc=utc_datetime(2026, 5, 29),
+            range_end_utc=utc_datetime(2026, 5, 29, 23, 59, 59),
+        )
+        registered_at = format_schedule_registered_at(pendulum.now("UTC").subtract(hours=elapsed_hours))
+        save_run_metadata(
+            str(project.uuid),
+            "2026-05-29",
+            [{"batch_id": "b1"}],
+            run_uuid=str(run.uuid),
+        )
+        cache.set(
+            f"improvements:run:{project.uuid}:2026-05-29",
+            {
+                **cache.get(f"improvements:run:{project.uuid}:2026-05-29"),
+                "schedule_registered_at": registered_at,
+            },
+            timeout=604800,
+        )
+        return project, run
+
+    @override_settings(
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT=21600,
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE=80,
+        IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=86400,
+    )
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.mark_cancel_requested")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_soft_cancel_reinvokes_with_cancel_if_incomplete(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_mark_cancel,
+        mock_unregister,
+    ):
+        project, run = self._seed_soft_cancel_run(elapsed_hours=7)
+        mock_invoke.side_effect = [
+            {"status": "partial", "completed": 8, "total": 10, "state_data": {"classifications": []}},
+            {"status": "cancelled", "completed": 8, "total": 10, "state_data": {"classifications": []}},
+        ]
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            result = check_improvements_batches.run(
+                project_uuid=str(project.uuid),
+                target_date="2026-05-29",
+            )
+
+        assert result["status"] == "cancelled"
+        assert result["cancel_if_incomplete"] is True
+        assert mock_invoke.call_count == 2
+        assert mock_invoke.call_args_list[0].args[0].get("cancel_if_incomplete") is None
+        assert mock_invoke.call_args_list[1].args[0]["cancel_if_incomplete"] is True
+        mock_mark_cancel.assert_called_once_with(str(project.uuid), "2026-05-29")
+        mock_unregister.assert_called_once_with(str(project.uuid), "2026-05-29", status="cancelled")
+        run.refresh_from_db()
+        assert run.status == ImprovementRunStatus.COMPLETED
+        assert run.cancel_requested is True
+
+    @override_settings(
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT=21600,
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE=80,
+        IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=86400,
+    )
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.mark_cancel_requested")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_soft_cancel_skipped_when_percentage_below_threshold(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_mark_cancel,
+        mock_unregister,
+    ):
+        project, _run = self._seed_soft_cancel_run(elapsed_hours=7)
+        mock_invoke.return_value = {
+            "status": "partial",
+            "completed": 5,
+            "total": 10,
+            "state_data": {"classifications": []},
+        }
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            result = check_improvements_batches.run(
+                project_uuid=str(project.uuid),
+                target_date="2026-05-29",
+            )
+
+        assert result["status"] == "partial"
+        assert result["cancel_if_incomplete"] is False
+        mock_invoke.assert_called_once()
+        mock_mark_cancel.assert_not_called()
+        mock_unregister.assert_not_called()
+
+    @override_settings(
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT=21600,
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE=80,
+        IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=86400,
+    )
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.mark_cancel_requested")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_soft_cancel_skipped_when_elapsed_below_threshold(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_mark_cancel,
+        mock_unregister,
+    ):
+        project, _run = self._seed_soft_cancel_run(elapsed_hours=1)
+        mock_invoke.return_value = {
+            "status": "partial",
+            "completed": 9,
+            "total": 10,
+            "state_data": {"classifications": []},
+        }
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            result = check_improvements_batches.run(
+                project_uuid=str(project.uuid),
+                target_date="2026-05-29",
+            )
+
+        assert result["status"] == "partial"
+        assert result["cancel_if_incomplete"] is False
+        mock_invoke.assert_called_once()
+        mock_mark_cancel.assert_not_called()
+        mock_unregister.assert_not_called()
+
+    @override_settings(
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT=21600,
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE=80,
+        IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=86400,
+    )
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.mark_cancel_requested")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_soft_cancel_skipped_when_cancel_already_requested(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_mark_cancel,
+        mock_unregister,
+    ):
+        project, run = self._seed_soft_cancel_run(elapsed_hours=7)
+        save_run_metadata(
+            str(project.uuid),
+            "2026-05-29",
+            [{"batch_id": "b1"}],
+            run_uuid=str(run.uuid),
+            cancel_requested=True,
+        )
+        registered_at = format_schedule_registered_at(pendulum.now("UTC").subtract(hours=7))
+        cache.set(
+            f"improvements:run:{project.uuid}:2026-05-29",
+            {
+                **cache.get(f"improvements:run:{project.uuid}:2026-05-29"),
+                "schedule_registered_at": registered_at,
+                "cancel_requested": True,
+            },
+            timeout=604800,
+        )
+        mock_invoke.return_value = {
+            "status": "cancelling",
+            "completed": 9,
+            "total": 10,
+        }
+
+        result = check_improvements_batches.run(
+            project_uuid=str(project.uuid),
+            target_date="2026-05-29",
+        )
+
+        assert result["status"] == "cancelling"
+        assert result["cancel_if_incomplete"] is True
+        mock_invoke.assert_called_once()
+        assert mock_invoke.call_args.args[0]["cancel_if_incomplete"] is True
+        mock_mark_cancel.assert_not_called()
+        mock_unregister.assert_not_called()
+
+    @override_settings(
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_TIME_LIMIT=21600,
+        CHECK_IMPROVEMENTS_BATCHES_SOFT_PERCENTAGE=80,
+        IMPROVEMENTS_BATCH_CHECK_TIMEOUT_SECONDS=86400,
+    )
+    @patch("improvements.tasks.unregister_batch_check_schedule")
+    @patch("improvements.tasks.invoke_improvements_check_lambda")
+    @patch("improvements.tasks.check_state_exists", return_value=False)
+    def test_cancelled_status_persists_backlog_and_completes_run(
+        self,
+        mock_exists,
+        mock_invoke,
+        mock_unregister,
+    ):
+        project = Project.objects.create(name="Cancelled Status Project", timezone="UTC")
+        conversation = Conversation.objects.create(
+            project=project,
+            start_date=utc_datetime(2026, 5, 29, 12),
+            end_date=utc_datetime(2026, 5, 29, 13),
+        )
+        run = ImprovementAnalysisRun.objects.create(
+            project=project,
+            target_date="2026-05-29",
+            triggered_on_date="2026-05-30",
+            status=ImprovementRunStatus.POLLING,
+            sample_size=1,
+            conversations_total=1,
+            range_start_utc=utc_datetime(2026, 5, 29),
+            range_end_utc=utc_datetime(2026, 5, 29, 23, 59, 59),
+        )
+        ImprovementRunConversation.objects.create(
+            run=run,
+            conversation=conversation,
+            processing_status=ImprovementConversationProcessingStatus.PENDING,
+        )
+        state_data = _build_state_data(str(conversation.uuid))
+        save_run_metadata(
+            str(project.uuid),
+            "2026-05-29",
+            [{"batch_id": "b1"}],
+            run_uuid=str(run.uuid),
+        )
+        mock_invoke.return_value = {
+            "status": "cancelled",
+            "completed": 8,
+            "total": 10,
+            "state_data": state_data,
+        }
+
+        with patch("improvements.services.analysis_persistence_service.upload_check_state_to_s3"):
+            result = check_improvements_batches.run(
+                project_uuid=str(project.uuid),
+                target_date="2026-05-29",
+            )
+
+        assert result["status"] == "cancelled"
+        run.refresh_from_db()
+        assert run.status == ImprovementRunStatus.COMPLETED
+        assert ImprovementBacklogItem.objects.filter(run=run).count() == 1
+        mock_unregister.assert_called_once_with(str(project.uuid), "2026-05-29", status="cancelled")
+
 
 @pytest.mark.django_db
 class TestCancelImprovementsBatchesTask:

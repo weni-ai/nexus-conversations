@@ -8,7 +8,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from conversation_ms.api.permissions import ProjectPermission
+from conversation_ms.api.permissions import InternalOrProjectPermission
 from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
@@ -60,7 +60,7 @@ from improvements.tasks import cancel_improvements_batches, start_conversations_
 
 logger = logging.getLogger(__name__)
 
-IMPROVEMENTS_PERMISSION_CLASSES = [ProjectPermission]
+IMPROVEMENTS_PERMISSION_CLASSES = [InternalOrProjectPermission]
 BEARER_JWT_AUTH = ["BearerJWT"]
 
 

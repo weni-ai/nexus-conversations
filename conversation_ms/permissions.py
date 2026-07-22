@@ -147,6 +147,35 @@ def _fallback_local_permission(request, project_uuid: str, method: str) -> bool:
     return False
 
 
+def _bearer_token_from_request(request) -> str | None:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    return auth_header[7:].strip()
+
+
+def _internal_service_team_name(token: str) -> str | None:
+    team_tokens = getattr(settings, "INTERNAL_API_TOKENS", {})
+    for team_name, team_token in team_tokens.items():
+        if token == team_token:
+            return team_name
+    return None
+
+
+def has_internal_service_project_permission(request, project_uuid: str) -> bool:
+    """Allow trusted service-to-service calls using INTERNAL_API_TOKENS."""
+    token = _bearer_token_from_request(request)
+    if not token:
+        return False
+
+    team_name = _internal_service_team_name(token)
+    if team_name is None:
+        return False
+
+    request.project_auth_service_name = team_name
+    return True
+
+
 def has_external_project_permission(request, project_uuid: str, method: str) -> bool:
     token = request.headers.get("Authorization")
     if not token:

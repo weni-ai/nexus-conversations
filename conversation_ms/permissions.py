@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import secrets
 
 import requests
 import sentry_sdk
@@ -135,7 +136,7 @@ def _bearer_token_from_request(request) -> str | None:
 def _internal_service_team_name(token: str) -> str | None:
     team_tokens = getattr(settings, "INTERNAL_API_TOKENS", {})
     for team_name, team_token in team_tokens.items():
-        if token == team_token:
+        if secrets.compare_digest(token, team_token):
             return team_name
     return None
 

@@ -140,6 +140,17 @@ class NexusClient:
         )
         return payload
 
+    def get_ai_resolution_criteria(self, project_uuid: str) -> dict[str, Any]:
+        """
+        GET {NEXUS_API_BASE_URL}/api/{project_uuid}/ai-resolution-criteria/
+        """
+        payload = self._get_json(
+            f"/api/{project_uuid}/ai-resolution-criteria/",
+            log_prefix="NexusClient.get_ai_resolution_criteria",
+            context={"project_uuid": project_uuid},
+        )
+        return payload if isinstance(payload, dict) else {}
+
     def get_collaborative_agents(self, project_uuid: str) -> list[dict[str, Any]]:
         """
         GET {NEXUS_API_BASE_URL}/api/project/{project_uuid}/active-agents/config

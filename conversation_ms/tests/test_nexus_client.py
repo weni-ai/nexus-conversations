@@ -43,6 +43,25 @@ class TestNexusClient:
             timeout=30,
         )
 
+    def test_get_ai_resolution_criteria(self):
+        project_uuid = "017cd5df-cfc8-4d5c-b659-347fe7a4bee9"
+        settings.NEXUS_API_BASE_URL = "https://nexus.example.com"
+        expected = {
+            "base_criteria": [{"id": "base_resolved", "text": "Base resolved rule"}],
+            "custom_criteria": [{"id": "custom-1", "text": "Custom rule"}],
+        }
+        client, mock_auth = _client_with_mock_auth(_mock_response(json_payload=expected))
+
+        result = client.get_ai_resolution_criteria(project_uuid)
+
+        assert result == expected
+        mock_auth.make_request_with_retry.assert_called_once_with(
+            "GET",
+            f"https://nexus.example.com/api/{project_uuid}/ai-resolution-criteria/",
+            params=None,
+            timeout=30,
+        )
+
     def test_get_collaborative_agents(self):
         project_uuid = "3017e915-7986-4aee-8f09-ddbafd36bcdb"
         settings.NEXUS_API_BASE_URL = "https://nexus.example.com"

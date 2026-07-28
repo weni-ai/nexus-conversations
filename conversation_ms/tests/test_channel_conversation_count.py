@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_tz
 from uuid import uuid4
 
@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from conversation_ms.models import Conversation, Project
+from conversation_ms.services.channel_conversation_count import MAX_CHANNEL_COUNT_DAYS
 
 
 @pytest.mark.django_db
@@ -180,17 +181,36 @@ class TestChannelConversationCountView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_rejects_range_over_31_days(self, api_client, auth_headers, project, channel_uuid):
+    def test_rejects_range_over_max_days(self, api_client, auth_headers, project, channel_uuid):
+        start = date(2026, 1, 1)
+        # Inclusive span = MAX + 1 days → must be rejected
+        end = start + timedelta(days=MAX_CHANNEL_COUNT_DAYS)
         response = api_client.get(
             self._url(channel_uuid),
             {
-                "start": "2026-01-01",
-                "end": "2026-02-15",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
                 "project_uuid": str(project.uuid),
             },
             **auth_headers,
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_accepts_range_exactly_max_days(self, api_client, auth_headers, project, channel_uuid):
+        start = date(2026, 1, 1)
+        # Inclusive span = MAX days → allowed
+        end = start + timedelta(days=MAX_CHANNEL_COUNT_DAYS - 1)
+        response = api_client.get(
+            self._url(channel_uuid),
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "project_uuid": str(project.uuid),
+            },
+            **auth_headers,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 0
 
     def test_excludes_conversations_outside_project_day(self, api_client, auth_headers, project, channel_uuid):
         Conversation.objects.create(

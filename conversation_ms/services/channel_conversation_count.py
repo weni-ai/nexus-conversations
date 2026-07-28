@@ -82,7 +82,10 @@ def _resolve_project(channel_uuid: UUID, project_uuid: UUID | None) -> Project:
             channel_uuid=channel_uuid,
             project_uuids=[str(pid) for pid in project_ids],
         )
-    return Project.objects.get(uuid=project_ids[0])
+    project = Project.objects.filter(pk=project_ids[0]).first()
+    if project is None:
+        raise ProjectNotFoundError("Project not found")
+    return project
 
 
 def count_channel_conversations(

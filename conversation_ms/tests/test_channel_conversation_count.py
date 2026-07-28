@@ -193,8 +193,7 @@ class TestChannelConversationCountView:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_excludes_conversations_outside_project_day(self, api_client, auth_headers, project, channel_uuid):
-        # Outside America/Sao_Paulo 2026-07-22 (before 03:00Z)
-        outside = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             channel_uuid=channel_uuid,
             contact_urn="whatsapp:+5511000000000",
@@ -202,7 +201,7 @@ class TestChannelConversationCountView:
             start_date=datetime(2026, 7, 22, 1, 0, 0, tzinfo=dt_tz.utc),
             end_date=datetime(2026, 7, 22, 2, 0, 0, tzinfo=dt_tz.utc),
         )
-        inside = Conversation.objects.create(
+        Conversation.objects.create(
             project=project,
             channel_uuid=channel_uuid,
             contact_urn="whatsapp:+5511111111111",
@@ -210,7 +209,6 @@ class TestChannelConversationCountView:
             start_date=datetime(2026, 7, 22, 10, 0, 0, tzinfo=dt_tz.utc),
             end_date=datetime(2026, 7, 22, 12, 0, 0, tzinfo=dt_tz.utc),
         )
-        assert outside.uuid != inside.uuid
 
         response = api_client.get(
             self._url(channel_uuid),

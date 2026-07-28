@@ -60,7 +60,7 @@ Minimal schema (normative):
 | `event_kind` | `CharField` | `classification` \| `topics` |
 | `created_at` | `DateTimeField` auto | Intent created |
 | `published_at` | `DateTimeField`, nullable | Set when external publish is considered successful |
-| `last_error` | `TextField`, nullable | Last publish failure for this intent (ops); cleared on success |
+| `last_error` | `TextField`, nullable | Last publish failure detail for this event kind (secondary to stage `*_error`; useful when one of two events failed) |
 
 **Constraints:** `UNIQUE (conversation_id, event_kind)`.
 
@@ -108,7 +108,7 @@ topics done/skipped ──► enqueue datalake  # publish topics event (incl. bi
 
 - `resolution ∈ {0,1,3,4}`
 - `close_classify_status ∈ {done, skipped}` with `close_classify_at` set and `pending_at` NULL
-- topics and billing each `pending` or `skipped` (NOT NULL), with matching shapes
+- topics and billing each `pending` or `skipped` (NOT NULL), with matching shapes — billing `skipped` only for business-ineligible payload, never for empty queue URL
 - **datalake always `pending`** at Shape C in v1 (never initialized as `skipped`); both event ats NULL; `close_datalake_pending_at` set
 
 **Shape D — Downstream progress**
@@ -164,12 +164,28 @@ That rule is **application-only** for the close-daily path (Shape C via state ma
 
 - **`claim_classify`**: `SELECT … FOR UPDATE` on the conversation row; succeed only from Shape A (`resolution='2'`, classify status NULL) → Shape B `pending` with `close_classify_pending_at = now()`. Concurrent claims: one wins, the other no-ops or skips enqueue.
 - **Downstream workers**: `select_for_update` before transitioning `pending` → `done`/`skipped`/`failed`; if status already terminal, no-op (idempotent). Leaving `pending` clears `pending_at`.
+- **Attempt heartbeat**: at the start of each worker attempt (including Celery autoretry), while status is still `pending`, refresh `pending_at = now()` under `select_for_update`. This prevents drain from treating in-flight Celery retries as stale.
+- **Duplicate enqueues**: concurrent Celery tasks for the same conversation+stage are possible (classify finish + drain, or double enqueue). Workers MUST no-op safely; contention is acceptable inefficiency, not a correctness bug.
 - **Lambda single-flight** (FR-007): separate from per-row claim — enforced by Celery queue `close_lambda` with **worker concurrency = 1** (classify + topics). Not a Redis lock per conversation for Lambda; serialization is queue-wide.
 - **Selector**: keep existing per-project Redis lock for dispatch/claim batching (does not replace row-level claim).
 
+### Celery retry policy (normative)
+
+Applies to all four stage tasks unless a setting overrides per stage.
+
+| Concern | Rule |
+|---------|------|
+| Status while retrying | Remains `pending` |
+| Who marks `failed` | The **stage task** (or its failure handler), not drain |
+| When to mark `failed` | (1) Celery `max_retries` exhausted on a retryable exception, or (2) non-retryable business/config error on first handling (e.g. empty Billing queue URL after worker starts — may fail immediately without burning all retries) |
+| SIGKILL / hard worker death | Status stays `pending`; no handler runs → **drain stale `pending_at`** recovers |
+| Soft time limit | Prefer catch soft limit, mark `failed` with timeout error when possible; if hard-killed, same as SIGKILL |
+| `pending_at` across Celery retries | **Refreshed** at each attempt start (heartbeat); not left frozen from first claim |
+| Defaults (settings) | `CLOSE_PIPELINE_CELERY_MAX_RETRIES` default **5**; exponential backoff via Celery (`CLOSE_PIPELINE_CELERY_RETRY_BACKOFF` default **true**). `CLOSE_PIPELINE_STALE_PENDING_SECONDS` MUST exceed the worst-case Celery retry window (default suggestion **3600**) so drain and Celery do not race while retries are healthy |
+
 ### Drain eligibility (normative)
 
-Setting: `CLOSE_PIPELINE_STALE_PENDING_SECONDS`.
+Settings: `CLOSE_PIPELINE_STALE_PENDING_SECONDS`, `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` (default **100** per stage per beat tick).
 
 Select stages where `close_classify_status IS NOT NULL` (exclude Shape E) and:
 
@@ -178,6 +194,8 @@ Select stages where `close_classify_status IS NOT NULL` (exclude Shape E) and:
 | `failed` | stage `failed` (reclaim → `pending` + fresh `pending_at`, then enqueue) |
 | stale `pending` | `pending_at < now() - TTL` **and** stage-specific preconditions hold |
 
+Each drain run MUST cap selection at `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage (ordered by oldest `pending_at` / `failed` first).
+
 **Datalake special rule:** do **not** treat datalake as stale-pending solely by age while `close_topics_status ∉ {done, skipped}`. That row may be legitimately waiting for the topics event precondition (classification may already be sent). Re-enqueue/reclaim datalake when:
 
 - status `failed`, or
@@ -185,6 +203,8 @@ Select stages where `close_classify_status IS NOT NULL` (exclude Shape E) and:
 - status `pending` and stale **and** `close_datalake_classification_at` IS NULL (classification still outstanding — age wait is meaningful)
 
 Harmless no-op requeues of “waiting on topics” MUST be avoided by the rule above.
+
+Drain MUST NOT automatically reclaim `skipped`.
 
 ### Backfill
 
@@ -206,21 +226,28 @@ Per-axis graph:
 
 ```text
 NULL → pending → done
-           ├→ skipped
-           └→ failed → pending  (retry)
+           ├→ skipped ⇄ pending   (ops reclaim only; not automatic drain)
+           └→ failed  → pending   (drain / ops reclaim)
 ```
 
-Entering `pending` always sets `pending_at = now()`. Leaving `pending` always clears `pending_at`.
+Entering `pending` always sets `pending_at = now()` (including reclaim and attempt heartbeat). Leaving `pending` always clears `pending_at`.
+
+**Billing init at Shape C (normative):**
+
+- Business-ineligible payload → may init as `skipped`
+- Otherwise → init as `pending` (even if queue URL looks wrong at commit time — worker confirms and marks `failed` if config/infra is bad)
+- Never init billing as `skipped` solely because queue URL is empty
 
 **Retry ownership:**
 
-- Celery may autoretry while the stage remains `pending` (before marking `failed`)
-- `failed → pending` is performed by **drain** (automatic periodic reclaim) before re-enqueue; manual reclaim is allowed but not required for v1
+- Celery may autoretry while the stage remains `pending` (before marking `failed`); see Celery retry policy
+- `failed → pending` is performed by **drain** (automatic) or ops; manual reclaim allowed
+- `skipped → pending` is **ops-only** (state-machine method); drain never selects `skipped`
 
-Key methods: `claim_classify`, `fail_classify`, `commit_classify_success` (atomic Shape B→C; caller enqueues topics + billing + datalake), mark done|skipped|failed for topics (caller re-enqueues datalake on topics `done`/`skipped`), reclaim/mark for billing/datalake.
+Key methods: `claim_classify`, `fail_classify`, `commit_classify_success` (atomic Shape B→C; caller enqueues topics + billing + datalake), mark done|skipped|failed for topics (caller re-enqueues datalake on topics `done`/`skipped`), reclaim (`failed→pending`, and ops `skipped→pending`) / mark for billing/datalake.
 
 ## Relationships
 
 - `ConversationClassification` remains the topics **business** artifact; it does not replace `close_topics_status`.
-- `CloseDatalakeOutbox` supports durable unique intent for datalake event production; not a product stage.
+- `CloseDatalakeOutbox` supports durable unique intent for datalake event production; not a product stage. **Cleanup/archival deferred post-v1** (~2 rows per conversation retained).
 - No archive-style Batch/Record tables required for classify/topics/billing; those stages live on `Conversation`.

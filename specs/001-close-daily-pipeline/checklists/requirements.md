@@ -29,7 +29,7 @@
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] Implementation detail lives primarily in plan.md / data-model.md (spec keeps FRs outcome-focused)
 
-## Locked follow-ups (v1.2.0)
+## Locked follow-ups (v1.2.0 + v1.3.0)
 
 - [x] Topics `skipped` → still publish topics datalake event (bias path); no silent skip-without-publish
 - [x] Stale clock = `close_{stage}_pending_at` + `CLOSE_PIPELINE_STALE_PENDING_SECONDS`
@@ -37,7 +37,12 @@
 - [x] Drain must not stale-spin datalake waiting on topics
 - [x] Datalake never initialized `skipped` at Shape C in v1
 - [x] `CloseDatalakeOutbox` minimal schema locked (conversation_id, event_kind, created_at, published_at, last_error, UNIQUE)
+- [x] Billing business-skip vs infra-fail; ops-only `skipped→pending`
+- [x] Celery retry → failed ownership + pending_at heartbeat
+- [x] Phase 1→2 Shape E gap: tracking-only; prefer same release; no gap backfill in v1
+- [x] Outbox cleanup deferred post-v1
+- [x] Drain batch size default 100
 
 ## Notes
 
-- Decisions locked in Clarifications session 2026-07-28; gaps closed in spec v1.2.0.
+- Decisions locked in Clarifications session 2026-07-28; Graphite review gaps closed in spec v1.2.0 / v1.3.0.

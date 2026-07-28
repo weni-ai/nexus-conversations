@@ -4,10 +4,10 @@
 
 ## For reviewers
 
-1. Read [spec.md](./spec.md) user stories + FR/SC + clarifications (DAG, pending_at, topics skipped → bias publish, outbox residual).
-2. Read [data-model.md](./data-model.md) shapes, outbox schema, drain eligibility.
+1. Read [spec.md](./spec.md) user stories + FR/SC + clarifications (DAG, pending_at, billing skipped vs failed, Celery→failed, Phase 1+2 gap).
+2. Read [data-model.md](./data-model.md) shapes, outbox schema, Celery retry policy, drain eligibility.
 3. Read [plan.md](./plan.md) technical approach and touchpoints.
-4. Implementation order: foundation → cutover → drain.
+4. Implementation order: foundation → cutover → drain (prefer same release for foundation+cutover).
 
 ## For implementers
 
@@ -32,8 +32,9 @@ export SPECIFY_FEATURE=001-close-daily-pipeline
 
 ### Drain
 
-- Beat drain + stale pending via `*_pending_at` + metrics/Sentry + selector timeout/lock tuning
+- Beat drain + stale pending via `*_pending_at` + batch size + metrics/Sentry + selector timeout/lock tuning
 - Do not stale-requeue datalake that is only waiting on topics
+- Do not auto-reclaim `skipped`
 
 ## Ops queries (after cutover)
 

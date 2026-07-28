@@ -6,7 +6,7 @@
 
 ## Summary
 
-Replace the monolithic per-project close-daily batch (classify + topics + billing + datalake in one long Celery task with ThreadPool Lambda fan-out) with a **four-stage pipeline** on `Conversation`: classify, topics, billing, datalake. Each stage uses `status` + `*_at` + `*_pending_at` + `*_error`. Datalake adds **per-event sent timestamps** + `CloseDatalakeOutbox` (UNIQUE conversation+event_kind) so retries do not create a second intent. Side-effect DAG: classify → billing and classification-datalake; topics → topics-datalake (publish even when topics is `skipped`, bias path). Mutations go only through `ClosePipelineStateMachine`. DB `CheckConstraint`s make illegal combinations unrepresentable. Classify and topics run on a concurrency-1 Lambda queue. Drain recovers `failed` / stale `pending` via `*_pending_at`, without stale-spinning datalake that is only waiting on topics. Legacy terminal rows are backfilled as all-`done` (*legacy assumed complete*).
+Replace the monolithic per-project close-daily batch (classify + topics + billing + datalake in one long Celery task with ThreadPool Lambda fan-out) with a **four-stage pipeline** tracked on **`ClosePipelineRecord`** (OneToOne → `Conversation`): classify, topics, billing, datalake. Each stage uses `status` + `*_at` + `*_pending_at` + `*_error`. Datalake adds **per-event sent timestamps** + `CloseDatalakeOutbox` (UNIQUE conversation+event_kind). Side-effect DAG: classify → billing and classification-datalake; topics → topics-datalake (publish even when topics is `skipped`, bias path). Mutations go only through `ClosePipelineStateMachine`. DB `CheckConstraint`s on the pipeline record make illegal stage shapes unrepresentable. Classify and topics run on a concurrency-1 Lambda queue. Drain recovers `failed` / stale `pending` via `*_pending_at`, without stale-spinning datalake that is only waiting on topics. Legacy terminal rows get backfilled `ClosePipelineRecord`s as all-`done` (*legacy assumed complete*). `Conversation` stays free of pipeline columns.
 
 ## Technical Context
 
@@ -60,13 +60,13 @@ specs/001-close-daily-pipeline/
 
 ```text
 conversation_ms/
-├── models.py                          # 18 pipeline columns + CheckConstraints + CloseDatalakeOutbox
+├── models.py                          # ClosePipelineRecord + CloseDatalakeOutbox (+ Conversation unchanged for pipeline)
 ├── migrations/00xx_close_pipeline_*.py
 ├── close_daily/
 │   ├── constants.py                   # stage enum, queue names, event kinds, stale TTL / drain batch / celery retry settings
-│   ├── state_machine.py               # NEW (incl. ops skipped→pending reclaim)
+│   ├── state_machine.py               # NEW (mutates ClosePipelineRecord; ops skipped→pending)
 │   ├── metrics.py                     # NEW
-│   ├── drain.py                       # NEW (Phase 3; pending_at + batch size + datalake wait rule)
+│   ├── drain.py                       # NEW (Phase 3; queries ClosePipelineRecord)
 │   ├── runner.py                      # selector-only after cutover
 │   └── stages/                        # NEW workers (Phase 2; datalake respects DAG; Celery retry→failed)
 ├── services/classification_service.py # split resolution vs topics
@@ -82,7 +82,9 @@ nexus_conversations/
 
 | Decision | Why needed |
 |----------|------------|
-| 18 pipeline columns vs JSON blob | Enables CheckConstraints, drain indexes, clear ops queries; pending_at + 2 event ats |
+| `ClosePipelineRecord` 1:1 vs cols on Conversation | Keeps business model lean; same 18 fields on control plane |
+| Rejected: one model per stage | Avoids 4 near-identical schemas |
+| Rejected: normalized stage rows in v1 | Extensibility trade-off deferred |
 | Billing not gated on topics | Avoid recreating Billing lag on topics Lambda failure |
 | Datalake events follow DAG | Classification after classify; topics event after topics done/skipped |
 | Topics skipped still publishes | Parity with today’s bias topics event |
@@ -93,11 +95,11 @@ nexus_conversations/
 | Outbox residual accepted | Honest about publish→mark crash; no sink idempotency in v1 |
 | Outbox cleanup post-v1 | Avoid scope creep; acknowledge growth |
 | Same-release Phase 1+2 preferred | Minimize Shape E tracking gap; gap ≠ lost Billing delivery |
-| Legacy backfill as `done` | Anti-replay for drain; not a send audit |
-| No DB rule `terminal ⇒ stages filled` | Constraints must be static; out-of-band closes stay legal (Shape E) |
+| Legacy backfill inserts records | Anti-replay for drain; not a send audit |
+| No DB rule `terminal ⇒ pipeline row` | Constraints static on pipeline table; Shape E stays legal |
 | Shared `close_lambda` concurrency 1 | Lambda single-flight |
-| `select_for_update` on claim/transition | Prevent double-claim / torn stage updates |
-| `*_pending_at` stale clock | Only honest pending age under shape constraints |
+| `select_for_update` / unique claim | Prevent double-claim / torn stage updates |
+| `{stage}_pending_at` stale clock | Only honest pending age under shape constraints |
 | Drain batch size setting | Bound beat-tick work |
 | Drain skips datalake waiting on topics | Avoid no-op stale requeues |
 | Datalake never skipped at Shape C | Always emit path in v1; no speculative “datalake off” |

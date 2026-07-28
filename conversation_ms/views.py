@@ -74,6 +74,16 @@ logger = logging.getLogger(__name__)
             ),
             required=False,
         ),
+        OpenApiParameter(
+            name="is_amazing",
+            type=bool,
+            location=OpenApiParameter.QUERY,
+            description=(
+                "When true, only conversations marked amazing on the latest improvement run. "
+                "When false, only conversations that are not amazing. Omit for all conversations."
+            ),
+            required=False,
+        ),
     ]
 )
 class ConversationViewSet(viewsets.ReadOnlyModelViewSet):

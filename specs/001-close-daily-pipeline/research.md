@@ -31,11 +31,13 @@ topics ──────► datalake event: topics
 
 **Rationale**: Independent booleans (`billing_sent=true` while In Progress) are the failure mode. Archive already proved the pattern in this codebase (`ArchiveRecordStateMachine`, archive record constraints).
 
-## R4 — Columns on Conversation vs separate CloseRecord
+## R4 — ClosePipelineRecord 1:1 (not columns on Conversation)
 
-**Decision**: Eighteen pipeline columns on `Conversation` (status + at + pending_at + error × 4 stages + two datalake event ats), plus `CloseDatalakeOutbox` with UNIQUE `(conversation_id, event_kind)`. No separate `CloseRecord` lifecycle entity.
+**Decision**: Persist the 18 stage fields on a separate **`ClosePipelineRecord`** (OneToOne → `Conversation`), plus `CloseDatalakeOutbox`. Do **not** add pipeline columns to `Conversation`.
 
-**Rationale**: Close does not delete the conversation row; drain queries stay simple; `pending_at` is the only honest stale clock; outbox is producer machinery for the two datalake events, not a fifth product stage.
+**Rationale**: Keeps `Conversation` as the business entity (`resolution` only). Drain still queries one control-plane table; CheckConstraints stay on that table. Cross-table resolution↔shape rules stay in the state machine (+ tests).
+
+**Alternatives rejected**: 18 columns on `Conversation`; one Django model per stage (schema fan-out); fully normalized stage-row table in v1 (stronger extensibility, more join complexity — revisit post-v1).
 
 ## R5 — Legacy backfill as done
 
@@ -55,17 +57,17 @@ topics ──────► datalake event: topics
 
 **Rationale**: Archive Speckit lives on feature branches; main may not have archive code when close-daily ships.
 
-## R8 — Static CheckConstraints vs “terminal ⇒ stages filled”
+## R8 — Static CheckConstraints vs “terminal ⇒ pipeline row”
 
-**Decision**: Do **not** DB-enforce `resolution ≠ IN_PROGRESS ⇒ stages NOT NULL`. Do enforce shape + precedence constraints that are always true. Infer pipeline membership from `close_classify_status IS NOT NULL`. Allow terminal + all-NULL as out-of-band.
+**Decision**: Do **not** DB-enforce `resolution ≠ IN_PROGRESS ⇒ ClosePipelineRecord exists`. Enforce shape constraints on `ClosePipelineRecord` only. Infer pipeline membership from record existence. Allow terminal conversation without a record (Shape E).
 
-**Rationale**: Django CheckConstraints are not phased by deploy. Forcing terminal⇒stages breaks legitimate out-of-band resolution updates and conflates backfill with runtime. Close-daily still always writes Shape C via the state machine; backfill still marks legacy terminals `done` for anti-replay.
+**Rationale**: Django CheckConstraints are not phased by deploy and cannot cleanly span `Conversation.resolution` + pipeline table without triggers. Close-daily still always writes Shape C via the state machine; backfill still inserts legacy all-`done` records for anti-replay.
 
-**Alternatives rejected**: `pipeline_managed` boolean (extra column, same inference as classify status non-NULL); soft-only constraints with no DB shape checks.
+**Alternatives rejected**: `pipeline_managed` boolean on Conversation; soft-only constraints with no DB shape checks; forcing columns onto Conversation for easier cross-field SQL.
 
 ## R9 — Datalake must not intentionally duplicate
 
-**Decision**: Per-event sent timestamps on `Conversation` **plus** durable outbox UNIQUE `(conversation_id, event_kind)` for `{classification, topics}`. Publish only unpublished outbox rows; project success onto `close_datalake_*_at` and `published_at` together after publish OK. Mark stage `done` when both timestamps are set. Reclaim clears error only.
+**Decision**: Per-event sent timestamps on `ClosePipelineRecord` **plus** durable outbox UNIQUE `(conversation_id, event_kind)` for `{classification, topics}`. Publish only unpublished outbox rows; project success onto `datalake_*_at` and `published_at` together after publish OK. Mark stage `done` when both timestamps are set. Reclaim clears error only.
 
 **Rationale**: Datalake creates real duplicates. Producer-side unique intent is mandatory. UNIQUE closes the “second intent” crash window; it does **not** remove the residual window after external publish succeeds and before DB mark — that residual is accepted (R12).
 
@@ -95,13 +97,13 @@ topics ──────► datalake event: topics
 
 **Rationale**: Matches today’s `_send_datalake_events` behavior (always sends both events; bias when no classification / no active topics). Skipping the Lambda is not the same as omitting analytics.
 
-## R14 — Stale pending clock = `*_pending_at`
+## R14 — Stale pending clock = `{stage}_pending_at`
 
-**Decision**: Per-stage `close_{stage}_pending_at`; set on enter `pending`, cleared on leave. Drain TTL compares against this column only.
+**Decision**: Per-stage `{stage}_pending_at` on `ClosePipelineRecord`; set on enter `pending`, cleared on leave. Drain TTL compares against this column only.
 
-**Rationale**: Conversation `updated_at` moves for unrelated writes; `close_{stage}_at` is NULL while pending by shape rules. A dedicated pending clock keeps constraints honest.
+**Rationale**: Conversation `updated_at` moves for unrelated writes; `{stage}_at` is NULL while pending by shape rules. A dedicated pending clock keeps constraints honest.
 
-**Alternatives rejected**: use `updated_at`; overload `*_at` while pending; Redis-only claim TTL as sole drain clock.
+**Alternatives rejected**: use Conversation `updated_at`; overload `*_at` while pending; Redis-only claim TTL as sole drain clock.
 
 ## R15 — Datalake never skipped at Shape C (v1)
 
@@ -129,7 +131,7 @@ topics ──────► datalake event: topics
 
 ## R19 — Phase 1→2 Shape E gap
 
-**Decision**: Prefer same release train for foundation+cutover. If gap exists: old path still delivers billing/datalake; Shape E is tracking-only; no v1 backfill of gap Shape E into the new pipeline.
+**Decision**: Prefer same release train for foundation+cutover. If gap exists: old path still delivers billing/datalake; Shape E is **no `ClosePipelineRecord`** (tracking-only); no v1 backfill of gap Shape E into the new pipeline.
 
 **Rationale**: Phase 1 explicitly leaves runtime unchanged — delivery is not lost. Inventing a mid-gap dual-write increases cutover risk for little gain.
 

@@ -12,8 +12,6 @@
 
 **Scope**: **nexus-conversations backend only** (no frontend, no Billing service changes, no reconcile against Billing totals).
 
-**Related Jira**: NEXUS-5606 (investigation), NEXUS-5773 / NEXUS-5775 / NEXUS-5774 (implementation stack, 1 task = 1 PR)
-
 **Input**: Restructure the daily conversation close flow so classify (resolution), topics, billing, and datalake are separately tracked stages with durable status, timestamps, and errors; illegal combinations are unrepresentable; Lambda work is single-flight; failures can resume without losing later stages.
 
 ## Context and motivation
@@ -40,19 +38,17 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
 | **Legacy assumed complete** | Backfill for conversations already terminal before this feature: all four stages marked `done` so drain does not replay history (not a verified send audit) |
 | **Drain** | Periodic job that requeues `failed` or stale `pending` stages with valid preconditions |
 
-## Program phases (Graphite / Jira)
+## Program phases
 
-| Phase | Jira | Backend deliverable |
-|-------|------|---------------------|
-| **1 — Foundation** | NEXUS-5773 | 12 stage columns, CheckConstraints, backfill, `ClosePipelineStateMachine`, tests; close runtime unchanged |
-| **2 — Cutover** | NEXUS-5775 | Split classification APIs; four Celery stage tasks; selector claim+enqueue; serial `close_lambda` queue; remove inline ThreadPool path |
-| **3 — Drain & harden** | NEXUS-5774 | Drain beat, stale pending reclaim, metrics/Sentry per stage, selector lock/timeout tuning |
-
-Prerequisite tooling (separate stack base): Speckit on repo (`feat/add-speckit-tooling`).
+| Phase | Backend deliverable |
+|-------|---------------------|
+| **1 — Foundation** | 12 stage columns, CheckConstraints, backfill, `ClosePipelineStateMachine`, tests; close runtime unchanged |
+| **2 — Cutover** | Split classification APIs; four Celery stage workers; selector claim+enqueue; serial `close_lambda` queue; remove inline ThreadPool path |
+| **3 — Drain & harden** | Drain beat, stale pending reclaim, metrics/Sentry per stage, selector lock/timeout tuning |
 
 ## Clarifications (locked)
 
-### Session 2026-07-28 (NEXUS-5606 design)
+### Session 2026-07-28
 
 - Q: Separate Celery stages for classify vs topics? → **A:** Yes — two Lambdas, two stages, equal tracking fidelity.
 - Q: Track only billing/datalake? → **A:** No — all four stages.

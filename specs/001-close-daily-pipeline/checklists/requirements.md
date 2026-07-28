@@ -24,12 +24,11 @@
 
 ## Feature Readiness
 
-- [x] Functional requirements map to acceptance scenarios / Jira criteria
+- [x] Functional requirements map to acceptance scenarios
 - [x] User scenarios cover foundation, cutover, and drain
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] Implementation detail lives primarily in plan.md / data-model.md (spec keeps FRs outcome-focused)
 
 ## Notes
 
-- Spec authored after design + Jira (reverse Speckit order); decisions locked in Clarifications session 2026-07-28.
-- Graphite stack: Speckit tooling → this spec → NEXUS-5773 → NEXUS-5775 → NEXUS-5774.
+- Decisions locked in Clarifications session 2026-07-28.

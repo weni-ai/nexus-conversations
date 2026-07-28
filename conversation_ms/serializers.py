@@ -506,3 +506,37 @@ class ProjectsResolutionSummaryResponseSerializer(serializers.Serializer):
     average_csat = serializers.FloatField(allow_null=True)
     average_nps = serializers.FloatField(allow_null=True)
     projects = ProjectResolutionSummarySerializer(many=True)
+
+
+class ChannelConversationCountQuerySerializer(serializers.Serializer):
+    """Query params for GET ``/api/v1/channels/<uuid>/conversations/count``."""
+
+    start = serializers.DateField()
+    end = serializers.DateField()
+    project_uuid = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        from conversation_ms.services.channel_conversation_count import MAX_CHANNEL_COUNT_DAYS
+        from conversation_ms.services.reconcile_window import calendar_range_day_count
+
+        start = attrs["start"]
+        end = attrs["end"]
+        if end < start:
+            raise serializers.ValidationError({"end": "end must be on or after start"})
+        day_count = calendar_range_day_count(start, end)
+        if day_count > MAX_CHANNEL_COUNT_DAYS:
+            raise serializers.ValidationError(
+                {"end": f"Date range spans {day_count} days; maximum is {MAX_CHANNEL_COUNT_DAYS}"}
+            )
+        return attrs
+
+
+class ChannelConversationCountResponseSerializer(serializers.Serializer):
+    project_uuid = serializers.UUIDField()
+    channel_uuid = serializers.UUIDField()
+    timezone = serializers.CharField()
+    start = serializers.DateField()
+    end = serializers.DateField()
+    start_utc = serializers.CharField()
+    end_utc = serializers.CharField()
+    count = serializers.IntegerField(min_value=0)

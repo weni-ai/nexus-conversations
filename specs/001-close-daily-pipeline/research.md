@@ -105,7 +105,7 @@ topics ──────► datalake event: topics
 
 ## R15 — Datalake never skipped at Shape C (v1)
 
-**Decision**: After classify success, datalake always initializes as `pending`. Topics/billing may init as `skipped`.
+**Decision**: After classify success, datalake always initializes as `pending`. Topics may init as `skipped`. Billing may init as `skipped` only when business-ineligible.
 
 **Rationale**: Close-daily always emits datalake events today; there is no project “datalake off” switch in scope. A skipped datalake init path would be speculative and confuse ops.
 
@@ -114,3 +114,27 @@ topics ──────► datalake event: topics
 **Decision**: Datalake `pending` is not stale-eligible solely by age while topics ∉ `{done, skipped}`.
 
 **Rationale**: After classification is sent, datalake legitimately waits for topics to finish before the topics event. Age-based requeue would only produce no-ops and noise.
+
+## R17 — Billing skipped vs failed
+
+**Decision**: Business-ineligible payload → `skipped`. Empty/missing queue URL and transport failures → `failed` (drain-recoverable). Ops-only `skipped → pending` exists; drain never auto-reclaims `skipped`.
+
+**Rationale**: Using `skipped` for deploy misconfig permanently loses billing (no automatic path back). Failing classify for Billing config would couple resolution to Billing infra wrongly.
+
+## R18 — Celery pending → failed ownership
+
+**Decision**: Stage task marks `failed` after `max_retries` or non-retryable error; heartbeat refreshes `pending_at` each attempt; SIGKILL → drain stale path. Defaults: max_retries=5, stale TTL ≥ retry window (suggest 3600s).
+
+**Rationale**: Removes ambiguity between Celery autoretry and drain reclaim; prevents double-queue while retries are healthy.
+
+## R19 — Phase 1→2 Shape E gap
+
+**Decision**: Prefer same release train for foundation+cutover. If gap exists: old path still delivers billing/datalake; Shape E is tracking-only; no v1 backfill of gap Shape E into the new pipeline.
+
+**Rationale**: Phase 1 explicitly leaves runtime unchanged — delivery is not lost. Inventing a mid-gap dual-write increases cutover risk for little gain.
+
+## R20 — Outbox growth deferred
+
+**Decision**: No cleanup/archival in v1; document post-v1 follow-up.
+
+**Rationale**: Correctness first; ~2 rows/conversation is acceptable until volume justifies a retention job.

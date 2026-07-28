@@ -6,30 +6,29 @@
 
 1. Read [spec.md](./spec.md) user stories + FR/SC.
 2. Read [data-model.md](./data-model.md) shapes and constraints.
-3. Read [plan.md](./plan.md) PR mapping to NEXUS-5773 / 5775 / 5774.
-4. Implementation order is Graphite stack: foundation → cutover → drain.
+3. Read [plan.md](./plan.md) technical approach and touchpoints.
+4. Implementation order: foundation → cutover → drain.
 
-## For implementers (after Speckit tooling is on the branch)
+## For implementers
 
 ```bash
-# From nexus-conversations, on the implementation branch for the current Jira
+# From nexus-conversations
 export SPECIFY_FEATURE=001-close-daily-pipeline
-# Implement only the current Jira scope; do not cut over runtime in NEXUS-5773
 ```
 
-### NEXUS-5773 (foundation)
+### Foundation
 
 - Add columns + migration + backfill + constraints
 - Implement `ClosePipelineStateMachine`
 - Tests only — do not change close-daily runtime behavior
 
-### NEXUS-5775 (cutover)
+### Cutover
 
 - Split `ClassificationService`
-- Add four Celery stage tasks + selector claim/enqueue
-- Remove ThreadPool inline classify/billing/datalake path in the same PR
+- Add four Celery stage workers + selector claim/enqueue
+- Remove ThreadPool inline classify/billing/datalake path in the same change set
 
-### NEXUS-5774 (drain)
+### Drain
 
 - Beat drain + stale pending + metrics/Sentry + selector timeout/lock tuning
 

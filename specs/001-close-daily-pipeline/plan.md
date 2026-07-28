@@ -4,8 +4,6 @@
 
 **Input**: Feature specification from `specs/001-close-daily-pipeline/spec.md`
 
-**Jira stack (1 task = 1 PR)**: NEXUS-5773 → NEXUS-5775 → NEXUS-5774
-
 ## Summary
 
 Replace the monolithic per-project close-daily batch (classify + topics + billing + datalake in one long Celery task with ThreadPool Lambda fan-out) with a **four-stage pipeline** on `Conversation`: classify, topics, billing, datalake. Each stage has `status` + `*_at` + `*_error`. Mutations go only through `ClosePipelineStateMachine`. DB `CheckConstraint`s make illegal combinations unrepresentable. Classify and topics run on a concurrency-1 Lambda queue; billing and datalake are independent after classify and do not wait on topics. Drain recovers `failed` / stale `pending`. Legacy terminal rows are backfilled as all-`done` (*legacy assumed complete*).
@@ -78,14 +76,6 @@ nexus_conversations/
 ├── settings.py                        # CLOSE_PIPELINE_*
 └── celery.py                          # beat + routes
 ```
-
-## Implementation phases → PRs
-
-| PR / Jira | Deliverable |
-|-----------|-------------|
-| NEXUS-5773 | Columns, constraints, backfill, state machine, tests — **no runtime cutover** |
-| NEXUS-5775 | Service split, four stage tasks, selector cutover, remove ThreadPool inline path, queues |
-| NEXUS-5774 | Drain, stale reclaim, metrics/Sentry hardening, selector TTL/timeouts |
 
 ## Complexity Tracking
 

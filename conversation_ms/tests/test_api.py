@@ -444,6 +444,10 @@ class TestConversationEndpoint:
         assert response.data["is_amazing"] is True
 
     def test_filter_conversations_by_is_amazing(self, api_client, project, auth_headers):
+        EXPECTED_TOTAL_CONVERSATIONS = 3
+        EXPECTED_AMAZING_CONVERSATIONS = 1
+        EXPECTED_NOT_AMAZING_CONVERSATIONS = 2
+
         amazing = Conversation.objects.create(project=project, resolution="0")
         not_amazing = Conversation.objects.create(project=project, resolution="0")
         without_run = Conversation.objects.create(project=project, resolution="0")
@@ -468,7 +472,7 @@ class TestConversationEndpoint:
 
         all_response = api_client.get(url, **auth_headers)
         assert all_response.status_code == status.HTTP_200_OK
-        assert all_response.data["total_count"] == 3
+        assert all_response.data["total_count"] == EXPECTED_TOTAL_CONVERSATIONS
         assert {item["uuid"] for item in all_response.data["results"]} == {
             str(amazing.uuid),
             str(not_amazing.uuid),
@@ -477,13 +481,13 @@ class TestConversationEndpoint:
 
         amazing_response = api_client.get(url, {"is_amazing": "true"}, **auth_headers)
         assert amazing_response.status_code == status.HTTP_200_OK
-        assert amazing_response.data["total_count"] == 1
+        assert amazing_response.data["total_count"] == EXPECTED_AMAZING_CONVERSATIONS
         assert amazing_response.data["results"][0]["uuid"] == str(amazing.uuid)
         assert amazing_response.data["results"][0]["is_amazing"] is True
 
         not_amazing_response = api_client.get(url, {"is_amazing": "false"}, **auth_headers)
         assert not_amazing_response.status_code == status.HTTP_200_OK
-        assert not_amazing_response.data["total_count"] == 2
+        assert not_amazing_response.data["total_count"] == EXPECTED_NOT_AMAZING_CONVERSATIONS
         assert {item["uuid"] for item in not_amazing_response.data["results"]} == {
             str(not_amazing.uuid),
             str(without_run.uuid),

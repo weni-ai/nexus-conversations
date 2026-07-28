@@ -21,6 +21,8 @@ from conversation_ms.mixins import JWTModuleMixin
 from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
 from conversation_ms.serializers import (
+    ChannelConversationCountQuerySerializer,
+    ChannelConversationCountResponseSerializer,
     ConversationDetailSerializer,
     ConversationExportCsvRequestSerializer,
     ConversationListCursorResponseSerializer,
@@ -482,5 +484,76 @@ class ProjectsResolutionSummaryView(APIView):
             end_date=ser.validated_data.get("end_date"),
         )
         response_ser = ProjectsResolutionSummaryResponseSerializer(data=payload)
+        response_ser.is_valid(raise_exception=True)
+        return Response(response_ser.data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    summary="Count finalized conversations for a channel",
+    description=(
+        "Internal endpoint for Billing reconciliation. Returns how many finalized "
+        "conversations exist for a channel in a project calendar date range. "
+        "Dates are interpreted in the project's timezone. "
+        "``project_uuid`` is optional; when omitted and the channel maps to more than "
+        "one project, returns 409."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="channel_uuid",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Channel UUID",
+        ),
+        OpenApiParameter(name="start", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(name="end", type=str, location=OpenApiParameter.QUERY, required=True),
+        OpenApiParameter(
+            name="project_uuid",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Optional project scope. Preferred when known.",
+        ),
+    ],
+    responses={200: ChannelConversationCountResponseSerializer},
+)
+class ChannelConversationCountView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, channel_uuid):
+        from conversation_ms.services.channel_conversation_count import (
+            AmbiguousChannelProjectError,
+            ChannelProjectNotFoundError,
+            ProjectNotFoundError,
+            count_channel_conversations,
+        )
+
+        ser = ChannelConversationCountQuerySerializer(data=request.query_params)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+
+        try:
+            result = count_channel_conversations(
+                channel_uuid=channel_uuid,
+                start=data["start"],
+                end=data["end"],
+                project_uuid=data.get("project_uuid"),
+            )
+        except ProjectNotFoundError:
+            raise NotFound(detail="Project not found") from None
+        except ChannelProjectNotFoundError:
+            raise NotFound(detail="channel_uuid has no projects") from None
+        except AmbiguousChannelProjectError as exc:
+            return Response(
+                {
+                    "error": "ambiguous_channel_project",
+                    "detail": str(exc),
+                    "channel_uuid": str(exc.channel_uuid),
+                    "project_uuids": exc.project_uuids,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        response_ser = ChannelConversationCountResponseSerializer(data=result.to_dict())
         response_ser.is_valid(raise_exception=True)
         return Response(response_ser.data, status=status.HTTP_200_OK)

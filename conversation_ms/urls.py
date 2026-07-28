@@ -1,6 +1,7 @@
 from django.urls import path
 
 from conversation_ms.views import (
+    ChannelConversationCountView,
     ConversationExportCsvView,
     ConversationViewSet,
     ExternalConversationWindowView,
@@ -12,6 +13,11 @@ conversation_list = ConversationViewSet.as_view({"get": "list"})
 conversation_detail = ConversationViewSet.as_view({"get": "retrieve"})
 
 urlpatterns = [
+    path(
+        "channels/<uuid:channel_uuid>/conversations/count",
+        ChannelConversationCountView.as_view(),
+        name="channel-conversations-count",
+    ),
     path(
         "projects/resolution-summary/",
         ProjectsResolutionSummaryView.as_view(),

@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Spec version**: 1.2.0
+**Spec version**: 1.3.0
 
 **Related artifacts**: [plan.md](./plan.md), [tasks.md](./tasks.md), [research.md](./research.md), [data-model.md](./data-model.md), [quickstart.md](./quickstart.md)
 
@@ -70,7 +70,12 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
 - Q: Datalake duplicates on retry? → **A:** **Not acceptable** as an operating mode — datalake does not dedupe. Use per-event tracking + unique outbox. A residual crash window (publish succeeded, mark published failed) may still produce one duplicate — accepted and documented (same class of residual as Billing); no sink idempotency key in v1.
 - Q: Topics stage `skipped` → datalake topics event? → **A:** Still **publish** the topics event (parity with today: `build_topics_event` with `bias` / empty topic metadata when no classification or no active topics). Do **not** omit the event and do **not** set `close_datalake_topics_at` without publishing. Only `topics=failed` (or still `pending`) blocks the topics event.
 - Q: Stale `pending` clock? → **A:** Dedicated `close_{stage}_pending_at` per stage; set on enter `pending`, cleared on leave. Drain uses `pending_at < now() - CLOSE_PIPELINE_STALE_PENDING_SECONDS`. Do **not** use Conversation `updated_at` or `close_{stage}_at` (null while pending).
-- Q: Datalake initialized `skipped` at Shape C? → **A:** **No** in v1 — datalake always starts `pending` after classify success. Topics/billing may still init as `skipped`. Datalake `skipped` is not used on the close-daily path in v1.
+- Q: Datalake initialized `skipped` at Shape C? → **A:** **No** in v1 — datalake always starts `pending` after classify success. Topics may init as `skipped`. Billing init rules below. Datalake `skipped` is not used on the close-daily path in v1.
+- Q: Billing `skipped` vs `failed` at init? → **A:** **Business ineligible** (conversation cannot form a valid Billing payload) → init/mark `skipped` (intentional, no automatic retry). **Infra/config** (empty/missing Billing queue URL, publish transport errors after Celery retries) → `failed` so drain retries after the config is fixed. Never use `skipped` for “queue URL missing during deploy”.
+- Q: `skipped → pending`? → **A:** Allowed as **ops reclaim only** (state-machine method) for topics/billing/datalake — not automatic drain. Classify `skipped` stays terminal unless an explicit ops path is added later.
+- Q: When does `pending` become `failed`? → **A:** The stage worker marks `failed` when Celery `max_retries` is exhausted or the error is non-retryable. SIGKILL / hard kill leaves `pending` → drain stale path. See data-model “Celery retry policy”.
+- Q: Phase 1→2 deploy gap / Shape E? → **A:** Preferred: ship foundation+cutover in the **same release train** (minimal or zero gap). If Phase 1 lands alone, old runtime still sends billing/datalake — Shape E means **missing stage tracking only**, not lost Billing delivery. Gap Shape E backfill into the new pipeline is **out of scope** for v1.
+- Q: Outbox table growth? → **A:** Cleanup/archival **deferred post-v1**; accepted unbounded growth at ~2 rows/conversation until then.
 - Q: Extensibility? → **A:** New stage = copy columns + constraints + state-machine methods + worker + drain branch + enqueue edge.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -87,7 +92,7 @@ As an **engineer / on-call**, for any conversation that entered the close pipeli
 
 1. **Given** an open conversation not yet claimed, **When** inspected, **Then** all stage statuses are `NULL` and resolution is In Progress.
 2. **Given** classify is `pending`, **When** inspected, **Then** topics/billing/datalake remain `NULL`, classify `pending_at` is set, and resolution is still In Progress.
-3. **Given** classify commits successfully, **When** transaction completes, **Then** resolution is terminal, classify is `done` or `skipped` with `*_at` set and `pending_at` NULL, topics/billing are each `pending` or `skipped` (never `NULL`), and datalake is `pending` with both event ats NULL.
+3. **Given** classify commits successfully, **When** transaction completes, **Then** resolution is terminal, classify is `done` or `skipped` with `*_at` set and `pending_at` NULL, topics is `pending` or `skipped`, billing is `pending` or `skipped` (business-ineligible only — never `skipped` for missing queue URL), and datalake is `pending` with both event ats NULL.
 4. **Given** an attempt to mark billing `done` while classify is not finished, **When** persisted, **Then** rejected (application and/or DB).
 5. **Given** a pre-feature terminal conversation, **When** backfill runs, **Then** all four stages are `done` with `*_at` set, `pending_at` NULL, and empty errors (legacy assumed complete; drain will not replay).
 6. **Given** a terminal conversation with all stages `NULL` (out-of-band), **When** drain runs, **Then** it is not selected as incomplete pipeline work.
@@ -109,9 +114,10 @@ As the **platform**, after classify succeeds, topics and billing run as separate
 3. **Given** topics Lambda fails, **When** topics is marked `failed`, **Then** billing can still complete and the classification datalake event can still be sent; the topics datalake event must not be sent until topics is `done` or `skipped`.
 4. **Given** topics is `skipped` (no messages / no active topics), **When** datalake runs, **Then** it publishes the topics event via the existing bias/empty-metadata builder, sets `close_datalake_topics_at`, and does not invent a silent skip-without-publish.
 5. **Given** billing publish succeeds, **When** marked `done`, **Then** `close_billing_at` is set, `pending_at` is NULL, error is empty; retries are no-ops.
-6. **Given** classify and topics share the Lambda queue, **When** workers run, **Then** concurrency does not exceed the configured single-flight limit (no ThreadPool Lambda fan-out).
-7. **Given** datalake classification event was recorded sent then the worker crashed, **When** datalake retries (and topics is finished), **Then** only the topics event is enqueued and classification is not sent again.
-8. **Given** topics finishes `done`/`skipped` while classification datalake was already sent, **When** datalake runs, **Then** the topics event is handled (publish) and stage becomes `done` when both timestamps exist.
+6. **Given** Billing queue URL is empty/misconfigured, **When** the billing worker finishes retries, **Then** billing is `failed` (not `skipped`) with an error; after config fix, drain reclaims to `pending` and billing can complete.
+7. **Given** classify and topics share the Lambda queue, **When** workers run, **Then** concurrency does not exceed the configured single-flight limit (no ThreadPool Lambda fan-out).
+8. **Given** datalake classification event was recorded sent then the worker crashed, **When** datalake retries (and topics is finished), **Then** only the topics event is enqueued and classification is not sent again.
+9. **Given** topics finishes `done`/`skipped` while classification datalake was already sent, **When** datalake runs, **Then** the topics event is handled (publish) and stage becomes `done` when both timestamps exist.
 
 ---
 
@@ -137,13 +143,15 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 
 - Chat room short-circuit: classify finishes without resolution Lambda (`done`, resolution Has Chat Room); topics/billing initialized per skip/pending rules; datalake always `pending` in the same commit.
 - No messages: `commit_classify_success` with resolution Unclassified (`3`), classify `done`; topics `skipped`; billing `pending` or `skipped` from payload/config rules; datalake `pending` — classification event still published; topics event still published via bias path after topics `skipped`.
-- Missing Billing payload fields or empty queue URL: billing stage `skipped` with `*_at`, not silent log-only drop.
+- Conversation business-ineligible for Billing (cannot build a valid payload): billing `skipped` with `*_at` — intentional; not automatic drain. Ops may `skipped → pending` via state machine if the skip was wrong.
+- Empty/missing Billing queue URL or transport failure after Celery retries: billing `failed` with error — **not** `skipped`. Drain recovers after config fix. Do not fail the whole classify stage for Billing config errors.
 - No active topics for project: topics `skipped`; datalake topics event still published (bias path), same as today.
 - Crash after Billing SQS accept but before mark `done`: residual race may cause a second publish; Billing upsert absorbs it as last-resort. Design goal: mark `done` immediately after successful publish under `select_for_update`; `done`/`skipped` are hard no-ops.
 - Datalake outbox residual: publish succeeded then crash before `published_at` / conversation event-at persist — retry may republish once. UNIQUE outbox prevents a second *intent row*; it does not eliminate that residual. Accepted in v1; no datalake sink idempotency key required.
 - Transient infra errors on classify: remain In Progress with classify `failed` or retryable `pending`; deterministic business unclassified outcomes commit terminal resolution.
 - Concurrent classify claim on the same conversation: row-level `select_for_update` in `claim_classify` — only one transition Shape A→B succeeds.
 - Terminal `resolution` set outside close-daily (admin/hotfix): stages may remain all `NULL` (out-of-band). DB allows it; drain ignores it; close-daily must not create this shape.
+- Phase 1 merged without Phase 2: new closes via old path leave Shape E (NULL stages). Billing/datalake still run on the old path — tracking gap only. Prefer same-release cutover.
 
 ## Requirements *(mandatory)*
 
@@ -156,10 +164,12 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - **FR-005**: System MUST follow the side-effect DAG: billing and the `conversation_classification` datalake event require classify finished only; the `topics` datalake event requires topics ∈ `{done, skipped}`. Topics failure MUST NOT block billing or the classification datalake event.
 - **FR-006**: System MUST run classify and topics as separate units of work on the close path (topics MUST NOT be hidden inside the classify worker).
 - **FR-007**: System MUST serialize Lambda-bound close work via a dedicated Celery queue with concurrency 1 for classify+topics (no ThreadPool Lambda fan-out). Per-conversation double-claim MUST be prevented with `select_for_update` on claim/transition (see data-model.md).
-- **FR-008**: System MUST allow resume/retry of `pending` and `failed` stages without re-running finished stages. Celery may autoretry while `pending`; drain performs `failed → pending` reclaim and re-enqueue.
+- **FR-008**: System MUST allow resume/retry of `pending` and `failed` stages without re-running finished stages. Celery may autoretry while status remains `pending`; the worker MUST mark `failed` when retries are exhausted or the error is non-retryable (see data-model Celery retry policy). Drain performs `failed → pending` reclaim and re-enqueues stale `pending`. SIGKILL leaves `pending` for drain.
+- **FR-017**: Billing MUST distinguish intentional `skipped` (business-ineligible payload) from recoverable `failed` (missing queue URL / transport). Config/infra MUST NOT initialize billing as `skipped`.
+- **FR-018**: State machine MUST support ops-only `skipped → pending` reclaim for topics, billing, and datalake. Automatic drain MUST NOT reclaim `skipped`.
 - **FR-009**: System MUST record billing delivery on Conversations (`close_billing_status` / `*_at`) and MUST NOT re-publish when status is already `done` or `skipped`. Billing’s upsert behavior is a **consumer safety net only** — Conversations MUST NOT treat duplicate publish as a normal recovery strategy.
 - **FR-010**: System MUST backfill pre-existing terminal conversations as legacy assumed complete (all stages `done`) so automatic recovery does not mass-replay history.
-- **FR-011**: System MUST provide periodic drain/reclaim for stuck or failed stages after cutover. Stale `pending` MUST be detected via `close_{stage}_pending_at` age against `CLOSE_PIPELINE_STALE_PENDING_SECONDS`. Drain MUST NOT treat datalake as stale solely by age while topics ∉ `{done, skipped}` (waiting on topics event precondition).
+- **FR-011**: System MUST provide periodic drain/reclaim for stuck or failed stages after cutover. Stale `pending` MUST be detected via `close_{stage}_pending_at` age against `CLOSE_PIPELINE_STALE_PENDING_SECONDS`. Drain MUST process at most `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` conversations per stage per run (default **100**). Drain MUST NOT treat datalake as stale solely by age while topics ∉ `{done, skipped}` (waiting on topics event precondition).
 - **FR-012**: System MUST emit enough structured observability to identify stage, conversation, project, and failure reason.
 - **FR-013**: Adding a future fifth stage MUST follow the same status/at/error/pending_at + transition + worker + drain pattern without a new control-plane design.
 - **FR-014**: System MUST NOT intentionally produce duplicate datalake events. Implementation MUST use per-event sent timestamps plus durable unique outbox `(conversation_id, event_kind)`. Residual single duplicate from publish-then-crash-before-mark is accepted and MUST be documented; sink idempotency keys are out of scope for v1.
@@ -190,6 +200,8 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - **SC-009**: After classify success with topics still `pending`, datalake may record `close_datalake_classification_at` while leaving the stage `pending` until topics finishes and the topics event is published.
 - **SC-010**: Topics `skipped` results in a published topics datalake event (bias path) and `close_datalake_topics_at` set — not a silent skip-without-publish.
 - **SC-011**: Drain does not select datalake as stale-pending while topics ∉ `{done, skipped}`.
+- **SC-012**: Empty Billing queue URL results in billing `failed` (drain-recoverable), not `skipped`.
+- **SC-013**: After Celery `max_retries` on a retryable error, the stage is `failed` with error and `pending_at` NULL.
 
 ## Assumptions
 
@@ -197,9 +209,12 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - Stage separation and durable status exist to handle edge cases maturely (resume the unfinished stage; never “just run everything again”).
 - Billing **can** upsert if it receives a duplicate close message; Conversations still MUST avoid producing duplicates via stage idempotency (`done`/`skipped` ⇒ no-op). Upsert is not the primary recovery mechanism.
 - Datalake does **not** deduplicate; Conversations MUST prevent intentional duplicate production via per-event sent tracking + unique outbox. Residual publish-then-crash window is accepted (documented), analogous to Billing.
+- **Outbox cleanup/archival is deferred to post-v1**; ~2 rows per conversation may accumulate until then.
 - Delay from serial classify/topics is acceptable versus hard-timeout loss; **no numeric throughput SLA** is in scope for v1.
 - Channel conversation count API is Billing’s tool and is not an acceptance gate for this pipeline.
 - Message persist-before-classify and optional `migrate_messages` remain adjacent concerns wired during cutover/harden, not separate tracked stages in v1.
 - Archive/retention Speckit patterns (state machine + constraints) are the reference implementation style; this feature does not depend on archive code being merged to main.
 - Rare admin/hotfix terminal resolution outside close-daily may leave stages `NULL`; that is observable as “not pipeline-managed,” not as drain backlog.
 - Topics datalake “bias” payload for skipped/no-classification cases remains the existing adapter contract (`build_topics_event`).
+- Preferred release: Phase 1 foundation and Phase 2 cutover in the **same deploy train** to minimize Shape E tracking gaps; old path still delivers side effects if a gap exists.
+- Concurrent duplicate Celery enqueues for the same conversation+stage are acceptable; workers no-op under `select_for_update` when already terminal or another attempt owns the transition (may be inefficient, not incorrect).

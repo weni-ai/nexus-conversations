@@ -63,18 +63,18 @@ conversation_ms/
 ├── models.py                          # 18 pipeline columns + CheckConstraints + CloseDatalakeOutbox
 ├── migrations/00xx_close_pipeline_*.py
 ├── close_daily/
-│   ├── constants.py                   # stage enum, queue names, event kinds, stale TTL setting name
-│   ├── state_machine.py               # NEW
+│   ├── constants.py                   # stage enum, queue names, event kinds, stale TTL / drain batch / celery retry settings
+│   ├── state_machine.py               # NEW (incl. ops skipped→pending reclaim)
 │   ├── metrics.py                     # NEW
-│   ├── drain.py                       # NEW (Phase 3; pending_at + datalake wait rule)
+│   ├── drain.py                       # NEW (Phase 3; pending_at + batch size + datalake wait rule)
 │   ├── runner.py                      # selector-only after cutover
-│   └── stages/                        # NEW workers (Phase 2; datalake respects DAG)
+│   └── stages/                        # NEW workers (Phase 2; datalake respects DAG; Celery retry→failed)
 ├── services/classification_service.py # split resolution vs topics
 ├── adapters/data_lake.py              # reuse build_*_event (bias path for skipped topics)
 ├── tasks.py                           # stage tasks + drain
 └── tests/test_close_pipeline_*.py
 nexus_conversations/
-├── settings.py                        # CLOSE_PIPELINE_* incl. STALE_PENDING_SECONDS
+├── settings.py                        # CLOSE_PIPELINE_* incl. STALE_PENDING_SECONDS, DRAIN_BATCH_SIZE, CELERY_MAX_RETRIES
 └── celery.py                          # beat + routes
 ```
 
@@ -86,12 +86,18 @@ nexus_conversations/
 | Billing not gated on topics | Avoid recreating Billing lag on topics Lambda failure |
 | Datalake events follow DAG | Classification after classify; topics event after topics done/skipped |
 | Topics skipped still publishes | Parity with today’s bias topics event |
+| Billing skipped vs failed split | Misconfig must be drain-recoverable; business skip stays intentional |
+| Ops-only skipped→pending | Escape hatch without automatic re-bill of legitimate skips |
+| Celery task owns pending→failed | Clear handoff vs drain; heartbeat avoids stale races |
 | Billing upsert = safety net only | Stage idempotency is the real control; do not design for duplicate publishes |
 | Outbox residual accepted | Honest about publish→mark crash; no sink idempotency in v1 |
+| Outbox cleanup post-v1 | Avoid scope creep; acknowledge growth |
+| Same-release Phase 1+2 preferred | Minimize Shape E tracking gap; gap ≠ lost Billing delivery |
 | Legacy backfill as `done` | Anti-replay for drain; not a send audit |
 | No DB rule `terminal ⇒ stages filled` | Constraints must be static; out-of-band closes stay legal (Shape E) |
 | Shared `close_lambda` concurrency 1 | Lambda single-flight |
 | `select_for_update` on claim/transition | Prevent double-claim / torn stage updates |
 | `*_pending_at` stale clock | Only honest pending age under shape constraints |
+| Drain batch size setting | Bound beat-tick work |
 | Drain skips datalake waiting on topics | Avoid no-op stale requeues |
 | Datalake never skipped at Shape C | Always emit path in v1; no speculative “datalake off” |

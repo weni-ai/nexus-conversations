@@ -32,6 +32,31 @@ class TestImprovementsProjectAuthorization:
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     @patch("conversation_ms.permissions.requests.get")
+    def test_internal_token_can_get_list_without_project_auth(self, mock_get, api_client, project, settings):
+        settings.INTERNAL_API_TOKENS = {"MCP": "internal-service-token"}
+
+        response = api_client.get(
+            self._list_url(project.uuid),
+            HTTP_AUTHORIZATION="Bearer internal-service-token",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_get.assert_not_called()
+
+    @patch("conversation_ms.permissions.requests.get")
+    def test_internal_token_unknown_project_returns_forbidden(self, mock_get, api_client, settings):
+        settings.INTERNAL_API_TOKENS = {"MCP": "internal-service-token"}
+        unknown_uuid = uuid4()
+
+        response = api_client.get(
+            self._list_url(unknown_uuid),
+            HTTP_AUTHORIZATION="Bearer internal-service-token",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_get.assert_not_called()
+
+    @patch("conversation_ms.permissions.requests.get")
     def test_moderator_can_post_run(self, mock_get, api_client, auth_headers, project, settings):
         settings.GET_CONVERSATIONS_SAMPLE_SIZE_LAMBDA_ARN = (
             "arn:aws:lambda:us-east-1:123456789012:function:conversations-count"

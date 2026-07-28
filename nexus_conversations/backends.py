@@ -1,3 +1,5 @@
+import secrets
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
@@ -17,7 +19,8 @@ class InternalTokenBackend(ModelBackend):
         if not internal_tokens or not isinstance(internal_tokens, dict):
             return None
 
-        if username in internal_tokens and internal_tokens[username] == password:
+        expected = internal_tokens.get(username)
+        if expected is not None and password is not None and secrets.compare_digest(expected, password):
             User = get_user_model()
             # Create or get a user for this internal service
             user, created = User.objects.get_or_create(username=username)

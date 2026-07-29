@@ -17,6 +17,8 @@ from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_IMPROVEMENTS_LAMBDA_READ_TIMEOUT_SECONDS = 300
+
 
 def _improvements_run_key(project_uuid: str, target_date: str) -> str:
     return f"{project_uuid}:{target_date}"
@@ -28,7 +30,11 @@ def _redbeat_entry_name(run_key: str) -> str:
 
 def _get_improvements_analysis_lambda_client() -> Any:
     """Lambda client dedicated to improvements analysis/check with a longer read timeout."""
-    read_timeout = getattr(settings, "IMPROVEMENTS_LAMBDA_READ_TIMEOUT_SECONDS", 300)
+    read_timeout = getattr(
+        settings,
+        "IMPROVEMENTS_LAMBDA_READ_TIMEOUT_SECONDS",
+        DEFAULT_IMPROVEMENTS_LAMBDA_READ_TIMEOUT_SECONDS,
+    )
     config = Config(
         read_timeout=read_timeout,
         retries={"max_attempts": 0},

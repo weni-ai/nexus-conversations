@@ -5,12 +5,14 @@ import logging
 from datetime import timedelta
 from typing import Any, BinaryIO
 
+import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from celery.schedules import schedule
 from django.conf import settings
 from redbeat import RedBeatSchedulerEntry
 
-from conversation_ms.adapters.aws import get_boto3_client
+from conversation_ms.adapters.aws import _get_refreshable_session, get_boto3_client
 from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,21 @@ def _improvements_run_key(project_uuid: str, target_date: str) -> str:
 
 def _redbeat_entry_name(run_key: str) -> str:
     return f"improvements-batch-check:{run_key}"
+
+
+def _get_improvements_analysis_lambda_client() -> Any:
+    """Lambda client dedicated to improvements analysis/check with a longer read timeout."""
+    read_timeout = getattr(settings, "IMPROVEMENTS_LAMBDA_READ_TIMEOUT_SECONDS", 300)
+    config = Config(
+        read_timeout=read_timeout,
+        retries={"max_attempts": 0},
+    )
+    region = settings.IMPROVEMENTS_LAMBDA_AWS_REGION
+    role_arn = getattr(settings, "AWS_ASSUME_ROLE_ARN", None)
+    if role_arn:
+        session = _get_refreshable_session(role_arn, region)
+        return session.client("lambda", region_name=region, config=config)
+    return boto3.client("lambda", region_name=region, config=config)
 
 
 class Boto3S3Storage:
@@ -113,7 +130,7 @@ class Boto3ImprovementsLambdaClient:
         if not lambda_name:
             raise ValueError("IMPROVEMENTS_ANALYSIS_LAMBDA_NAME is not configured")
 
-        lambda_client = get_boto3_client("lambda", region_name=settings.IMPROVEMENTS_LAMBDA_AWS_REGION)
+        lambda_client = _get_improvements_analysis_lambda_client()
         response = lambda_client.invoke(
             FunctionName=lambda_name,
             InvocationType="RequestResponse",

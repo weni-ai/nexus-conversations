@@ -127,6 +127,43 @@ class TestCustomAnalysisService:
             }
         ]
 
+    def test_list_custom_analyses_counts_bare_slug_dimension_id(self, project):
+        monitor = ImprovementCustomMonitor.objects.create(
+            project=project,
+            title="Informações da base de conhecimento",
+            slug="informacoes-da-base-de-conhecimento",
+            definition="Definition",
+        )
+        run = ImprovementAnalysisRun.objects.create(
+            project=project,
+            target_date="2026-02-05",
+            triggered_on_date="2026-02-06",
+            status=ImprovementRunStatus.COMPLETED,
+            range_start_utc=utc_datetime(2026, 2, 5),
+            range_end_utc=utc_datetime(2026, 2, 5, 23, 59, 59),
+        )
+        ImprovementBacklogItem.objects.create(
+            project=project,
+            run=run,
+            dimension_id=monitor.slug,
+            item_type=ImprovementItemType.CUSTOM,
+            custom_monitor=monitor,
+            title="Issue",
+            diagnosis="Diagnosis",
+            affected_conversations_count=4,
+            status=ImprovementItemStatus.ACTIVE,
+        )
+
+        result = list_custom_analyses(project)
+
+        assert result == [
+            {
+                "uuid": str(monitor.uuid),
+                "title": "Informações da base de conhecimento",
+                "conversations_count": 4,
+            }
+        ]
+
     def test_update_custom_analysis_regenerates_slug(self, project):
         created = create_custom_analysis(
             project,

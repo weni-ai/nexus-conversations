@@ -38,6 +38,10 @@ def _active_monitors_queryset(project: Project | UUID):
     )
 
 
+def get_active_monitor_slugs(project: Project | UUID) -> frozenset[str]:
+    return frozenset(_active_monitors_queryset(project).values_list("slug", flat=True))
+
+
 def build_monitor_slug(title: str, *, project: Project, exclude_pk: UUID | None = None) -> str:
     base = slugify(title) or f"monitor-{uuid4().hex[:8]}"
     slug = base
@@ -59,7 +63,15 @@ def _annotate_monitors_with_conversations_count(queryset):
                 "backlog_items__affected_conversations_count",
                 filter=Q(
                     backlog_items__status=ImprovementItemStatus.ACTIVE,
-                    backlog_items__dimension_id=Concat(Value(CUSTOM_DIMENSION_PREFIX), F("slug")),
+                )
+                & (
+                    Q(backlog_items__dimension_id=F("slug"))
+                    | Q(
+                        backlog_items__dimension_id=Concat(
+                            Value(CUSTOM_DIMENSION_PREFIX),
+                            F("slug"),
+                        ),
+                    )
                 ),
             ),
             Value(0),

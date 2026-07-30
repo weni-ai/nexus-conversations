@@ -1,3 +1,5 @@
+import secrets
+
 from django.conf import settings
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework import authentication, exceptions
@@ -36,7 +38,7 @@ class InternalTokenAuthentication(authentication.BaseAuthentication):
         team_tokens = getattr(settings, "INTERNAL_API_TOKENS", {})
         if team_tokens:
             for team_name, team_token in team_tokens.items():
-                if token == team_token:
+                if secrets.compare_digest(token, team_token):
                     return (ServiceUser(username=team_name), token)
 
         raise exceptions.AuthenticationFailed("Invalid token")

@@ -395,6 +395,62 @@ class TestImprovementsStateIngestService:
         assert backlog_item.custom_monitor_id == monitor.uuid
         assert backlog_item.item_type == "custom"
 
+    def test_ingest_resolves_custom_monitor_by_bare_slug(self, run, conversation):
+        from improvements.models import ImprovementCustomMonitor
+
+        monitor = ImprovementCustomMonitor.objects.create(
+            project=run.project,
+            title="Informações da base de conhecimento",
+            slug="informacoes-da-base-de-conhecimento",
+            definition="Definition",
+        )
+        state_data = {
+            "classifications": [
+                {
+                    "conversation_uuid": str(conversation.uuid),
+                    "classification": {
+                        "problem_type": "informacoes-da-base-de-conhecimento",
+                        "problem_exists": True,
+                        "confidence": 0.9,
+                        "improvement_analysis": {"target": "none", "details": {}},
+                    },
+                }
+            ],
+            "classification_errors": [],
+            "summaries_by_class": {
+                "informacoes-da-base-de-conhecimento": {
+                    "general_summary": "KB info issues.",
+                    "general_solution": "Review KB.",
+                    "subproblems": [
+                        {
+                            "title": "Informações da base de conhecimento",
+                            "description": "Agent missed KB info.",
+                            "target": "none",
+                            "suggested_change": None,
+                            "details": {},
+                            "conversation_uuids": [str(conversation.uuid)],
+                        }
+                    ],
+                    "conversation_uuids": [str(conversation.uuid)],
+                }
+            },
+            "batch_status_map": {"batch_abc": True},
+        }
+
+        result = ingest_improvements_state_data(
+            run,
+            state_data,
+            check_result={"classified_count": 1, "total": 1},
+        )
+
+        backlog_item = ImprovementBacklogItem.objects.get(
+            run=run,
+            dimension_id="informacoes-da-base-de-conhecimento",
+        )
+        assert result["ingested"] is True
+        assert backlog_item.custom_monitor_id == monitor.uuid
+        assert backlog_item.item_type == "custom"
+
     @patch("improvements.services.improvements_state_ingest_service.sentry_sdk.capture_exception")
     def test_ingest_skips_invalid_conversation_uuid_in_summaries(self, mock_capture_exception, run, conversation):
         invalid_uuid = "a3aef...?"

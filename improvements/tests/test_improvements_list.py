@@ -244,6 +244,55 @@ class TestImprovementsListService:
             }
         ]
 
+    def test_includes_bare_slug_custom_monitor_as_custom_analysis(self, project):
+        from improvements.models import ImprovementCustomMonitor
+
+        run = _create_run(project)
+        ImprovementCustomMonitor.objects.create(
+            project=project,
+            title="Informações da base de conhecimento",
+            slug="informacoes-da-base-de-conhecimento",
+            definition="Definition",
+        )
+        custom_item = ImprovementBacklogItem.objects.create(
+            project=project,
+            run=run,
+            dimension_id="informacoes-da-base-de-conhecimento",
+            item_type=ImprovementItemType.CUSTOM,
+            title="KB info issue",
+            diagnosis="Custom diagnosis",
+            affected_conversations_count=2,
+            status=ImprovementItemStatus.ACTIVE,
+        )
+
+        result = list_project_improvements(project)
+
+        assert result["improvements"] == [
+            {
+                "uuid": str(custom_item.uuid),
+                "text": "KB info issue",
+                "type": "custom_analysis",
+                "conversations_count": 2,
+            }
+        ]
+
+    def test_excludes_bare_slug_when_monitor_not_in_project(self, project):
+        run = _create_run(project)
+        ImprovementBacklogItem.objects.create(
+            project=project,
+            run=run,
+            dimension_id="informacoes-da-base-de-conhecimento",
+            item_type=ImprovementItemType.CUSTOM,
+            title="Orphan custom slug",
+            diagnosis="Custom diagnosis",
+            affected_conversations_count=1,
+            status=ImprovementItemStatus.ACTIVE,
+        )
+
+        result = list_project_improvements(project)
+
+        assert result["improvements"] == []
+
     @freeze_time("2026-06-03T15:00:00Z")
     def test_yesterday_count_uses_cache_on_second_call(self, project):
         yesterday = ProjectDay.for_yesterday(project.timezone)
@@ -266,8 +315,8 @@ class TestImprovementsListService:
         _create_backlog_item(run)
         cache.clear()
 
-        # 1) backlog list  2) current run  3) yesterday count
-        with django_assert_num_queries(3):
+        # 1) custom monitor slugs  2) backlog list  3) current run  4) yesterday count
+        with django_assert_num_queries(4):
             list_project_improvements(project)
 
     def test_does_not_append_amazing_conversation_entry(self, project):

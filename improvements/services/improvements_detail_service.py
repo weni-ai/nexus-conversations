@@ -5,14 +5,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from django.db.models import Q
 from django.utils.dateparse import parse_datetime
 
 from improvements.enums import ImprovementItemStatus
 from improvements.models import ImprovementBacklogItem
+from improvements.services.custom_analysis_service import get_active_monitor_slugs
 from improvements.services.improvements_list_service import (
     CUSTOM_ANALYSIS_TYPE,
-    NATIVE_IMPROVEMENT_TYPES,
+    backlog_visible_dimension_q,
+    is_custom_analysis_dimension,
 )
 from improvements.services.project_customization_service import get_project_customization
 from improvements.utils.time import utc_now
@@ -36,8 +37,11 @@ def _map_item_status(db_status: str) -> str:
     return STATUS_TO_API.get(db_status, "pending")
 
 
-def _map_detail_type(dimension_id: str) -> str:
-    if dimension_id.startswith("custom:"):
+def _map_detail_type(
+    dimension_id: str,
+    custom_slugs: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    if is_custom_analysis_dimension(dimension_id, custom_slugs):
         return CUSTOM_ANALYSIS_TYPE
     return dimension_id
 
@@ -45,15 +49,17 @@ def _map_detail_type(dimension_id: str) -> str:
 def get_backlog_item(
     project_uuid: UUID | str,
     improvement_uuid: UUID | str,
+    *,
+    custom_slugs: frozenset[str] | set[str] | None = None,
 ) -> ImprovementBacklogItem:
+    if custom_slugs is None:
+        custom_slugs = get_active_monitor_slugs(project_uuid)
     item = (
         ImprovementBacklogItem.objects.filter(
             uuid=improvement_uuid,
             project_id=project_uuid,
         )
-        .filter(
-            Q(dimension_id__in=NATIVE_IMPROVEMENT_TYPES) | Q(dimension_id__startswith="custom:"),
-        )
+        .filter(backlog_visible_dimension_q(project_uuid, custom_slugs=custom_slugs))
         .exclude(status=ImprovementItemStatus.SUPERSEDED)
         .first()
     )
@@ -265,14 +271,15 @@ def get_improvement_detail(
     project_uuid: UUID | str,
     improvement_uuid: UUID | str,
 ) -> dict[str, Any]:
-    item = get_backlog_item(project_uuid, improvement_uuid)
+    custom_slugs = get_active_monitor_slugs(project_uuid)
+    item = get_backlog_item(project_uuid, improvement_uuid, custom_slugs=custom_slugs)
     current_instructions = _fetch_current_instructions(project_uuid)
     suggested_solution = item.suggested_solution or {}
 
     return {
         "uuid": str(item.uuid),
         "text": item.title,
-        "type": _map_detail_type(item.dimension_id),
+        "type": _map_detail_type(item.dimension_id, custom_slugs),
         "description": item.diagnosis,
         "suggested_change": _extract_suggested_change(suggested_solution),
         "status": _map_item_status(item.status),

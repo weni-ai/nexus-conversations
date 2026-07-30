@@ -12,6 +12,7 @@ from improvements.enums import (
     PROBLEM_TYPES_EXCLUDED_FROM_BACKLOG,
     ImprovementConversationProcessingStatus,
     ImprovementItemStatus,
+    ImprovementItemType,
     ImprovementRunStatus,
     resolve_item_type,
 )
@@ -22,6 +23,7 @@ from improvements.models import (
     ImprovementCustomMonitor,
     ImprovementRunConversation,
 )
+from improvements.services.improvements_list_service import NATIVE_IMPROVEMENT_TYPES
 from improvements.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -78,9 +80,13 @@ def _normalize_dimension_results(
 
 
 def _resolve_custom_monitor(dimension_id: str, project_id: UUID | str) -> ImprovementCustomMonitor | None:
-    if not dimension_id.startswith("custom:"):
+    if not dimension_id:
         return None
+
     monitor_key = dimension_id.removeprefix("custom:")
+    if dimension_id in NATIVE_IMPROVEMENT_TYPES or monitor_key in NATIVE_IMPROVEMENT_TYPES:
+        return None
+
     base_queryset = ImprovementCustomMonitor.objects.filter(
         project_id=project_id,
         is_active=True,
@@ -167,13 +173,15 @@ def _upsert_backlog_item(
     if not isinstance(affected, list):
         affected = []
 
+    item_type = ImprovementItemType.CUSTOM if custom_monitor is not None else resolve_item_type(dimension_id)
+
     backlog_item, created = ImprovementBacklogItem.objects.get_or_create(
         run=run,
         dimension_id=dimension_id,
         title=title,
         defaults={
             "project_id": run.project_id,
-            "item_type": resolve_item_type(dimension_id),
+            "item_type": item_type,
             "custom_monitor": custom_monitor,
             "diagnosis": str(item.get("diagnosis", "")),
             "suggested_solution": item.get("suggested_solution") or {},

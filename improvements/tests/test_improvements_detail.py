@@ -184,6 +184,41 @@ class TestImprovementsDetailService:
         assert result["type"] == "custom_analysis"
 
     @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_maps_bare_slug_custom_monitor_type(self, mock_customization, project):
+        from improvements.models import ImprovementCustomMonitor
+
+        run = _create_run(project)
+        ImprovementCustomMonitor.objects.create(
+            project=project,
+            title="Informações da base de conhecimento",
+            slug="informacoes-da-base-de-conhecimento",
+            definition="Definition",
+        )
+        item = _create_backlog_item(
+            run,
+            dimension_id="informacoes-da-base-de-conhecimento",
+            title="KB info issue",
+        )
+        mock_customization.return_value = {"instructions": []}
+
+        result = get_improvement_detail(project.uuid, item.uuid)
+
+        assert result["type"] == "custom_analysis"
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
+    def test_bare_slug_not_found_without_project_monitor(self, mock_customization, project):
+        run = _create_run(project)
+        item = _create_backlog_item(
+            run,
+            dimension_id="informacoes-da-base-de-conhecimento",
+            title="Orphan custom slug",
+        )
+        mock_customization.return_value = {"instructions": []}
+
+        with pytest.raises(ImprovementDetailNotFound):
+            get_improvement_detail(project.uuid, item.uuid)
+
+    @patch("improvements.services.improvements_detail_service.get_project_customization")
     def test_remove_instruction_was_changed_when_missing_in_nexus(self, mock_customization, project):
         run = _create_run(project)
         item = _create_backlog_item(
@@ -480,7 +515,7 @@ class TestImprovementsAffectedConversationsService:
                 ],
             )
 
-        with django_assert_num_queries(3):
+        with django_assert_num_queries(4):
             result = list_affected_conversations(
                 project.uuid,
                 item.uuid,

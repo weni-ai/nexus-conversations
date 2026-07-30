@@ -291,10 +291,10 @@ class TestImprovementsJsonBuilder:
             ExpiresIn=7200,
         )
 
-    @patch("improvements.adapters.boto3.get_boto3_client")
-    def test_invoke_conversations_improvements_analysis_lambda(self, mock_get_client):
+    @patch("improvements.adapters.boto3._get_improvements_analysis_lambda_client")
+    def test_invoke_conversations_improvements_analysis_lambda(self, mock_get_lambda_client):
         settings.IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = "conversations_improvements_analisys"
-        mock_lambda = mock_get_client.return_value
+        mock_lambda = mock_get_lambda_client.return_value
         expected = {
             "batches": [
                 {
@@ -336,10 +336,10 @@ class TestImprovementsJsonBuilder:
             Payload=json.dumps(analysis_payload),
         )
 
-    @patch("improvements.adapters.boto3.get_boto3_client")
-    def test_invoke_conversations_improvements_analysis_lambda_parses_body_wrapper(self, mock_get_client):
+    @patch("improvements.adapters.boto3._get_improvements_analysis_lambda_client")
+    def test_invoke_conversations_improvements_analysis_lambda_parses_body_wrapper(self, mock_get_lambda_client):
         settings.IMPROVEMENTS_ANALYSIS_LAMBDA_NAME = "conversations_improvements_analisys"
-        mock_lambda = mock_get_client.return_value
+        mock_lambda = mock_get_lambda_client.return_value
         expected = {
             "batches": [],
             "metadata_passthrough": {"project_uuid": "76396786-80de-4dd1-b65a-31bf006435cc"},

@@ -47,7 +47,8 @@
 - [x] Operational limits locked (retries 3/5, stale 1800s, drain 10m, max reclaim 5)
 - [x] Throughput ops target 12h + capacity formula under concurrency-1
 - [x] No new Argo app for close_lambda concurrency-1
+- [x] Classify `dead` stays In Progress (ops reclaim / out-of-band resolution; no auto-Unclassified)
 
 ## Notes
 
-- Decisions locked in Clarifications sessions 2026-07-28 and **2026-08-04** (Alisson review: dead letter + limits); storage layout includes reclaim_count + `dead` in spec v1.5.0.
+- Decisions locked in Clarifications sessions 2026-07-28 and **2026-08-04** (Alisson review: dead letter + limits); storage layout includes reclaim_count + `dead` in spec v1.5.0; Graphite review edge case (classify-dead / In Progress) documented in **v1.5.1**.

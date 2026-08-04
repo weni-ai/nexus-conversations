@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Spec version**: 1.5.0
+**Spec version**: 1.5.1
 
 **Related artifacts**: [plan.md](./plan.md), [tasks.md](./tasks.md), [research.md](./research.md), [data-model.md](./data-model.md), [quickstart.md](./quickstart.md)
 
@@ -98,6 +98,7 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
   Stale TTL MUST be ≥ Celery retry window for that stage so healthy autoretries are not stealthed by drain.
 - Q: Throughput / volume under concurrency-1? → **A:** Serial `close_lambda` **will** increase wall-clock classify/topics time vs today’s ThreadPool. Ops target: yesterday’s claimed cohort should reach classify finished (or classify `dead`/`failed` terminal for that attempt budget) within **12 hours** of the selector run that claimed it. Formula for capacity review: `eligible_conversations × p95_lambda_seconds / concurrency(1)`. If the target is missed in staging soak, options are (in order): measure and tune timeouts; discuss Lambda concurrency/batch with models; **not** silently raise Celery fan-out without Lambda capacity agreement.
 - Q: Does dead letter change deploy topology? → **A:** No new Argo app. Same Conversations image; optional dedicated celery-worker Deployment for `close_lambda` concurrency 1 remains configuration, not a new product.
+- Q: Classify reaches `dead` while still In Progress? → **A:** **Expected for poison classify.** Conversation remains `resolution = In Progress` indefinitely; automatic drain stops. Recovery is **ops-only**: inspect logs/data, fix root cause, then state-machine `dead → pending` (fresh reclaim budget), **or** an explicit out-of-band resolution update (Shape E). MUST NOT auto-fallback to Unclassified (or any terminal resolution) solely because classify is `dead` — that would mask bugs.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -175,6 +176,7 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - Terminal `resolution` set outside close-daily (admin/hotfix): no `ClosePipelineRecord` (Shape E). Drain ignores; close-daily must not leave this shape after classify on the new path.
 - Phase 1 merged without Phase 2: new closes via old path leave Shape E (no record). Billing/datalake still run on the old path — tracking gap only. Prefer same-release cutover.
 - Poison / permanently failing stage: after Celery retries → `failed`; after drain reclaim budget exhausted → `dead` (no further automatic enqueue). Not an SQS dead-letter queue.
+- **Classify `dead` while In Progress (Shape B):** conversation remains In Progress indefinitely; requires manual ops intervention (inspect logs, fix data, ops reclaim `dead → pending`) or an explicit manual/out-of-band resolution update. No automatic fallback to Unclassified (or any terminal resolution) solely from classify `dead` — avoids masking bugs. Downstream stages stay `NULL` until classify finishes.
 
 ## Requirements *(mandatory)*
 

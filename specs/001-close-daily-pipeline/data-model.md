@@ -23,7 +23,7 @@ This is the durable control plane for classify / topics / billing / datalake. Ke
 
 ### Stage vocabulary
 
-Stored strings: `pending`, `done`, `skipped`, `failed`. Absence of a stage = SQL `NULL` on that stage’s columns (never the string `"null"`).
+Stored strings: `pending`, `done`, `skipped`, `failed`, `dead`. Absence of a stage = SQL `NULL` on that stage’s columns (never the string `"null"`).
 
 | Status | `{stage}_at` (completed) | `{stage}_pending_at` | `{stage}_error` |
 |--------|--------------------------|----------------------|-----------------|
@@ -32,6 +32,7 @@ Stored strings: `pending`, `done`, `skipped`, `failed`. Absence of a stage = SQL
 | `done` | NOT NULL | NULL | NULL |
 | `skipped` | NOT NULL | NULL | NULL |
 | `failed` | NULL | NULL | NOT NULL (non-empty) |
+| `dead` | NULL | NULL | NOT NULL (non-empty) |
 
 ### Columns
 
@@ -44,20 +45,21 @@ For each stage in `{classify, topics, billing, datalake}`:
 | `{stage}_status` | `CharField(max_length=16)`, nullable, choices as above |
 | `{stage}_at` | `DateTimeField`, nullable — set when status becomes `done` or `skipped` |
 | `{stage}_pending_at` | `DateTimeField`, nullable — set when entering `pending`; cleared on leave; **drain stale clock** |
-| `{stage}_error` | `TextField`, nullable |
+| `{stage}_error` | `TextField`, nullable — required non-empty when status is `failed` or `dead` |
+| `{stage}_reclaim_count` | `PositiveIntegerField`, default **0** — incremented on each automatic drain reclaim / stale re-enqueue |
 
-**Datalake event progress** (in addition to the datalake quadruple):
+**Datalake event progress** (in addition to the datalake quintuple):
 
 | Column | Type | Role |
 |--------|------|------|
-| `datalake_classification_at` | `DateTimeField`, nullable | Set **once** when `conversation_classification` publish succeeds and outbox is marked published; never cleared on `failed` |
-| `datalake_topics_at` | `DateTimeField`, nullable | Set **once** when `topics` publish succeeds and outbox is marked published; never cleared on `failed` |
+| `datalake_classification_at` | `DateTimeField`, nullable | Set **once** when `conversation_classification` publish succeeds and outbox is marked published; never cleared on `failed`/`dead` |
+| `datalake_topics_at` | `DateTimeField`, nullable | Set **once** when `topics` publish succeeds and outbox is marked published; never cleared on `failed`/`dead` |
 
 Optional bookkeeping: `created_at`, `updated_at` on the record (not stage clocks).
 
-Total stage fields on `ClosePipelineRecord`: **18** (status + at + pending_at + error × 4 + 2 event ats).
+Total stage fields on `ClosePipelineRecord`: **22** (status + at + pending_at + error + reclaim_count × 4 + 2 event ats).
 
-Unlike billing, datalake has **no** consumer-side upsert safety net — intentional duplicate production is forbidden. Billing still uses producer discipline (`done` ⇒ no-op); Billing upsert is residual only (research R11). Outbox residual: R9 / R12.
+Unlike billing, datalake has **no** consumer-side upsert safety net — intentional duplicate production is forbidden. Billing still uses producer discipline (`done` ⇒ no-op); Billing upsert is residual only (research R11). Outbox residual: R9 / R12. Dead letter: research R21.
 
 ### Entity: CloseDatalakeOutbox
 
@@ -118,7 +120,7 @@ Shapes refer to `(Conversation.resolution, ClosePipelineRecord?)`.
 
 - `resolution = '2'`
 - `ClosePipelineRecord` exists
-- `classify_status ∈ {pending, failed}` with matching at/pending_at/error shape
+- `classify_status ∈ {pending, failed, dead}` with matching at/pending_at/error shape
 - topics/billing/datalake statuses `NULL`; datalake event ats NULL
 
 **Shape C — Classify finished (atomic commit via state machine)**
@@ -132,10 +134,11 @@ Shapes refer to `(Conversation.resolution, ClosePipelineRecord?)`.
 **Shape D — Downstream progress**
 
 - Classify remains finished; record exists
-- Each of topics/billing/datalake independently `pending|done|skipped|failed` with shape rules
+- Each of topics/billing/datalake independently `pending|done|skipped|failed|dead` with shape rules
 - Legal datalake partial: `datalake_classification_at` set, `datalake_topics_at` NULL while topics still open or failed
 - Illegal: publish topics datalake event while `topics_status` ∉ `{done, skipped}`
 - Illegal: set `datalake_topics_at` without successful publish
+- `dead` is terminal for automatic drain (ops may reopen)
 
 **Shape E — Terminal without pipeline (out-of-band)**
 
@@ -153,8 +156,10 @@ Django `CheckConstraint`s on the pipeline table only (static, always on). Cross-
 
 - `done`/`skipped` ⇒ `{stage}_at` NOT NULL and `{stage}_error` IS NULL and `{stage}_pending_at` IS NULL
 - `failed` ⇒ `{stage}_error` NOT NULL and `{stage}_at` IS NULL and `{stage}_pending_at` IS NULL
+- `dead` ⇒ `{stage}_error` NOT NULL and `{stage}_at` IS NULL and `{stage}_pending_at` IS NULL
 - `pending` ⇒ `{stage}_at` IS NULL and `{stage}_error` IS NULL and `{stage}_pending_at` NOT NULL
 - status IS NULL ⇒ `{stage}_at`, `{stage}_pending_at`, and `{stage}_error` all NULL
+- `{stage}_reclaim_count` ≥ 0 always (DB default 0)
 
 **Datalake event ats (additional):**
 
@@ -164,6 +169,7 @@ Django `CheckConstraint`s on the pipeline table only (static, always on). Cross-
 - Constraint: both event ats NOT NULL ⇒ `datalake_status` IN (`done`, `skipped`) AND `datalake_at` NOT NULL
 - `done`/`skipped` ⇒ `datalake_at` NOT NULL, error NULL, pending_at NULL, **both** event ats NOT NULL
 - `failed` ⇒ error NOT NULL, `datalake_at` IS NULL, pending_at NULL; zero or one event at may be set
+- `dead` ⇒ same shape as `failed` for at/pending_at/error; reclaim_count already at/above budget
 
 **Cross-field on the record (always):**
 
@@ -195,18 +201,20 @@ Django `CheckConstraint`s on the pipeline table only (static, always on). Cross-
 | SIGKILL / hard death | Stays `pending` → **drain stale `pending_at`** |
 | Soft time limit | Prefer mark `failed` with timeout when catchable; else same as SIGKILL |
 | `pending_at` across retries | **Refreshed** each attempt (heartbeat) |
-| Defaults | `CLOSE_PIPELINE_CELERY_MAX_RETRIES` default **5**; backoff on; `CLOSE_PIPELINE_STALE_PENDING_SECONDS` default suggestion **3600** (≥ retry window) |
+| Defaults | Classify/topics `max_retries` **3**; billing/datalake `max_retries` **5**; `CLOSE_PIPELINE_STALE_PENDING_SECONDS` **1800** (≥ retry window) |
 
 ### Drain eligibility (normative)
 
-Settings: `CLOSE_PIPELINE_STALE_PENDING_SECONDS`, `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` (default **100** per stage per beat tick).
+Settings: `CLOSE_PIPELINE_STALE_PENDING_SECONDS` (**1800**), `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` (**100**), `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**), Beat every **10 minutes**.
 
 Select from **`ClosePipelineRecord`** (inner join `Conversation` as needed for project filters):
 
 | Case | Eligible when |
 |------|----------------|
-| `failed` | `{stage}_status = failed` → reclaim to `pending` + fresh `pending_at`, enqueue |
-| stale `pending` | `{stage}_pending_at < now() - TTL` **and** stage-specific preconditions hold |
+| `failed` (budget remaining) | `{stage}_status = failed` AND `{stage}_reclaim_count < MAX` → increment reclaim count, reclaim to `pending` + fresh `pending_at`, enqueue |
+| stale `pending` (budget remaining) | `{stage}_pending_at < now() - TTL` **and** stage-specific preconditions hold **and** reclaim_count < MAX → increment reclaim count, re-enqueue (keep `pending`, refresh `pending_at`) |
+| budget exhausted | `{stage}_status ∈ {failed}` OR stale `pending` eligible by age/preconditions, **and** `{stage}_reclaim_count >= MAX` → mark `dead` with error; **do not** enqueue |
+| `dead` | **Never** selected for automatic reclaim |
 
 Cap at `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage per run (oldest `pending_at` / failed first).
 
@@ -216,17 +224,19 @@ Cap at `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage per run (oldest `pending_at` 
 - datalake `pending` and stale **and** topics ∈ `{done, skipped}`, or
 - datalake `pending` and stale **and** `datalake_classification_at` IS NULL
 
-Drain MUST NOT automatically reclaim `skipped`. Drain MUST NOT create records for Shape E.
+(subject to reclaim budget / `dead` rules above)
+
+Drain MUST NOT automatically reclaim `skipped` or `dead`. Drain MUST NOT create records for Shape E.
 
 ### Backfill
 
-For each `Conversation` with `resolution ≠ '2'` and **no** `ClosePipelineRecord`: insert record with all four statuses `done`; set all `{stage}_at` and both datalake event ats to `COALESCE(end_date, created_at, now())`; all `{stage}_pending_at` NULL; all errors NULL (*legacy assumed complete*). No outbox rows required.
+For each `Conversation` with `resolution ≠ '2'` and **no** `ClosePipelineRecord`: insert record with all four statuses `done`; set all `{stage}_at` and both datalake event ats to `COALESCE(end_date, created_at, now())`; all `{stage}_pending_at` NULL; all errors NULL; all `{stage}_reclaim_count = 0` (*legacy assumed complete*). No outbox rows required.
 
 Conversations with `resolution = '2'`: leave without a pipeline record (Shape A).
 
 ### Indexes
 
-On `ClosePipelineRecord`, partial/composite indexes supporting drain per stage where status ∈ `{pending, failed}`, including `{stage}_pending_at`. Join path to `Conversation.project_id` as needed for project-scoped ops.
+On `ClosePipelineRecord`, partial/composite indexes supporting drain per stage where status ∈ `{pending, failed}`, including `{stage}_pending_at` and optionally `{stage}_reclaim_count`. Join path to `Conversation.project_id` as needed for project-scoped ops. Index or filter for ops queries on `{stage}_status = dead`.
 
 ## State machine
 
@@ -239,7 +249,9 @@ Per-axis graph:
 ```text
 NULL → pending → done
            ├→ skipped ⇄ pending   (ops reclaim only; not automatic drain)
-           └→ failed  → pending   (drain / ops reclaim)
+           ├→ failed  → pending   (drain / ops reclaim; increments reclaim_count)
+           └→ failed|stale → dead (drain when reclaim_count would exceed MAX)
+dead → pending                 (ops only; resets reclaim_count to 0)
 ```
 
 Entering `pending` sets `{stage}_pending_at = now()`. Leaving `pending` clears it.
@@ -253,15 +265,16 @@ Entering `pending` sets `{stage}_pending_at = now()`. Leaving `pending` clears i
 **Retry ownership:**
 
 - Celery autoretry while `pending`; see Celery retry policy
-- `failed → pending`: drain (automatic) or ops
-- `skipped → pending`: ops-only; drain never selects `skipped`
+- `failed → pending`: drain (automatic, budget permitting) or ops
+- Exhausted budget → `dead` (automatic drain); no enqueue
+- `skipped → pending` / `dead → pending`: ops-only; drain never selects `skipped` or `dead`
 
-Key methods: `claim_classify` (insert record), `fail_classify`, `commit_classify_success` (atomic Shape B→C on conversation + record; caller enqueues topics + billing + datalake), mark done|skipped|failed for topics (caller re-enqueues datalake on topics finish), reclaim/mark for billing/datalake.
+Key methods: `claim_classify` (insert record), `fail_classify`, `commit_classify_success` (atomic Shape B→C on conversation + record; caller enqueues topics + billing + datalake), mark done|skipped|failed|dead for topics/billing/datalake, reclaim for retry (incl. ops `dead→pending`).
 
 ## Relationships
 
 - `Conversation` — business entity; `resolution` only.
-- `ClosePipelineRecord` — 1:1 close control plane (18 stage fields).
+- `ClosePipelineRecord` — 1:1 close control plane (**22** stage fields).
 - `ConversationClassification` — topics business artifact; does not replace `topics_status`.
 - `CloseDatalakeOutbox` — unique intent for datalake production; not a product stage.
-- Rejected for v1: 18 columns on `Conversation`; one Django model per stage; fully normalized stage-row table (may revisit post-v1 for extensibility).
+- Rejected for v1: 18/22 columns on `Conversation`; one Django model per stage; fully normalized stage-row table (may revisit post-v1 for extensibility); SQS/Celery DLQ as substitute for status `dead`.

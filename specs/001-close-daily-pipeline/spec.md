@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Spec version**: 1.4.0
+**Spec version**: 1.5.0
 
 **Related artifacts**: [plan.md](./plan.md), [tasks.md](./tasks.md), [research.md](./research.md), [data-model.md](./data-model.md), [quickstart.md](./quickstart.md)
 
@@ -31,10 +31,12 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
 | **Resolution** | Business outcome on `Conversation.resolution` (`0` Resolved, `1` Unresolved, `2` In Progress, `3` Unclassified, `4` Has Chat Room) |
 | **ClosePipelineRecord** | 1:1 control-plane row for a conversation in the close pipeline (stage status/at/pending_at/error + datalake event ats). Not columns on `Conversation` |
 | **Close pipeline stage** | One of: classify, topics, billing, datalake |
-| **Stage status** | `NULL` (stage not started on the record) \| `pending` \| `done` \| `skipped` \| `failed` |
+| **Stage status** | `NULL` (stage not started on the record) \| `pending` \| `done` \| `skipped` \| `failed` \| `dead` |
 | **Stage completed-at** | Timestamp set only when status is `done` or `skipped` (`{stage}_at` on `ClosePipelineRecord`) |
 | **Stage pending-at** | Timestamp set only while status is `pending` (`{stage}_pending_at`); drain stale clock |
-| **Stage error** | Non-empty text set only when status is `failed` |
+| **Stage error** | Non-empty text set when status is `failed` or `dead` |
+| **Dead letter (logical)** | Stage status `dead`: automatic drain **stops** reclaiming. Not an SQS/Celery DLQ. Ops may reopen `dead → pending` via state machine only |
+| **Stage reclaim count** | `{stage}_reclaim_count` on `ClosePipelineRecord`; incremented on each automatic drain reclaim; drives transition to `dead` |
 | **Classify** | Resolution path (resolution Lambda or chat-room / no-messages short-circuit) that produces terminal resolution |
 | **Topics** | Separate topics classifier Lambda + `ConversationClassification` persistence |
 | **Billing stage** | Publish conversation-close message to Billing SQS |
@@ -46,9 +48,9 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
 
 | Phase | Backend deliverable |
 |-------|---------------------|
-| **1 — Foundation** | `ClosePipelineRecord` (18 stage fields) + `CloseDatalakeOutbox`, CheckConstraints, backfill, `ClosePipelineStateMachine`, tests; close runtime unchanged |
+| **1 — Foundation** | `ClosePipelineRecord` (stage fields incl. `dead` + reclaim counts) + `CloseDatalakeOutbox`, CheckConstraints, backfill, `ClosePipelineStateMachine`, tests; close runtime unchanged |
 | **2 — Cutover** | Split classification APIs; four Celery stage workers; selector claim+enqueue; serial `close_lambda` queue; remove inline ThreadPool path |
-| **3 — Drain & harden** | Drain beat on `ClosePipelineRecord`, stale pending reclaim via `*_pending_at`, metrics/Sentry per stage, selector lock/timeout tuning |
+| **3 — Drain & harden** | Drain beat on `ClosePipelineRecord`, stale pending reclaim via `*_pending_at`, **dead-letter after max reclaim**, metrics/Sentry per stage, selector lock/timeout tuning |
 
 ## Clarifications (locked)
 
@@ -79,6 +81,23 @@ Design principle: **make unreasonable states invalid** (same spirit as conversat
 - Q: Phase 1→2 deploy gap / Shape E? → **A:** Preferred: ship foundation+cutover in the **same release train**. If Phase 1 lands alone, old runtime still sends billing/datalake — Shape E means **no `ClosePipelineRecord`** (tracking gap only), not lost Billing delivery. Gap backfill into the new pipeline is **out of scope** for v1.
 - Q: Outbox table growth? → **A:** Cleanup/archival **deferred post-v1**; accepted unbounded growth at ~2 rows/conversation until then.
 - Q: Extensibility? → **A:** New stage = add columns on `ClosePipelineRecord` + constraints + state-machine methods + worker + drain branch + enqueue edge (v1). Normalized stage rows may be revisited post-v1.
+
+### Session 2026-08-04
+
+- Q: Dead letter for poison / endless reclaim? → **A:** **Logical dead letter** — stage status `dead` on `ClosePipelineRecord` after automatic reclaim budget is exhausted. **Not** a new SQS/Celery DLQ. Drain MUST NOT reclaim `dead`. Ops-only `dead → pending` (resets reclaim count) via state machine.
+- Q: What increments reclaim budget? → **A:** Each automatic drain action that reclaims `failed → pending` or re-enqueues stale `pending` increments `{stage}_reclaim_count`. When the next reclaim would exceed `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS`, drain marks `dead` (with error) instead of re-enqueueing.
+- Q: Operational limits (Celery / stale / drain)? → **A:** Locked defaults (settings/env, overridable):
+  | Setting | Default |
+  |---------|---------|
+  | Classify/topics Celery `max_retries` | **3** |
+  | Billing/datalake Celery `max_retries` | **5** |
+  | `CLOSE_PIPELINE_STALE_PENDING_SECONDS` | **1800** (30 min) |
+  | Drain Beat interval | **10 min** |
+  | `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` | **5** |
+  | `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` | **100** (unchanged) |
+  Stale TTL MUST be ≥ Celery retry window for that stage so healthy autoretries are not stealthed by drain.
+- Q: Throughput / volume under concurrency-1? → **A:** Serial `close_lambda` **will** increase wall-clock classify/topics time vs today’s ThreadPool. Ops target: yesterday’s claimed cohort should reach classify finished (or classify `dead`/`failed` terminal for that attempt budget) within **12 hours** of the selector run that claimed it. Formula for capacity review: `eligible_conversations × p95_lambda_seconds / concurrency(1)`. If the target is missed in staging soak, options are (in order): measure and tune timeouts; discuss Lambda concurrency/batch with models; **not** silently raise Celery fan-out without Lambda capacity agreement.
+- Q: Does dead letter change deploy topology? → **A:** No new Argo app. Same Conversations image; optional dedicated celery-worker Deployment for `close_lambda` concurrency 1 remains configuration, not a new product.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -125,20 +144,21 @@ As the **platform**, after classify succeeds, topics and billing run as separate
 
 ### User Story 3 — Automatic recovery of stuck stages (Priority: P2, Phase 3)
 
-As the **platform**, abandoned `pending` stages (worker kill) and `failed` stages are reclaimed and requeued by a periodic drain without replaying legacy assumed-complete conversations.
+As the **platform**, abandoned `pending` stages (worker kill) and `failed` stages are reclaimed and requeued by a periodic drain without replaying legacy assumed-complete conversations; poison stages that exhaust reclaim budget become `dead` and stop automatic retry.
 
 **Why this priority**: Completes operational safety after cutover; can ship after Phase 2.
 
-**Independent Test**: Force stale `pending` billing (`pending_at` older than TTL); run drain; assert task requeued and eventually `done` or `failed` with error. Force datalake `pending` waiting on topics; assert drain does **not** treat it as stale.
+**Independent Test**: Force stale `pending` billing (`pending_at` older than TTL); run drain; assert task requeued and eventually `done` or `failed` with error. Force datalake `pending` waiting on topics; assert drain does **not** treat it as stale. Exhaust reclaim budget on a billing `failed` stage; assert status becomes `dead` and further drain runs do not re-enqueue.
 
 **Acceptance Scenarios**:
 
-1. **Given** classify `done` and billing `failed`, **When** drain runs, **Then** billing is reclaimed to `pending` (sets fresh `pending_at`) and requeued.
-2. **Given** stale `pending` older than configured threshold (`pending_at` age), **When** drain runs, **Then** stage is re-enqueued without requiring a manual DB edit.
+1. **Given** classify `done` and billing `failed`, **When** drain runs and reclaim count is below max, **Then** billing is reclaimed to `pending` (sets fresh `pending_at`, increments reclaim count) and requeued.
+2. **Given** stale `pending` older than configured threshold (`pending_at` age) and reclaim count below max, **When** drain runs, **Then** stage is re-enqueued without requiring a manual DB edit.
 3. **Given** datalake `pending` with topics still `pending`/`failed`, **When** drain runs, **Then** datalake is **not** selected as stale solely by age (still waiting on topics precondition for the topics event).
 4. **Given** legacy all-`done` records or conversations with no `ClosePipelineRecord`, **When** drain runs, **Then** they are not selected for replay.
 5. **Given** incomplete pipelines after classify, **When** operators query, **Then** they can list conversations with classify finished and billing not finished via `ClosePipelineRecord`.
-
+6. **Given** a stage at `failed` (or stale `pending`) whose next reclaim would exceed `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS`, **When** drain runs, **Then** the stage becomes `dead` with a non-empty error, is **not** re-enqueued, and subsequent drain runs leave it `dead`.
+7. **Given** a stage in `dead`, **When** ops reclaim via state machine, **Then** status returns to `pending` with reclaim count reset and work may be enqueued again.
 ---
 
 ### Edge Cases
@@ -154,26 +174,30 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - Concurrent classify claim on the same conversation: unique `ClosePipelineRecord` insert / `select_for_update` in `claim_classify` — only one transition Shape A→B succeeds.
 - Terminal `resolution` set outside close-daily (admin/hotfix): no `ClosePipelineRecord` (Shape E). Drain ignores; close-daily must not leave this shape after classify on the new path.
 - Phase 1 merged without Phase 2: new closes via old path leave Shape E (no record). Billing/datalake still run on the old path — tracking gap only. Prefer same-release cutover.
+- Poison / permanently failing stage: after Celery retries → `failed`; after drain reclaim budget exhausted → `dead` (no further automatic enqueue). Not an SQS dead-letter queue.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: System MUST persist independent stage status for classify, topics, billing, and datalake on a **`ClosePipelineRecord`** (OneToOne → `Conversation`) for each conversation that enters the close pipeline. `Conversation` MUST NOT gain these columns.
-- **FR-002**: System MUST persist stage completed-at when status is `done` or `skipped`, MUST persist stage error when status is `failed`, and MUST persist `{stage}_pending_at` when (and only when) status is `pending`, for every stage on `ClosePipelineRecord`.
+- **FR-002**: System MUST persist stage completed-at when status is `done` or `skipped`, MUST persist stage error when status is `failed` or `dead`, and MUST persist `{stage}_pending_at` when (and only when) status is `pending`, for every stage on `ClosePipelineRecord`.
 - **FR-003**: System MUST reject illegal stage shapes on `ClosePipelineRecord` via CheckConstraints + state machine (see data-model.md). Terminal resolution **without** a pipeline record remains legal (Shape E); close-daily MUST NOT leave Shape E after classify on the new path.
 - **FR-004**: System MUST initialize topics, billing, and datalake statuses on the same `ClosePipelineRecord` in the same commit that finishes classify successfully (Shape C). Datalake MUST be initialized as `pending` (never `skipped` at Shape C in v1).
 - **FR-005**: System MUST follow the side-effect DAG: billing and the `conversation_classification` datalake event require classify finished only; the `topics` datalake event requires topics ∈ `{done, skipped}`. Topics failure MUST NOT block billing or the classification datalake event.
 - **FR-006**: System MUST run classify and topics as separate units of work on the close path (topics MUST NOT be hidden inside the classify worker).
-- **FR-007**: System MUST serialize Lambda-bound close work via a dedicated Celery queue with concurrency 1 for classify+topics (no ThreadPool Lambda fan-out). Per-conversation double-claim MUST be prevented with unique pipeline insert / `select_for_update` (see data-model.md).
-- **FR-008**: System MUST allow resume/retry of `pending` and `failed` stages without re-running finished stages. Celery may autoretry while status remains `pending`; the worker MUST mark `failed` when retries are exhausted or the error is non-retryable (see data-model Celery retry policy). Drain performs `failed → pending` reclaim and re-enqueues stale `pending`. SIGKILL leaves `pending` for drain.
+- **FR-007**: System MUST serialize Lambda-bound close work via a dedicated Celery queue with concurrency 1 for classify+topics (no ThreadPool Lambda fan-out). Per-conversation double-claim MUST be prevented with unique pipeline insert / `select_for_update` (see data-model.md). Deploy MUST reuse the existing Conversations Celery topology (same app/image); concurrency-1 MAY be a dedicated worker Deployment with the same image — MUST NOT require a new Argo application.
+- **FR-008**: System MUST allow resume/retry of `pending` and `failed` stages without re-running finished stages. Celery may autoretry while status remains `pending`; the worker MUST mark `failed` when retries are exhausted or the error is non-retryable (see data-model Celery retry policy). Drain performs `failed → pending` reclaim and re-enqueues stale `pending` while reclaim budget remains. SIGKILL leaves `pending` for drain. Drain MUST NOT automatically reclaim `dead`.
+- **FR-019**: System MUST implement **logical dead letter**: when automatic drain would exceed `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` for a stage, it MUST mark that stage `dead` with a non-empty error and MUST NOT re-enqueue. State machine MUST support ops-only `dead → pending` (reset reclaim count). v1 MUST NOT add a separate SQS/Celery dead-letter queue for this purpose.
+- **FR-020**: System MUST persist `{stage}_reclaim_count` (integer ≥ 0) per stage and MUST increment it on each automatic drain reclaim or stale re-enqueue for that stage.
+- **FR-021**: System MUST expose the locked operational defaults (overridable via settings/env): classify/topics `max_retries=3`, billing/datalake `max_retries=5`, `CLOSE_PIPELINE_STALE_PENDING_SECONDS=1800`, drain Beat every **10 minutes**, `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS=5`, `CLOSE_PIPELINE_DRAIN_BATCH_SIZE=100`. Stale TTL MUST be ≥ the Celery retry window for the stage.
 - **FR-017**: Billing MUST distinguish intentional `skipped` (business-ineligible payload) from recoverable `failed` (missing queue URL / transport). Config/infra MUST NOT initialize billing as `skipped`.
 - **FR-018**: State machine MUST support ops-only `skipped → pending` reclaim for topics, billing, and datalake. Automatic drain MUST NOT reclaim `skipped`.
 - **FR-009**: System MUST record billing delivery on `ClosePipelineRecord` (`billing_status` / `billing_at`) and MUST NOT re-publish when status is already `done` or `skipped`. Billing’s upsert behavior is a **consumer safety net only** — Conversations MUST NOT treat duplicate publish as a normal recovery strategy.
 - **FR-010**: System MUST backfill pre-existing terminal conversations by creating `ClosePipelineRecord` as legacy assumed complete (all stages `done`) so automatic recovery does not mass-replay history.
-- **FR-011**: System MUST provide periodic drain/reclaim for stuck or failed stages after cutover by querying `ClosePipelineRecord`. Stale `pending` MUST be detected via `{stage}_pending_at` age against `CLOSE_PIPELINE_STALE_PENDING_SECONDS`. Drain MUST process at most `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage per run (default **100**). Drain MUST NOT treat datalake as stale solely by age while topics ∉ `{done, skipped}`. Drain MUST NOT create records for Shape E.
-- **FR-012**: System MUST emit enough structured observability to identify stage, conversation, project, and failure reason.
-- **FR-013**: Adding a future fifth stage MUST follow the same status/at/error/pending_at + transition + worker + drain pattern on `ClosePipelineRecord` without a new control-plane product design (normalized stage rows may be post-v1).
+- **FR-011**: System MUST provide periodic drain/reclaim for stuck or failed stages after cutover by querying `ClosePipelineRecord`. Stale `pending` MUST be detected via `{stage}_pending_at` age against `CLOSE_PIPELINE_STALE_PENDING_SECONDS`. Drain MUST process at most `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage per run (default **100**). Drain MUST NOT treat datalake as stale solely by age while topics ∉ `{done, skipped}`. Drain MUST NOT create records for Shape E. Drain MUST NOT select `dead` stages for reclaim.
+- **FR-012**: System MUST emit enough structured observability to identify stage, conversation, project, and failure reason, including counts of `dead` stages and oldest non-terminal pending age.
+- **FR-013**: Adding a future fifth stage MUST follow the same status/at/error/pending_at/reclaim_count + transition + worker + drain pattern on `ClosePipelineRecord` without a new control-plane product design (normalized stage rows may be post-v1).
 - **FR-014**: System MUST NOT intentionally produce duplicate datalake events. Implementation MUST use per-event sent timestamps on `ClosePipelineRecord` plus durable unique outbox `(conversation_id, event_kind)`. Residual single duplicate from publish-then-crash-before-mark is accepted and MUST be documented; sink idempotency keys are out of scope for v1.
 - **FR-015**: System MUST enqueue topics and billing after classify success. System MUST enqueue datalake after classify (classification event) and MUST re-enqueue datalake after topics finishes `done`/`skipped` (topics event), without re-sending an already-recorded event.
 - **FR-016**: When topics is `skipped`, datalake MUST still publish the topics event using the existing bias/empty-metadata builder (parity with current close-daily). Setting `datalake_topics_at` without an external publish is forbidden.
@@ -181,11 +205,11 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 ### Key Entities
 
 - **Conversation**: Business entity; `resolution` only — **no** pipeline columns.
-- **ClosePipelineRecord**: 1:1 control plane; per-stage status + completed-at + pending-at + error + datalake event ats.
+- **ClosePipelineRecord**: 1:1 control plane; per-stage status + completed-at + pending-at + error + reclaim count + datalake event ats.
 - **CloseDatalakeOutbox**: Unique intent row per `(conversation_id, event_kind)` for datalake production.
-- **Close pipeline state machine**: Only legal writer of pipeline fields; enforces transitions and classify-commit atomicity.
+- **Close pipeline state machine**: Only legal writer of pipeline fields; enforces transitions and classify-commit atomicity (incl. `dead` and reclaim counts).
 - **Stage worker**: Celery unit of work for one conversation and one stage.
-- **Drain run**: Periodic selection of recoverable `ClosePipelineRecord` rows and re-enqueue.
+- **Drain run**: Periodic selection of recoverable `ClosePipelineRecord` rows and re-enqueue; promotes exhausted reclaim budget to `dead`.
 
 ## Success Criteria *(mandatory)*
 
@@ -193,7 +217,7 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 
 - **SC-001**: After a forced worker kill following successful classify, billing (and other unfinished stages) remain visible as incomplete and can complete via retry/drain without manual SQL.
 - **SC-002**: 100% of conversations that finish classify in the new pipeline have non-NULL topics, billing, and datalake stage statuses immediately after classify commit; datalake status is `pending`.
-- **SC-003**: Illegal stage shapes (e.g. `done` without completed-at, billing finished while still In Progress, `pending` without `pending_at`) cannot be persisted in automated tests.
+- **SC-003**: Illegal stage shapes (e.g. `done` without completed-at, billing finished while still In Progress, `pending` without `pending_at`, `dead` without error) cannot be persisted in automated tests.
 - **SC-004**: Topics stage failure does not prevent billing stage completion or classification-datalake send in automated tests; topics-datalake remains blocked until topics finishes.
 - **SC-005**: Close path does not use multi-worker/thread Lambda fan-out beyond configured single-flight concurrency.
 - **SC-006**: On-call can answer “where did this conversation stop?” using `ClosePipelineRecord` stage status/at/error without reconstructing from Sentry alone for post-deploy conversations.
@@ -205,6 +229,8 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - **SC-012**: Empty Billing queue URL results in billing `failed` (drain-recoverable), not `skipped`.
 - **SC-013**: After Celery `max_retries` on a retryable error, the stage is `failed` with error and `pending_at` NULL.
 - **SC-014**: `Conversation` has no close-pipeline columns; all stage fields live on `ClosePipelineRecord`.
+- **SC-015**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` automatic reclaim/re-enqueue cycles, a still-unfinished stage is `dead` and further drain runs do not re-enqueue it.
+- **SC-016**: Staging soak records whether yesterday’s claimed cohort reaches classify finished (or classify `dead`) within **12 hours** of the claiming selector run; missing the target triggers a capacity review (formula in Clarifications), not silent ThreadPool reintroduction.
 
 ## Assumptions
 
@@ -213,7 +239,8 @@ As the **platform**, abandoned `pending` stages (worker kill) and `failed` stage
 - Billing **can** upsert if it receives a duplicate close message; Conversations still MUST avoid producing duplicates via stage idempotency (`done`/`skipped` ⇒ no-op). Upsert is not the primary recovery mechanism.
 - Datalake does **not** deduplicate; Conversations MUST prevent intentional duplicate production via per-event sent tracking + unique outbox. Residual publish-then-crash window is accepted (documented), analogous to Billing.
 - **Outbox cleanup/archival is deferred to post-v1**; ~2 rows per conversation may accumulate until then.
-- Delay from serial classify/topics is acceptable versus hard-timeout loss; **no numeric throughput SLA** is in scope for v1.
+- Serial classify/topics **increases** wall-clock latency vs ThreadPool; accepted in exchange for correctness. Ops target: **12h** for classify completion of a claimed cohort (see Clarifications / SC-016). Raising Lambda parallelism requires models agreement.
+- Dead letter is a **status on `ClosePipelineRecord`**, not a new queue or Argo service.
 - Channel conversation count API is Billing’s tool and is not an acceptance gate for this pipeline.
 - Message persist-before-classify and optional `migrate_messages` remain adjacent concerns wired during cutover/harden, not separate tracked stages in v1.
 - Archive/retention Speckit patterns (state machine + constraints) are the reference implementation style; this feature does not depend on archive code being merged to main.

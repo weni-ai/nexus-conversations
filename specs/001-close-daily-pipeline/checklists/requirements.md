@@ -29,7 +29,7 @@
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] Implementation detail lives primarily in plan.md / data-model.md (spec keeps FRs outcome-focused)
 
-## Locked follow-ups (through v1.4.0)
+## Locked follow-ups (through v1.5.0)
 
 - [x] Topics `skipped` → still publish topics datalake event (bias path); no silent skip-without-publish
 - [x] Stale clock = `{stage}_pending_at` + `CLOSE_PIPELINE_STALE_PENDING_SECONDS`
@@ -43,7 +43,11 @@
 - [x] Outbox cleanup deferred post-v1
 - [x] Drain batch size default 100
 - [x] Control plane on **`ClosePipelineRecord`** 1:1 (not 18 cols on `Conversation`; not one model per stage)
+- [x] Logical dead letter = status `dead` after max drain reclaim (not SQS DLQ)
+- [x] Operational limits locked (retries 3/5, stale 1800s, drain 10m, max reclaim 5)
+- [x] Throughput ops target 12h + capacity formula under concurrency-1
+- [x] No new Argo app for close_lambda concurrency-1
 
 ## Notes
 
-- Decisions locked in Clarifications session 2026-07-28; storage layout revised in spec v1.4.0.
+- Decisions locked in Clarifications sessions 2026-07-28 and **2026-08-04** (Alisson review: dead letter + limits); storage layout includes reclaim_count + `dead` in spec v1.5.0.

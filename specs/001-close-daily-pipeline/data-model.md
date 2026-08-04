@@ -116,12 +116,13 @@ Shapes refer to `(Conversation.resolution, ClosePipelineRecord?)`.
 - `resolution = '2'`
 - **No** `ClosePipelineRecord`
 
-**Shape B — Classify claimed or classify failed (still open)**
+**Shape B — Classify claimed, failed, or dead (still open)**
 
 - `resolution = '2'`
 - `ClosePipelineRecord` exists
 - `classify_status ∈ {pending, failed, dead}` with matching at/pending_at/error shape
 - topics/billing/datalake statuses `NULL`; datalake event ats NULL
+- **`classify_status = dead`**: intentional poison stop — conversation stays In Progress with **no** automatic path to a terminal resolution. Ops reclaim `dead → pending` after fixing the cause, or an out-of-band resolution update (→ Shape E). Do **not** auto-set Unclassified from classify `dead`.
 
 **Shape C — Classify finished (atomic commit via state machine)**
 

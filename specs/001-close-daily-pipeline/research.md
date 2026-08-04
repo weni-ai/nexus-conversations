@@ -33,11 +33,11 @@ topics ──────► datalake event: topics
 
 ## R4 — ClosePipelineRecord 1:1 (not columns on Conversation)
 
-**Decision**: Persist the 18 stage fields on a separate **`ClosePipelineRecord`** (OneToOne → `Conversation`), plus `CloseDatalakeOutbox`. Do **not** add pipeline columns to `Conversation`.
+**Decision**: Persist the stage fields on a separate **`ClosePipelineRecord`** (OneToOne → `Conversation`), plus `CloseDatalakeOutbox`. Do **not** add pipeline columns to `Conversation`. Field count is **22** after Session 2026-08-04 (`dead` + reclaim_count × 4 on top of the prior 18).
 
 **Rationale**: Keeps `Conversation` as the business entity (`resolution` only). Drain still queries one control-plane table; CheckConstraints stay on that table. Cross-table resolution↔shape rules stay in the state machine (+ tests).
 
-**Alternatives rejected**: 18 columns on `Conversation`; one Django model per stage (schema fan-out); fully normalized stage-row table in v1 (stronger extensibility, more join complexity — revisit post-v1).
+**Alternatives rejected**: columns on `Conversation`; one Django model per stage (schema fan-out); fully normalized stage-row table in v1 (stronger extensibility, more join complexity — revisit post-v1).
 
 ## R5 — Legacy backfill as done
 
@@ -125,9 +125,9 @@ topics ──────► datalake event: topics
 
 ## R18 — Celery pending → failed ownership
 
-**Decision**: Stage task marks `failed` after `max_retries` or non-retryable error; heartbeat refreshes `pending_at` each attempt; SIGKILL → drain stale path. Defaults: max_retries=5, stale TTL ≥ retry window (suggest 3600s).
+**Decision**: Stage task marks `failed` after `max_retries` or non-retryable error; heartbeat refreshes `pending_at` each attempt; SIGKILL → drain stale path. Defaults: classify/topics `max_retries=3`, billing/datalake `max_retries=5`, stale TTL **1800s** (≥ retry window).
 
-**Rationale**: Removes ambiguity between Celery autoretry and drain reclaim; prevents double-queue while retries are healthy.
+**Rationale**: Removes ambiguity between Celery autoretry and drain reclaim; prevents double-queue while retries are healthy. Aligns with Session 2026-08-04 operational limits.
 
 ## R19 — Phase 1→2 Shape E gap
 
@@ -140,3 +140,17 @@ topics ──────► datalake event: topics
 **Decision**: No cleanup/archival in v1; document post-v1 follow-up.
 
 **Rationale**: Correctness first; ~2 rows/conversation is acceptable until volume justifies a retention job.
+
+## R21 — Logical dead letter (status `dead`)
+
+**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`.
+
+**Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra.
+
+**Alternatives rejected**: SQS redrive/DLQ as primary mechanism; infinite drain reclaim; collapsing `dead` into `failed` without a stop condition.
+
+## R22 — Throughput target under concurrency-1
+
+**Decision**: Ops target — claimed cohort reaches classify finished (or classify `dead`) within **12 hours** of the claiming selector. Capacity formula: `eligible × p95_lambda_s / 1`. Missing the target → measure → models discussion (batch/concurrency) — do **not** silently restore ThreadPool fan-out.
+
+**Rationale**: Serial Lambda is an explicit tradeoff; a numeric target makes the Alisson “will this take longer?” question reviewable in soak, not vibes.

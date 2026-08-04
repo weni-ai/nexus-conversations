@@ -55,6 +55,7 @@ export SPECIFY_FEATURE=001-close-daily-pipeline
 - Incomplete billing after classify: `ClosePipelineRecord` with classify `done`/`skipped` AND billing in `pending`/`failed`
 - Topics failures: `topics_status = failed` (billing and classification-datalake may still proceed)
 - Dead letter: `{stage}_status = dead` — automatic drain stopped; ops may reclaim
+- **Classify `dead` + In Progress**: Shape B poison — stays open forever until ops reclaim or out-of-band resolution; do **not** auto-set Unclassified from `dead`
 - Datalake waiting on topics: `datalake_classification_at` set, `datalake_topics_at` NULL, topics not finished — **not** a drain stale candidate
 - Datalake partial send: datalake status `pending`/`failed` with only one of the two event ats set
 - Stale pending age: `now() - {stage}_pending_at` when status is `pending`

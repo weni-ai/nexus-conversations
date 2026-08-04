@@ -59,7 +59,7 @@
 - [ ] T032 Structured metrics (`close_daily/metrics.py`) + Sentry tags per stage (incl. `dead` counts / oldest pending age)
 - [ ] T033 Shorten selector lock TTL / project task time limits
 - [ ] T034 Tests: `test_close_pipeline_drain.py` (stale clock + datalake wait rule + no Shape E + reclaim→dead)
-- [ ] T035 On-call notes in quickstart for reading `ClosePipelineRecord` (incl. datalake partial-send ats + pending_at + dead)
+- [ ] T035 On-call notes in quickstart for reading `ClosePipelineRecord` (incl. datalake partial-send ats + pending_at + dead + classify-dead/In Progress)
 
 ---
 

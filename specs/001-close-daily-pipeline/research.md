@@ -143,9 +143,9 @@ topics ──────► datalake event: topics
 
 ## R21 — Logical dead letter (status `dead`)
 
-**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`.
+**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops reclaim or out-of-band resolution only.
 
-**Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra.
+**Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra. Auto-terminalizing classify-dead would hide Lambda/data bugs.
 
 **Alternatives rejected**: SQS redrive/DLQ as primary mechanism; infinite drain reclaim; collapsing `dead` into `failed` without a stop condition.
 

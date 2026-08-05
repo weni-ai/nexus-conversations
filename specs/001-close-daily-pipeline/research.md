@@ -143,7 +143,7 @@ topics ──────► datalake event: topics
 
 ## R21 — Logical dead letter (status `dead`)
 
-**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops reclaim or out-of-band resolution only.
+**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic **budget-consuming** drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` (single or **bulk**) resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops reclaim or out-of-band resolution only.
 
 **Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra. Auto-terminalizing classify-dead would hide Lambda/data bugs.
 
@@ -154,3 +154,25 @@ topics ──────► datalake event: topics
 **Decision**: Ops target — claimed cohort reaches classify finished (or classify `dead`) within **12 hours** of the claiming selector. Capacity formula: `eligible × p95_lambda_s / 1`. Missing the target → measure → models discussion (batch/concurrency) — do **not** silently restore ThreadPool fan-out.
 
 **Rationale**: Serial Lambda is an explicit tradeoff; a numeric target makes the Alisson “will this take longer?” question reviewable in soak, not vibes.
+
+## R23 — Poison vs brownout (billing outage mode)
+
+**Decision**: Reclaim→`dead` is for **poison**. Shared Billing/SQS brownout MUST use **billing outage mode** with **locked** open/clear defaults (pause / min samples 10 / open rate 0.5 / open abs 50 / clear rate 0.2 / clear ticks 2), evaluated per drain tick. Drain may re-enqueue billing but MUST NOT increment `billing_reclaim_count` and MUST NOT mark billing `dead` while active. Circuit state lives in **Redis** (`conversation_ms:close_pipeline:billing_outage`, TTL refresh 86400s): `active` + `clear_streak` (+ optional last tick stats). After the incident, ops bulk-reopens any premature `dead` rows. Datalake transport MAY share the same pattern for clear infra errors. No SQS DLQ.
+
+**Rationale**: Alisson review (2026-08-05): the same counter treating poison and outage alike produces mass-`dead`. Leaving thresholds as `*` would re-open the review. Defaults derive from Beat 10m + batch 100. Redis matches existing close-daily lock storage and keeps `CLEAR_TICKS` / on-call visibility across workers.
+
+**Alternatives rejected**: Undefined `CLOSE_PIPELINE_BILLING_OUTAGE_*` placeholders; process-memory-only circuit; infinite reclaim for everyone; higher-only billing budget without circuit; SQS DLQ as primary control plane.
+
+## R24 — Datalake when topics is `dead`
+
+**Decision**: Partial datalake (`datalake_classification_at` set, topics event blocked) while topics is `failed`/`pending`/`dead` is **expected**. Do **not** auto-bias-publish or auto-finish datalake when topics is `dead`. Emit a blocked-by-topics-dead metric. Recovery = reclaim topics (or a later product decision).
+
+**Rationale**: Alisson review (2026-08-05): waiting is correct DAG behavior; the gap was undocumented limbo. Auto-bias would mask topics poison.
+
+**Alternatives rejected**: Auto-bias on topics `dead`; promoting datalake to `dead` solely for waiting; inventing a fifth “blocked” status in v1 (metric + docs suffice).
+
+## R25 — Aggregated alerting for `dead`
+
+**Decision**: Prefer metrics (counts, rate of new `dead`, outage-mode flag, datalake-blocked-by-topics-dead) and rate/spike alerts. Sentry fingerprints by `stage + error_class`, not one issue per conversation.
+
+**Rationale**: Mass brownout must not page thousands of per-row Sentry events; poison still needs a human-visible stop signal.

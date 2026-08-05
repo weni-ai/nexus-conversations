@@ -136,10 +136,12 @@ Shapes refer to `(Conversation.resolution, ClosePipelineRecord?)`.
 
 - Classify remains finished; record exists
 - Each of topics/billing/datalake independently `pending|done|skipped|failed|dead` with shape rules
-- Legal datalake partial: `datalake_classification_at` set, `datalake_topics_at` NULL while topics still open or failed
+- Legal datalake partial: `datalake_classification_at` set, `datalake_topics_at` NULL while topics still open, failed, **or dead**
 - Illegal: publish topics datalake event while `topics_status` ∉ `{done, skipped}`
 - Illegal: set `datalake_topics_at` without successful publish
-- `dead` is terminal for automatic drain (ops may reopen)
+- Illegal: auto-complete datalake (bias publish / mark done) solely because `topics_status = dead`
+- `dead` is terminal for automatic drain (ops may reopen); see billing outage mode for brownout exemption from promoting to `dead`
+- **Topics `dead` + datalake partial**: datalake remains `pending`; recovery is reclaim topics (or later product decision) — not drain inventing a topics event
 
 **Shape E — Terminal without pipeline (out-of-band)**
 
@@ -206,28 +208,59 @@ Django `CheckConstraint`s on the pipeline table only (static, always on). Cross-
 
 ### Drain eligibility (normative)
 
-Settings: `CLOSE_PIPELINE_STALE_PENDING_SECONDS` (**1800**), `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` (**100**), `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**), Beat every **10 minutes**.
+Settings: `CLOSE_PIPELINE_STALE_PENDING_SECONDS` (**1800**), `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` (**100**), `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**), Beat every **10 minutes**, plus billing outage (locked):
+
+| Setting | Default |
+|---------|---------|
+| `CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE` | `false` |
+| `CLOSE_PIPELINE_BILLING_OUTAGE_MIN_SAMPLES` | `10` |
+| `CLOSE_PIPELINE_BILLING_OUTAGE_OPEN_RATE` | `0.5` |
+| `CLOSE_PIPELINE_BILLING_OUTAGE_OPEN_ABS` | `50` |
+| `CLOSE_PIPELINE_BILLING_OUTAGE_CLEAR_RATE` | `0.2` |
+| `CLOSE_PIPELINE_BILLING_OUTAGE_CLEAR_TICKS` | `2` |
+| Redis key | `conversation_ms:close_pipeline:billing_outage` |
+| Redis state TTL (refresh each tick) | `86400` |
+
+### Billing outage circuit (normative)
+
+Evaluated at the **start of each billing drain tick** on that tick’s billing candidates (`attempts` ≤ batch):
+
+```text
+rate = infra_failures / max(attempts, 1)
+# infra_failures: empty/missing queue URL or SQS/boto transport errors (not business skipped)
+
+OPEN if PAUSE or (attempts >= 10 and rate >= 0.5) or (infra_failures >= 50)
+CLEAR streak += 1 when active and not PAUSE and (attempts == 0 or rate < 0.2); else streak = 0
+CLOSE when streak >= 2
+```
+
+Persist in **Redis** (not process memory): `active`, `clear_streak`, optional last tick stats. Refresh TTL each tick. Outage mode does **not** reset Postgres `billing_reclaim_count`.
 
 Select from **`ClosePipelineRecord`** (inner join `Conversation` as needed for project filters):
 
 | Case | Eligible when |
 |------|----------------|
-| `failed` (budget remaining) | `{stage}_status = failed` AND `{stage}_reclaim_count < MAX` → increment reclaim count, reclaim to `pending` + fresh `pending_at`, enqueue |
-| stale `pending` (budget remaining) | `{stage}_pending_at < now() - TTL` **and** stage-specific preconditions hold **and** reclaim_count < MAX → increment reclaim count, re-enqueue (keep `pending`, refresh `pending_at`) |
-| budget exhausted | `{stage}_status ∈ {failed}` OR stale `pending` eligible by age/preconditions, **and** `{stage}_reclaim_count >= MAX` → mark `dead` with error; **do not** enqueue |
-| `dead` | **Never** selected for automatic reclaim |
+| `failed` (budget remaining) | `{stage}_status = failed` AND `{stage}_reclaim_count < MAX` → increment reclaim count (**unless outage exemption**), reclaim to `pending` + fresh `pending_at`, enqueue |
+| stale `pending` (budget remaining) | `{stage}_pending_at < now() - TTL` **and** stage-specific preconditions hold **and** reclaim_count < MAX → increment reclaim count (**unless outage exemption**), re-enqueue (keep `pending`, refresh `pending_at`) |
+| budget exhausted | `{stage}_status ∈ {failed}` OR stale `pending` eligible by age/preconditions, **and** `{stage}_reclaim_count >= MAX`, **and** stage **not** in outage exemption → mark `dead` with error; **do not** enqueue |
+| billing outage mode | Redis `active` or pause: MAY re-enqueue billing `failed`/stale; MUST **not** increment `billing_reclaim_count`; MUST **not** mark billing `dead` |
+| `dead` | **Never** selected for automatic reclaim (ops single/bulk `dead → pending` only) |
 
 Cap at `CLOSE_PIPELINE_DRAIN_BATCH_SIZE` per stage per run (oldest `pending_at` / failed first).
 
-**Datalake special rule:** do **not** treat datalake as stale-pending solely by age while `topics_status ∉ {done, skipped}`. Reclaim/requeue when:
+**Datalake special rule:** do **not** treat datalake as stale-pending solely by age while `topics_status ∉ {done, skipped}` (includes `failed`, `pending`, and **`dead`**). Reclaim/requeue when:
 
 - `datalake_status = failed`, or
 - datalake `pending` and stale **and** topics ∈ `{done, skipped}`, or
 - datalake `pending` and stale **and** `datalake_classification_at` IS NULL
 
-(subject to reclaim budget / `dead` rules above)
+(subject to reclaim budget / `dead` / outage rules above)
+
+When `topics_status = dead` and datalake is partial (`datalake_classification_at` set, `datalake_topics_at` NULL): leave datalake `pending`; do **not** bias-publish; do **not** mark datalake `dead` solely for waiting on topics. Expose metric/count for this blocked state.
 
 Drain MUST NOT automatically reclaim `skipped` or `dead`. Drain MUST NOT create records for Shape E.
+
+**Ops bulk reopen:** After an infra incident, ops MAY bulk `dead → pending` (reset reclaim counts) for a filtered set (e.g. billing `dead` in a time window / error class) via management command or documented script calling the state machine — not raw SQL status edits.
 
 ### Backfill
 
@@ -267,8 +300,9 @@ Entering `pending` sets `{stage}_pending_at = now()`. Leaving `pending` clears i
 
 - Celery autoretry while `pending`; see Celery retry policy
 - `failed → pending`: drain (automatic, budget permitting) or ops
-- Exhausted budget → `dead` (automatic drain); no enqueue
-- `skipped → pending` / `dead → pending`: ops-only; drain never selects `skipped` or `dead`
+- Exhausted budget → `dead` (automatic drain) when not in outage exemption; no enqueue
+- Billing outage mode → re-enqueue allowed without budget consumption / without `dead`
+- `skipped → pending` / `dead → pending`: ops-only (single or bulk); drain never selects `skipped` or `dead`
 
 Key methods: `claim_classify` (insert record), `fail_classify`, `commit_classify_success` (atomic Shape B→C on conversation + record; caller enqueues topics + billing + datalake), mark done|skipped|failed|dead for topics/billing/datalake, reclaim for retry (incl. ops `dead→pending`).
 

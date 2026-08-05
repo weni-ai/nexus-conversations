@@ -29,7 +29,7 @@
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] Implementation detail lives primarily in plan.md / data-model.md (spec keeps FRs outcome-focused)
 
-## Locked follow-ups (through v1.5.0)
+## Locked follow-ups (through v1.5.3)
 
 - [x] Topics `skipped` → still publish topics datalake event (bias path); no silent skip-without-publish
 - [x] Stale clock = `{stage}_pending_at` + `CLOSE_PIPELINE_STALE_PENDING_SECONDS`
@@ -48,7 +48,10 @@
 - [x] Throughput ops target 12h + capacity formula under concurrency-1
 - [x] No new Argo app for close_lambda concurrency-1
 - [x] Classify `dead` stays In Progress (ops reclaim / out-of-band resolution; no auto-Unclassified)
+- [x] Billing outage mode: locked open/clear formula + Redis state; bulk reopen for incidents
+- [x] Topics `dead` → datalake stays pending partial (no auto-bias); blocked metric
+- [x] Aggregated `dead` metrics/alerts (rate/spike); no per-conversation Sentry flood requirement
 
 ## Notes
 
-- Decisions locked in Clarifications sessions 2026-07-28 and **2026-08-04** (Alisson review: dead letter + limits); storage layout includes reclaim_count + `dead` in spec v1.5.0; Graphite review edge case (classify-dead / In Progress) documented in **v1.5.1**.
+- Decisions locked in Clarifications sessions 2026-07-28, **2026-08-04** (dead letter + limits), and **2026-08-05** (outage formula + Redis + topics-dead datalake). Spec **v1.5.3**.

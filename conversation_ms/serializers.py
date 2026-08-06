@@ -3,7 +3,6 @@ import uuid
 from typing import Any, Optional, Tuple
 
 import pendulum
-import sentry_sdk
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -172,11 +171,6 @@ class ConversationSerializer(serializers.ModelSerializer):
             for msg in msgs or []:
                 msg_uuid = msg.get("message_id") or msg.get("uuid")
                 if msg_uuid is None:
-                    sentry_sdk.capture_message(
-                        "Postgres message missing message_id and uuid (conversation_ms)",
-                        level="error",
-                    )
-                    sentry_sdk.set_context("conversation", {"uuid": str(obj.uuid), "message_preview": str(msg)[:200]})
                     msg_uuid = str(uuid.uuid4())
                 source = self._normalize_source(msg.get("source"))
 

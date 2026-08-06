@@ -249,8 +249,8 @@ class TestConversationEndpoint:
         assert results[0]["uuid"] == only_uuid
         assert results[0]["id"] == only_uuid
 
-    def test_retrieve_conversation_postgres_missing_ids_sentry_fallback(self, api_client, project, auth_headers):
-        """Postgres message with neither message_id nor uuid: Sentry error, fallback uuid so data not lost."""
+    def test_retrieve_conversation_postgres_missing_ids_fallback(self, api_client, project, auth_headers):
+        """Postgres message with neither message_id nor uuid: synthesize uuid so data is not lost."""
         conversation = Conversation.objects.create(project=project, resolution="0")
         messages_data = [
             {"text": "No id", "source": "incoming", "created_at": "2024-01-01T12:00:00"},
@@ -261,10 +261,7 @@ class TestConversationEndpoint:
             "project-conversations-detail",
             kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
         )
-        with patch("conversation_ms.serializers.sentry_sdk.capture_message") as mock_capture, patch(
-            "conversation_ms.serializers.sentry_sdk.set_context"
-        ) as mock_context:
-            response = api_client.get(url, **auth_headers)
+        response = api_client.get(url, **auth_headers)
 
         assert response.status_code == status.HTTP_200_OK
         results = response.data["messages"]["results"]
@@ -272,8 +269,7 @@ class TestConversationEndpoint:
         assert results[0]["text"] == "No id"
         assert results[0]["uuid"] is not None
         assert results[0]["id"] is not None
-        mock_capture.assert_called_once()
-        mock_context.assert_called_once()
+        assert results[0]["uuid"] == results[0]["id"]
 
     def test_retrieve_conversation_filters_messages_by_start_and_end_date(self, api_client, project, auth_headers):
         """Detail messages are limited to [start_date, end_date] when both are set (Postgres path)."""

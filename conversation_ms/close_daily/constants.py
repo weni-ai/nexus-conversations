@@ -18,17 +18,19 @@ class ClosePipelineStageStatus:
     DONE = "done"
     SKIPPED = "skipped"
     FAILED = "failed"
+    DEAD = "dead"
 
     CHOICES = (
         (PENDING, "Pending"),
         (DONE, "Done"),
         (SKIPPED, "Skipped"),
         (FAILED, "Failed"),
+        (DEAD, "Dead"),
     )
 
-    ALL = frozenset({PENDING, DONE, SKIPPED, FAILED})
+    ALL = frozenset({PENDING, DONE, SKIPPED, FAILED, DEAD})
     FINISHED = frozenset({DONE, SKIPPED})
-    TERMINAL = frozenset({DONE, SKIPPED, FAILED})
+    TERMINAL = frozenset({DONE, SKIPPED, FAILED, DEAD})
 
 
 class CloseDatalakeEventKind:

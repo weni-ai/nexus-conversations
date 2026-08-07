@@ -118,10 +118,19 @@ class TestMarkAndReclaim:
     def test_reclaim_failed_to_pending(self, project):
         record = self._shape_c(project)
         record = ClosePipelineStateMachine.mark_failed(record, "topics", "boom")
+        assert record.topics_reclaim_count == 0
         record = ClosePipelineStateMachine.reclaim_failed(record, "topics")
         assert record.topics_status == ClosePipelineStageStatus.PENDING
         assert record.topics_error is None
         assert record.topics_pending_at is not None
+        assert record.topics_reclaim_count == 1
+
+    def test_reclaim_failed_without_budget(self, project):
+        record = self._shape_c(project)
+        record = ClosePipelineStateMachine.mark_failed(record, "billing", "sqs down")
+        record = ClosePipelineStateMachine.reclaim_failed(record, "billing", consume_budget=False)
+        assert record.billing_status == ClosePipelineStageStatus.PENDING
+        assert record.billing_reclaim_count == 0
 
     def test_reclaim_skipped_ops_only(self, project):
         record = self._shape_c(project)
@@ -137,6 +146,52 @@ class TestMarkAndReclaim:
         record = ClosePipelineStateMachine.mark_done(record, "topics")
         with pytest.raises(InvalidClosePipelineTransition):
             ClosePipelineStateMachine.reclaim_skipped(record, "topics")
+
+    def test_mark_dead_and_reclaim_dead(self, project):
+        record = self._shape_c(project)
+        record = ClosePipelineStateMachine.mark_failed(record, "topics", "poison")
+        record = ClosePipelineStateMachine.reclaim_failed(record, "topics")
+        record = ClosePipelineStateMachine.mark_failed(record, "topics", "poison again")
+        record = ClosePipelineStateMachine.mark_dead(record, "topics", "reclaim budget exhausted")
+        assert record.topics_status == ClosePipelineStageStatus.DEAD
+        assert record.topics_error == "reclaim budget exhausted"
+        assert record.topics_pending_at is None
+        assert record.topics_reclaim_count == 1
+
+        record = ClosePipelineStateMachine.reclaim_dead(record, "topics")
+        assert record.topics_status == ClosePipelineStageStatus.PENDING
+        assert record.topics_reclaim_count == 0
+        assert record.topics_error is None
+
+    def test_mark_dead_rejects_finished(self, project):
+        record = self._shape_c(project)
+        record = ClosePipelineStateMachine.mark_done(record, "topics")
+        with pytest.raises(InvalidClosePipelineTransition):
+            ClosePipelineStateMachine.mark_dead(record, "topics", "nope")
+
+    def test_reclaim_stale_pending_increments(self, project):
+        record = self._shape_c(project)
+        before = record.topics_pending_at
+        record = ClosePipelineStateMachine.reclaim_stale_pending(record, "topics")
+        assert record.topics_status == ClosePipelineStageStatus.PENDING
+        assert record.topics_pending_at >= before
+        assert record.topics_reclaim_count == 1
+
+    def test_abandon_pipeline_to_shape_e(self, project):
+        conversation = _open_conversation(project)
+        record = ClosePipelineStateMachine.claim_classify(conversation)
+        record = ClosePipelineStateMachine.fail_classify(record, "poison")
+        record = ClosePipelineStateMachine.mark_dead(record, "classify", "budget exhausted")
+        abandoned = ClosePipelineStateMachine.abandon_pipeline(record, resolution="3")
+        abandoned.refresh_from_db()
+        assert abandoned.resolution == "3"
+        assert not ClosePipelineRecord.objects.filter(conversation=abandoned).exists()
+
+    def test_abandon_pipeline_rejects_non_terminal_resolution(self, project):
+        conversation = _open_conversation(project)
+        record = ClosePipelineStateMachine.claim_classify(conversation)
+        with pytest.raises(InvalidClosePipelineData):
+            ClosePipelineStateMachine.abandon_pipeline(record, resolution="2")
 
     def test_heartbeat_refreshes_pending_at(self, project):
         record = self._shape_c(project)

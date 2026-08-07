@@ -38,12 +38,16 @@ def backfill_legacy_close_pipeline_records(apps, schema_editor):
                 conversation_id=conversation.uuid,
                 classify_status="done",
                 classify_at=stamped_at,
+                classify_reclaim_count=0,
                 topics_status="done",
                 topics_at=stamped_at,
+                topics_reclaim_count=0,
                 billing_status="done",
                 billing_at=stamped_at,
+                billing_reclaim_count=0,
                 datalake_status="done",
                 datalake_at=stamped_at,
+                datalake_reclaim_count=0,
                 datalake_classification_at=stamped_at,
                 datalake_topics_at=stamped_at,
             )
@@ -149,6 +153,7 @@ class Migration(migrations.Migration):
                             ("done", "Done"),
                             ("skipped", "Skipped"),
                             ("failed", "Failed"),
+                            ("dead", "Dead"),
                         ],
                         help_text="Classify (resolution) stage status.",
                         max_length=16,
@@ -159,6 +164,13 @@ class Migration(migrations.Migration):
                 ("classify_pending_at", models.DateTimeField(blank=True, null=True)),
                 ("classify_error", models.TextField(blank=True, null=True)),
                 (
+                    "classify_reclaim_count",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Automatic drain reclaim budget consumed for classify.",
+                    ),
+                ),
+                (
                     "topics_status",
                     models.CharField(
                         blank=True,
@@ -167,6 +179,7 @@ class Migration(migrations.Migration):
                             ("done", "Done"),
                             ("skipped", "Skipped"),
                             ("failed", "Failed"),
+                            ("dead", "Dead"),
                         ],
                         help_text="Topics classification stage status.",
                         max_length=16,
@@ -177,6 +190,13 @@ class Migration(migrations.Migration):
                 ("topics_pending_at", models.DateTimeField(blank=True, null=True)),
                 ("topics_error", models.TextField(blank=True, null=True)),
                 (
+                    "topics_reclaim_count",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Automatic drain reclaim budget consumed for topics.",
+                    ),
+                ),
+                (
                     "billing_status",
                     models.CharField(
                         blank=True,
@@ -185,6 +205,7 @@ class Migration(migrations.Migration):
                             ("done", "Done"),
                             ("skipped", "Skipped"),
                             ("failed", "Failed"),
+                            ("dead", "Dead"),
                         ],
                         help_text="Billing SQS publish stage status.",
                         max_length=16,
@@ -195,6 +216,13 @@ class Migration(migrations.Migration):
                 ("billing_pending_at", models.DateTimeField(blank=True, null=True)),
                 ("billing_error", models.TextField(blank=True, null=True)),
                 (
+                    "billing_reclaim_count",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Automatic drain reclaim budget consumed for billing.",
+                    ),
+                ),
+                (
                     "datalake_status",
                     models.CharField(
                         blank=True,
@@ -203,6 +231,7 @@ class Migration(migrations.Migration):
                             ("done", "Done"),
                             ("skipped", "Skipped"),
                             ("failed", "Failed"),
+                            ("dead", "Dead"),
                         ],
                         help_text="Datalake events stage status.",
                         max_length=16,
@@ -212,6 +241,13 @@ class Migration(migrations.Migration):
                 ("datalake_at", models.DateTimeField(blank=True, null=True)),
                 ("datalake_pending_at", models.DateTimeField(blank=True, null=True)),
                 ("datalake_error", models.TextField(blank=True, null=True)),
+                (
+                    "datalake_reclaim_count",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Automatic drain reclaim budget consumed for datalake.",
+                    ),
+                ),
                 (
                     "datalake_classification_at",
                     models.DateTimeField(
@@ -251,6 +287,26 @@ class Migration(migrations.Migration):
                         condition=models.Q(("datalake_status__in", ["pending", "failed"])),
                         fields=["datalake_status", "datalake_pending_at"],
                         name="cpipe_datalake_drain_idx",
+                    ),
+                    models.Index(
+                        condition=models.Q(("classify_status", "dead")),
+                        fields=["classify_status"],
+                        name="cpipe_classify_dead_idx",
+                    ),
+                    models.Index(
+                        condition=models.Q(("topics_status", "dead")),
+                        fields=["topics_status"],
+                        name="cpipe_topics_dead_idx",
+                    ),
+                    models.Index(
+                        condition=models.Q(("billing_status", "dead")),
+                        fields=["billing_status"],
+                        name="cpipe_billing_dead_idx",
+                    ),
+                    models.Index(
+                        condition=models.Q(("datalake_status", "dead")),
+                        fields=["datalake_status"],
+                        name="cpipe_datalake_dead_idx",
                     ),
                 ],
             },
@@ -310,6 +366,13 @@ class Migration(migrations.Migration):
                         ("classify_status", "failed"),
                         models.Q(("classify_error", ""), _negated=True),
                     ),
+                    models.Q(
+                        ("classify_at__isnull", True),
+                        ("classify_error__isnull", False),
+                        ("classify_pending_at__isnull", True),
+                        ("classify_status", "dead"),
+                        models.Q(("classify_error", ""), _negated=True),
+                    ),
                     _connector="OR",
                 ),
                 name="cpipe_classify_shape",
@@ -348,6 +411,13 @@ class Migration(migrations.Migration):
                         ("topics_error__isnull", False),
                         ("topics_pending_at__isnull", True),
                         ("topics_status", "failed"),
+                        models.Q(("topics_error", ""), _negated=True),
+                    ),
+                    models.Q(
+                        ("topics_at__isnull", True),
+                        ("topics_error__isnull", False),
+                        ("topics_pending_at__isnull", True),
+                        ("topics_status", "dead"),
                         models.Q(("topics_error", ""), _negated=True),
                     ),
                     _connector="OR",
@@ -390,6 +460,13 @@ class Migration(migrations.Migration):
                         ("billing_status", "failed"),
                         models.Q(("billing_error", ""), _negated=True),
                     ),
+                    models.Q(
+                        ("billing_at__isnull", True),
+                        ("billing_error__isnull", False),
+                        ("billing_pending_at__isnull", True),
+                        ("billing_status", "dead"),
+                        models.Q(("billing_error", ""), _negated=True),
+                    ),
                     _connector="OR",
                 ),
                 name="cpipe_billing_shape",
@@ -428,6 +505,13 @@ class Migration(migrations.Migration):
                         ("datalake_error__isnull", False),
                         ("datalake_pending_at__isnull", True),
                         ("datalake_status", "failed"),
+                        models.Q(("datalake_error", ""), _negated=True),
+                    ),
+                    models.Q(
+                        ("datalake_at__isnull", True),
+                        ("datalake_error__isnull", False),
+                        ("datalake_pending_at__isnull", True),
+                        ("datalake_status", "dead"),
                         models.Q(("datalake_error", ""), _negated=True),
                     ),
                     _connector="OR",

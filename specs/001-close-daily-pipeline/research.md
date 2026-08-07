@@ -143,7 +143,7 @@ topics ──────► datalake event: topics
 
 ## R21 — Logical dead letter (status `dead`)
 
-**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic **budget-consuming** drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` (single or **bulk**) resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops reclaim or out-of-band resolution only.
+**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic **budget-consuming** drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` (single or **bulk**) resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops `dead → pending` or SM `abandon_pipeline` only (never raw resolution update with live record).
 
 **Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra. Auto-terminalizing classify-dead would hide Lambda/data bugs.
 
@@ -157,11 +157,15 @@ topics ──────► datalake event: topics
 
 ## R23 — Poison vs brownout (billing outage mode)
 
-**Decision**: Reclaim→`dead` is for **poison**. Shared Billing/SQS brownout MUST use **billing outage mode** with **locked** open/clear defaults (pause / min samples 10 / open rate 0.5 / open abs 50 / clear rate 0.2 / clear ticks 2), evaluated per drain tick. Drain may re-enqueue billing but MUST NOT increment `billing_reclaim_count` and MUST NOT mark billing `dead` while active. Circuit state lives in **Redis** (`conversation_ms:close_pipeline:billing_outage`, TTL refresh 86400s): `active` + `clear_streak` (+ optional last tick stats). After the incident, ops bulk-reopens any premature `dead` rows. Datalake transport MAY share the same pattern for clear infra errors. No SQS DLQ.
+**Decision (v1):** Reclaim→`dead` is for **poison**. Billing brownout mitigation in v1 is **`CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE`** (+ bulk `dead → pending`). While pause is on, drain may re-enqueue billing but MUST NOT increment `billing_reclaim_count` / mark billing `dead`. No SQS DLQ.
 
-**Rationale**: Alisson review (2026-08-05): the same counter treating poison and outage alike produces mass-`dead`. Leaving thresholds as `*` would re-open the review. Defaults derive from Beat 10m + batch 100. Redis matches existing close-daily lock storage and keeps `CLEAR_TICKS` / on-call visibility across workers.
+**Decision (post-v1, design locked):** Automatic rate/Redis circuit with defaults pause / min samples **10** / open rate **0.5** / open abs **50** / clear rate **0.2** / clear ticks **2**; Redis key `conversation_ms:close_pipeline:billing_outage` (TTL refresh 86400s) storing `active` + `clear_streak`. Deferred to avoid shipping unnecessary complexity before real brownout experience (Session 2026-08-07 / Alisson simplicity preference).
 
-**Alternatives rejected**: Undefined `CLOSE_PIPELINE_BILLING_OUTAGE_*` placeholders; process-memory-only circuit; infinite reclaim for everyone; higher-only billing budget without circuit; SQS DLQ as primary control plane.
+**Accepted v1 risk:** classify/topics (and datalake transport) infra brownout may still mass-`dead` those stages; mitigate with ops pause/bulk reopen — no second automatic circuit in v1.
+
+**Rationale**: Alisson review (2026-08-05) required outage×reclaim policy; numbers locked so review is not reopened. Session 2026-08-07 splits **ship pause now** vs **circuit later**.
+
+**Alternatives rejected**: Undefined `*` thresholds; process-memory-only circuit; infinite reclaim for everyone; SQS DLQ as primary control plane; shipping full circuit in v1 without proven need.
 
 ## R24 — Datalake when topics is `dead`
 

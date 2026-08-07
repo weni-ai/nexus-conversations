@@ -29,7 +29,7 @@
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] Implementation detail lives primarily in plan.md / data-model.md (spec keeps FRs outcome-focused)
 
-## Locked follow-ups (through v1.5.3)
+## Locked follow-ups (through v1.5.4)
 
 - [x] Topics `skipped` → still publish topics datalake event (bias path); no silent skip-without-publish
 - [x] Stale clock = `{stage}_pending_at` + `CLOSE_PIPELINE_STALE_PENDING_SECONDS`
@@ -47,11 +47,12 @@
 - [x] Operational limits locked (retries 3/5, stale 1800s, drain 10m, max reclaim 5)
 - [x] Throughput ops target 12h + capacity formula under concurrency-1
 - [x] No new Argo app for close_lambda concurrency-1
-- [x] Classify `dead` stays In Progress (ops reclaim / out-of-band resolution; no auto-Unclassified)
-- [x] Billing outage mode: locked open/clear formula + Redis state; bulk reopen for incidents
+- [x] Classify `dead` stays In Progress (ops reclaim or `abandon_pipeline`; no auto-Unclassified; no raw resolution update)
+- [x] Billing outage: **v1 pause** + bulk reopen; automatic circuit formula/Redis **locked but deferred post-v1**
+- [x] Analysis I1/I2/U2/U3/I3: abandon_pipeline; classify never skipped; heartbeat 600s; topics-skipped datalake both events; US3/datalake stale rule
 - [x] Topics `dead` → datalake stays pending partial (no auto-bias); blocked metric
 - [x] Aggregated `dead` metrics/alerts (rate/spike); no per-conversation Sentry flood requirement
 
 ## Notes
 
-- Decisions locked in Clarifications sessions 2026-07-28, **2026-08-04** (dead letter + limits), and **2026-08-05** (outage formula + Redis + topics-dead datalake). Spec **v1.5.3**.
+- Decisions locked in sessions 2026-07-28, **2026-08-04**, **2026-08-05** (outage formula kept; v1=pause), **2026-08-07** (analysis fixes + circuit deferral). Spec **v1.5.4**.

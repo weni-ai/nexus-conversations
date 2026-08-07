@@ -6,7 +6,7 @@
 
 ## Summary
 
-Replace the monolithic per-project close-daily batch (classify + topics + billing + datalake in one long Celery task with ThreadPool Lambda fan-out) with a **four-stage pipeline** tracked on **`ClosePipelineRecord`** (OneToOne → `Conversation`): classify, topics, billing, datalake. Each stage uses `status` + `*_at` + `*_pending_at` + `*_error` + `*_reclaim_count`. Status vocabulary includes **`dead`** (logical dead letter after reclaim budget for **poison**). **Billing outage mode** prevents mass-`dead` during SQS/infra brownout. Datalake adds **per-event sent timestamps** + `CloseDatalakeOutbox` (UNIQUE conversation+event_kind). Side-effect DAG: classify → billing and classification-datalake; topics → topics-datalake (publish even when topics is `skipped`, bias path; **not** when topics is `dead`). Mutations go only through `ClosePipelineStateMachine`. DB `CheckConstraint`s on the pipeline record make illegal stage shapes unrepresentable. Classify and topics run on a concurrency-1 Lambda queue (same Conversations image; no new Argo app). Drain recovers `failed` / stale `pending` via `*_pending_at` up to `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS`, then marks **`dead`** (except outage exemption); does not stale-spin datalake waiting on topics (incl. topics `dead`). Legacy terminal rows get backfilled `ClosePipelineRecord`s as all-`done` (*legacy assumed complete*). `Conversation` stays free of pipeline columns.
+Replace the monolithic per-project close-daily batch (classify + topics + billing + datalake in one long Celery task with ThreadPool Lambda fan-out) with a **four-stage pipeline** tracked on **`ClosePipelineRecord`** (OneToOne → `Conversation`): classify, topics, billing, datalake. Each stage uses `status` + `*_at` + `*_pending_at` + `*_error` + `*_reclaim_count`. Status vocabulary includes **`dead`** (logical dead letter after reclaim budget for **poison**). **Billing pause** (v1) prevents mass-`dead` during SQS/infra brownout; automatic rate/Redis circuit is post-v1. Datalake adds **per-event sent timestamps** + `CloseDatalakeOutbox` (UNIQUE conversation+event_kind). Side-effect DAG: classify → billing and classification-datalake; topics → topics-datalake (publish even when topics is `skipped`, bias path; **not** when topics is `dead`). Mutations go only through `ClosePipelineStateMachine`. DB `CheckConstraint`s on the pipeline record make illegal stage shapes unrepresentable. Classify and topics run on a concurrency-1 Lambda queue (same Conversations image; no new Argo app). Drain recovers `failed` / stale `pending` via `*_pending_at` up to `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS`, then marks **`dead`** (except billing pause); does not stale-spin datalake waiting on topics event when `datalake_classification_at` is set (incl. topics `dead`). Legacy terminal rows get backfilled `ClosePipelineRecord`s as all-`done` (*legacy assumed complete*). `Conversation` stays free of pipeline columns.
 
 ## Technical Context
 
@@ -24,7 +24,7 @@ Replace the monolithic per-project close-daily batch (classify + topics + billin
 
 **Performance Goals**: Correctness and resumability over wall-clock speed; serial Lambda accepted; ops target classify cohort within **12h** of claim (SC-016)
 
-**Constraints**: Resolution Lambda single-flight; no Billing reconcile; no raise hard time limit as primary fix; no sink idempotency keys for datalake in v1; logical `dead` (no SQS DLQ); locked retry/stale/drain limits; billing outage mode required with drain
+**Constraints**: Resolution Lambda single-flight; no Billing reconcile; no raise hard time limit as primary fix; no sink idempotency keys for datalake in v1; logical `dead` (no SQS DLQ); locked retry/stale/drain limits; billing pause required with drain (circuit post-v1)
 
 **Scale/Scope**: All projects processed by close-daily; per-conversation stage tasks after selector; capacity formula `eligible × p95_lambda_s / 1`
 
@@ -66,7 +66,7 @@ conversation_ms/
 │   ├── constants.py                   # stage enum (incl. dead), queue names, event kinds, stale TTL / drain batch / max reclaim / celery retry settings
 │   ├── state_machine.py               # NEW (mutates ClosePipelineRecord; ops skipped→pending; dead→pending)
 │   ├── metrics.py                     # NEW (incl. dead counts, outage mode, datalake-blocked-by-topics-dead)
-│   ├── drain.py                       # NEW (Phase 3; reclaim budget → dead; billing outage circuit + Redis state)
+│   ├── drain.py                       # NEW (Phase 3; reclaim → dead; billing pause; circuit post-v1)
 │   ├── runner.py                      # selector-only after cutover
 │   └── stages/                        # NEW workers (Phase 2; datalake respects DAG; Celery retry→failed)
 ├── services/classification_service.py # split resolution vs topics
@@ -94,7 +94,7 @@ nexus_conversations/
 | Celery task owns pending→failed | Clear handoff vs drain; heartbeat avoids stale races |
 | Logical `dead` after max reclaim | Stops poison loops; no SQS DLQ / new Argo app |
 | `{stage}_reclaim_count` | Durable budget for drain → dead |
-| Billing outage mode (circuit/pause) + Redis state | Prevents mass-`dead` on SQS brownout; CLEAR_TICKS survives restarts |
+| Billing pause (v1); automatic circuit post-v1 | Prevents mass-`dead` without shipping full circuit day-1 |
 | Locked outage defaults (10 / 0.5 / 50 / 0.2 / 2) | Derived from Beat 10m + batch 100 — reviewable numbers |
 | Topics `dead` → datalake stays partial | Honest DAG wait; no auto-bias masking |
 | Aggregated dead metrics/alerts | Avoid Sentry flood; alert on rate/spike |

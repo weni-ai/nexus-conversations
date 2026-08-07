@@ -39,11 +39,15 @@ class ClosePipelineStateMachine:
 
     @classmethod
     def _locked_record(cls, record: ClosePipelineRecord) -> ClosePipelineRecord:
-        return ClosePipelineRecord.objects.select_for_update().get(pk=record.pk)
+        return ClosePipelineRecord.objects.select_related("conversation").select_for_update().get(pk=record.pk)
 
     @classmethod
     def _locked_conversation(cls, conversation: Conversation) -> Conversation:
-        return Conversation.objects.select_for_update().get(pk=conversation.pk)
+        return cls._locked_conversation_by_pk(conversation.pk)
+
+    @classmethod
+    def _locked_conversation_by_pk(cls, conversation_id) -> Conversation:
+        return Conversation.objects.select_for_update().get(pk=conversation_id)
 
     @staticmethod
     def _require_stage(stage: str) -> None:
@@ -217,7 +221,7 @@ class ClosePipelineStateMachine:
             raise InvalidClosePipelineData(f"datalake_status at Shape C must be pending in v1, got {datalake_status!r}")
 
         record = cls._locked_record(record)
-        conversation = cls._locked_conversation(record.conversation)
+        conversation = cls._locked_conversation_by_pk(record.conversation_id)
 
         if record.classify_status != ClosePipelineStageStatus.PENDING:
             raise InvalidClosePipelineTransition(f"Cannot commit classify from status {record.classify_status!r}")
@@ -446,7 +450,7 @@ class ClosePipelineStateMachine:
             raise InvalidClosePipelineData(f"abandon_pipeline resolution must be terminal or None, got {resolution!r}")
 
         record = cls._locked_record(record)
-        conversation = cls._locked_conversation(record.conversation)
+        conversation = cls._locked_conversation_by_pk(record.conversation_id)
         conversation_id = conversation.pk
 
         CloseDatalakeOutbox.objects.filter(conversation_id=conversation_id).delete()
@@ -483,9 +487,10 @@ class ClosePipelineStateMachine:
 
         field = "datalake_classification_at" if event == "classification" else "datalake_topics_at"
         now = timezone.now()
-        update_fields = [field]
+        update_fields: list[str] = []
         if getattr(record, field) is None:
             setattr(record, field, now)
+            update_fields.append(field)
 
         if record.datalake_classification_at is not None and record.datalake_topics_at is not None:
             record.datalake_status = ClosePipelineStageStatus.DONE
@@ -493,6 +498,9 @@ class ClosePipelineStateMachine:
             record.datalake_pending_at = None
             record.datalake_error = None
             update_fields.extend(["datalake_status", "datalake_at", "datalake_pending_at", "datalake_error"])
+
+        if not update_fields:
+            return record
 
         record.save(update_fields=sorted(set(update_fields)))
         return record

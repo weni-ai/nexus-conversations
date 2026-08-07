@@ -7,6 +7,7 @@ from django.db import migrations, models
 from django.utils import timezone
 
 BACKFILL_BATCH_SIZE = 1000
+RESOLUTION_IN_PROGRESS = "2"
 
 
 def backfill_legacy_close_pipeline_records(apps, schema_editor):
@@ -25,7 +26,7 @@ def backfill_legacy_close_pipeline_records(apps, schema_editor):
     now = timezone.now()
     batch = []
     qs = (
-        Conversation.objects.exclude(resolution="2")
+        Conversation.objects.exclude(resolution=RESOLUTION_IN_PROGRESS)
         .exclude(uuid__in=ClosePipelineRecord.objects.values_list("conversation_id", flat=True))
         .order_by("uuid")
         .only("uuid", "end_date", "created_at")

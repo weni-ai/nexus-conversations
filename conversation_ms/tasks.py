@@ -611,3 +611,102 @@ def create_external_billing_ticket_task(self, auth_token: str, urn: str, created
         )
         sentry_sdk.capture_exception(exc)
         raise self.retry(exc=exc)
+
+
+def _mark_stage_failed(conversation_id: str, stage: str, error: str) -> None:
+    from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
+    from conversation_ms.models import ClosePipelineRecord
+
+    try:
+        record = ClosePipelineRecord.objects.get(conversation_id=conversation_id)
+        if stage == "classify":
+            ClosePipelineStateMachine.fail_classify(record, error)
+        else:
+            ClosePipelineStateMachine.mark_failed(record, stage, error)
+    except Exception as mark_exc:
+        logger.error(
+            f"[ClosePipeline] Failed to mark {stage} failed conversation={conversation_id} error={mark_exc}",
+            exc_info=True,
+        )
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.close_pipeline_classify_task",
+    bind=True,
+    max_retries=getattr(settings, "CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES", 3),
+    default_retry_delay=60,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def close_pipeline_classify_task(self, conversation_id: str):
+    from conversation_ms.close_daily.stages import run_classify_stage
+
+    try:
+        run_classify_stage(conversation_id)
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            _mark_stage_failed(conversation_id, "classify", str(exc))
+            raise
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.close_pipeline_topics_task",
+    bind=True,
+    max_retries=getattr(settings, "CLOSE_PIPELINE_TOPICS_MAX_RETRIES", 3),
+    default_retry_delay=60,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def close_pipeline_topics_task(self, conversation_id: str):
+    from conversation_ms.close_daily.stages import run_topics_stage
+
+    try:
+        run_topics_stage(conversation_id)
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            _mark_stage_failed(conversation_id, "topics", str(exc))
+            raise
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.close_pipeline_billing_task",
+    bind=True,
+    max_retries=getattr(settings, "CLOSE_PIPELINE_BILLING_MAX_RETRIES", 5),
+    default_retry_delay=60,
+    soft_time_limit=120,
+    time_limit=180,
+)
+def close_pipeline_billing_task(self, conversation_id: str):
+    from conversation_ms.close_daily.stages import BillingConfigError, run_billing_stage
+
+    try:
+        run_billing_stage(conversation_id)
+    except BillingConfigError:
+        raise
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            _mark_stage_failed(conversation_id, "billing", str(exc))
+            raise
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.close_pipeline_datalake_task",
+    bind=True,
+    max_retries=getattr(settings, "CLOSE_PIPELINE_DATALAKE_MAX_RETRIES", 5),
+    default_retry_delay=60,
+    soft_time_limit=120,
+    time_limit=180,
+)
+def close_pipeline_datalake_task(self, conversation_id: str):
+    from conversation_ms.close_daily.stages import run_datalake_stage
+
+    try:
+        run_datalake_stage(conversation_id)
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            _mark_stage_failed(conversation_id, "datalake", str(exc))
+            raise
+        raise self.retry(exc=exc)

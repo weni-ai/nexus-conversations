@@ -37,6 +37,77 @@ class ClassificationService:
             self._lambda_clients[region_name] = get_boto3_client("lambda", region_name=region_name)
         return self._lambda_clients[region_name]
 
+    def _resolve_conversation(self, conversation_or_uuid) -> Optional[Conversation]:
+        if isinstance(conversation_or_uuid, Conversation):
+            return conversation_or_uuid
+        try:
+            return Conversation.objects.get(uuid=conversation_or_uuid)
+        except Conversation.DoesNotExist:
+            logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
+            return None
+
+    def classify_resolution(
+        self,
+        conversation_or_uuid,
+        *,
+        messages_override: Optional[List[Dict[str, Any]]] = None,
+        save_resolution: bool = False,
+    ) -> Tuple[Optional[Conversation], Optional[str], Optional[List[Dict[str, Any]]]]:
+        """
+        Resolution-only path (close-daily classify stage).
+
+        Returns ``(conversation, resolution, messages)``. ``resolution`` is ``None`` when
+        there is no chat room and no messages (caller may mark Unclassified).
+        """
+        conversation = self._resolve_conversation(conversation_or_uuid)
+        if conversation is None:
+            return (None, None, None)
+
+        conversation_uuid = str(conversation.uuid)
+        messages = messages_override
+
+        if conversation.has_chats_room:
+            resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
+            logger.info(
+                f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
+            )
+        else:
+            if messages is None:
+                messages = self._get_conversation_messages(conversation)
+            if not messages:
+                logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+                return (conversation, None, messages)
+            resolution = self._get_resolution_classification(conversation, messages)
+
+        if save_resolution:
+            conversation.resolution = resolution
+            conversation.save(update_fields=["resolution"])
+        else:
+            conversation.resolution = resolution
+
+        return (conversation, resolution, messages)
+
+    def classify_topics(
+        self,
+        conversation_or_uuid,
+        *,
+        messages_override: Optional[List[Dict[str, Any]]] = None,
+        topics_payload: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[ConversationClassification]:
+        """Topics-only path (close-daily topics stage)."""
+        conversation = self._resolve_conversation(conversation_or_uuid)
+        if conversation is None:
+            return None
+
+        messages = messages_override
+        if messages is None:
+            messages = self._get_conversation_messages(conversation)
+        if not messages:
+            logger.warning(f"[ClassificationService] No messages found for topics on conversation {conversation.uuid}.")
+            return None
+
+        return self._classify_topics(conversation, messages, topics_payload=topics_payload)
+
     def classify_conversation(
         self,
         conversation_or_uuid,
@@ -46,63 +117,21 @@ class ClassificationService:
         send_to_datalake: bool = True,
     ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
-        Main entry point to classify a conversation.
-
-        Args:
-            conversation_or_uuid: Conversation object or UUID string
-            save_resolution: If False, returns resolution without saving (for bulk updates)
-            topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
-            messages_override: Optional preloaded messages to avoid refetch from data stores
-            send_to_datalake: If False, skip sending resolution event to data lake.
-                              Callers that defer persistence (bulk updates) should pass False
-                              and send events only after successful persistence.
-
-        Returns:
-            Tuple of (conversation, classification, resolution) where:
-            - conversation: The Conversation object (or None if not found)
-            - classification: The ConversationClassification object (or None if classification failed)
-            - resolution: The resolution string (or None if classification failed)
+        Facade: resolution + topics (+ optional datalake). Prefer ``classify_resolution`` /
+        ``classify_topics`` on the close-daily path.
         """
-        # Accept either Conversation object or UUID string to avoid N+1 queries
-        if isinstance(conversation_or_uuid, Conversation):
-            conversation = conversation_or_uuid
-            conversation_uuid = str(conversation.uuid)
-        else:
-            try:
-                conversation = Conversation.objects.get(uuid=conversation_or_uuid)
-                conversation_uuid = str(conversation.uuid)
-            except Conversation.DoesNotExist:
-                logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
-                return (None, None, None)
-
-        messages = messages_override
-        if conversation.has_chats_room:
-            # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
-            resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
-            logger.info(
-                f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
-            )
-        else:
-            # Fetch messages (prefer DynamoDB) only if caller did not preload them.
-            if messages is None:
-                messages = self._get_conversation_messages(conversation)
-            if not messages:
-                logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-                return (conversation, None, None)
-
-            resolution = self._get_resolution_classification(conversation, messages)
-
-        # Update conversation resolution conditionally
-        if save_resolution:
-            conversation.resolution = resolution
-            conversation.save(update_fields=["resolution"])
-        else:
-            # Just set the resolution on the object without saving (for bulk update)
-            conversation.resolution = resolution
+        conversation, resolution, messages = self.classify_resolution(
+            conversation_or_uuid,
+            messages_override=messages_override,
+            save_resolution=save_resolution,
+        )
+        if conversation is None:
+            return (None, None, None)
+        if resolution is None:
+            return (conversation, None, None)
 
         project_uuid = str(conversation.project.uuid)
 
-        # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
             messages = self._get_conversation_messages(conversation)
 
@@ -112,9 +141,13 @@ class ClassificationService:
 
         classification: Optional[ConversationClassification] = None
         if messages:
-            classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
+            classification = self.classify_topics(
+                conversation,
+                messages_override=messages,
+                topics_payload=topics_payload,
+            )
         else:
-            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+            logger.warning(f"[ClassificationService] No messages found for conversation {conversation.uuid}.")
 
         if send_to_datalake:
             self._send_resolution_to_datalake(

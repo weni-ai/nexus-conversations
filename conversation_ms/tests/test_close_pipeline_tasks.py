@@ -8,6 +8,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from conversation_ms.close_daily.constants import ClosePipelineStageStatus
+from conversation_ms.close_daily.enqueue import enqueue_downstream_after_classify
 from conversation_ms.close_daily.runner import _process_conversation_batch
 from conversation_ms.close_daily.stages.billing import BillingConfigError, run_billing_stage
 from conversation_ms.close_daily.stages.classify import run_classify_stage
@@ -52,6 +53,33 @@ class TestSelectorClaimEnqueue:
 
 
 @pytest.mark.django_db
+class TestEnqueueDownstream:
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_topics")
+    def test_skips_already_finished_stages(self, mock_topics, mock_billing, mock_datalake, project):
+        conv = _open_conversation(project, resolution="0")
+        now = timezone.now()
+        record = ClosePipelineRecord.objects.create(
+            conversation=conv,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.SKIPPED,
+            topics_at=now,
+            billing_status=ClosePipelineStageStatus.PENDING,
+            billing_pending_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+        )
+
+        enqueue_downstream_after_classify(str(conv.uuid), record=record)
+
+        mock_topics.assert_not_called()
+        mock_billing.assert_called_once_with(str(conv.uuid))
+        mock_datalake.assert_called_once_with(str(conv.uuid))
+
+
+@pytest.mark.django_db
 class TestClassifyStage:
     @patch("conversation_ms.close_daily.stages.classify.enqueue_downstream_after_classify")
     @patch("conversation_ms.close_daily.stages.classify.ClassificationService")
@@ -77,13 +105,37 @@ class TestClassifyStage:
         assert record.topics_status == ClosePipelineStageStatus.PENDING
         assert record.billing_status == ClosePipelineStageStatus.PENDING
         assert record.datalake_status == ClosePipelineStageStatus.PENDING
-        mock_enqueue.assert_called_once_with(str(conv.uuid))
+        mock_enqueue.assert_called_once()
+        assert mock_enqueue.call_args.args[0] == str(conv.uuid)
+
+    @patch("conversation_ms.close_daily.stages.classify.enqueue_downstream_after_classify")
+    @patch("conversation_ms.close_daily.stages.classify.ClassificationService")
+    def test_done_repairs_lost_downstream_enqueue(self, mock_service_cls, mock_enqueue, project):
+        conv = _open_conversation(project, resolution="0")
+        now = timezone.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conv,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.PENDING,
+            topics_pending_at=now,
+            billing_status=ClosePipelineStageStatus.SKIPPED,
+            billing_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+        )
+
+        run_classify_stage(str(conv.uuid))
+
+        mock_service_cls.assert_not_called()
+        mock_enqueue.assert_called_once()
+        assert mock_enqueue.call_args.args[0] == str(conv.uuid)
 
 
 @pytest.mark.django_db
 class TestTopicsAndDatalake:
     @patch("conversation_ms.close_daily.stages.datalake.send_data_lake_event")
-    @patch("conversation_ms.close_daily.stages.topics.enqueue_datalake")
+    @patch("conversation_ms.close_daily.stages.topics.enqueue_datalake_if_topics_event_pending")
     @patch("conversation_ms.close_daily.stages.topics.ClassificationService")
     def test_topics_skipped_enqueues_datalake_and_publishes_both(
         self, mock_service_cls, mock_enqueue_dl, mock_send, project
@@ -102,9 +154,10 @@ class TestTopicsAndDatalake:
             datalake_pending_at=now,
         )
 
-        # Topics already skipped — worker no-ops but Shape C skipped should still allow datalake
+        # Topics already skipped — repair path still asks for datalake if topics event pending
         run_topics_stage(str(conv.uuid))
-        mock_enqueue_dl.assert_not_called()
+        mock_enqueue_dl.assert_called_once()
+        mock_service_cls.assert_not_called()
 
         # First datalake run publishes both when topics already finished
         run_datalake_stage(str(conv.uuid))
@@ -113,6 +166,48 @@ class TestTopicsAndDatalake:
         assert record.datalake_classification_at is not None
         assert record.datalake_topics_at is not None
         assert record.datalake_status == ClosePipelineStageStatus.DONE
+
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
+    def test_topics_finished_repairs_datalake_when_topics_event_missing(self, mock_enqueue, project):
+        conv = _open_conversation(project, resolution="0")
+        now = timezone.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conv,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.DONE,
+            topics_at=now,
+            billing_status=ClosePipelineStageStatus.DONE,
+            billing_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+            datalake_classification_at=now,
+            datalake_topics_at=None,
+        )
+
+        run_topics_stage(str(conv.uuid))
+        mock_enqueue.assert_called_once_with(str(conv.uuid))
+
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
+    def test_topics_finished_skips_datalake_when_topics_event_sent(self, mock_enqueue, project):
+        conv = _open_conversation(project, resolution="0")
+        now = timezone.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conv,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.DONE,
+            topics_at=now,
+            billing_status=ClosePipelineStageStatus.DONE,
+            billing_at=now,
+            datalake_status=ClosePipelineStageStatus.DONE,
+            datalake_at=now,
+            datalake_classification_at=now,
+            datalake_topics_at=now,
+        )
+
+        run_topics_stage(str(conv.uuid))
+        mock_enqueue.assert_not_called()
 
 
 @pytest.mark.django_db

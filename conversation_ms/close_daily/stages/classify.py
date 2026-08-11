@@ -42,6 +42,16 @@ def _persist_messages(conversation, project_uuid: str) -> list | None:
 
 def run_classify_stage(conversation_id: str) -> None:
     conversation, record = load_pipeline_record(conversation_id)
+
+    if record.classify_status == ClosePipelineStageStatus.DONE:
+        logger.info(
+            f"[ClosePipelineClassify] repair_enqueue conversation={conversation_id} "
+            f"topics={record.topics_status} billing={record.billing_status} "
+            f"datalake={record.datalake_status}"
+        )
+        enqueue_downstream_after_classify(str(conversation.uuid), record=record)
+        return
+
     if record.classify_status != ClosePipelineStageStatus.PENDING:
         logger.info(f"[ClosePipelineClassify] skip conversation={conversation_id} " f"status={record.classify_status}")
         return
@@ -91,7 +101,7 @@ def run_classify_stage(conversation_id: str) -> None:
         datalake_status=ClosePipelineStageStatus.PENDING,
     )
 
-    enqueue_downstream_after_classify(str(conversation.uuid))
+    enqueue_downstream_after_classify(str(conversation.uuid), record=record)
 
     if not conversation.has_chats_room and has_messages and preloaded is None:
         from conversation_ms.tasks import migrate_messages_task

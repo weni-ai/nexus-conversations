@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from conversation_ms.close_daily.constants import ClosePipelineStageStatus
-from conversation_ms.close_daily.enqueue import enqueue_datalake
+from conversation_ms.close_daily.enqueue import enqueue_datalake_if_topics_event_pending
 from conversation_ms.close_daily.stages.common import heartbeat_attempt_start, load_pipeline_record
 from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
 from conversation_ms.services.classification_service import ClassificationService
@@ -17,8 +17,10 @@ def run_topics_stage(conversation_id: str) -> None:
     conversation, record = load_pipeline_record(conversation_id)
     status = record.topics_status
 
+    # Topics already finished: repair lost datalake enqueue on Celery retry.
     if status in ClosePipelineStageStatus.FINISHED:
-        logger.info(f"[ClosePipelineTopics] no-op conversation={conversation_id} status={status}")
+        logger.info(f"[ClosePipelineTopics] repair_enqueue conversation={conversation_id} status={status}")
+        enqueue_datalake_if_topics_event_pending(str(conversation.uuid), record)
         return
     if status != ClosePipelineStageStatus.PENDING:
         logger.info(f"[ClosePipelineTopics] skip conversation={conversation_id} status={status}")
@@ -41,7 +43,6 @@ def run_topics_stage(conversation_id: str) -> None:
         else:
             record = ClosePipelineStateMachine.mark_done(record, "topics")
 
-    if record.datalake_topics_at is None and record.topics_status in ClosePipelineStageStatus.FINISHED:
-        enqueue_datalake(str(conversation.uuid))
+    enqueue_datalake_if_topics_event_pending(str(conversation.uuid), record)
 
     logger.info(f"[ClosePipelineTopics] finished conversation={conversation_id} status={record.topics_status}")

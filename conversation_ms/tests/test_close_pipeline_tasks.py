@@ -94,7 +94,7 @@ class TestClassifyStage:
         }
         service = mock_service_cls.return_value
         service.classify_resolution.return_value = (conv, "0", [{"text": "hi"}])
-        service._get_topics_payload.return_value = [{"topic_uuid": "t"}]
+        service.get_topics_payload.return_value = [{"topic_uuid": "t"}]
 
         run_classify_stage(str(conv.uuid))
 

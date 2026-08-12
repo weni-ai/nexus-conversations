@@ -73,7 +73,7 @@ class ClassificationService:
             )
         else:
             if messages is None:
-                messages = self._get_conversation_messages(conversation)
+                messages = self.get_conversation_messages(conversation)
             if not messages:
                 logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
                 return (conversation, None, messages)
@@ -101,7 +101,7 @@ class ClassificationService:
 
         messages = messages_override
         if messages is None:
-            messages = self._get_conversation_messages(conversation)
+            messages = self.get_conversation_messages(conversation)
         if not messages:
             logger.warning(f"[ClassificationService] No messages found for topics on conversation {conversation.uuid}.")
             return None
@@ -133,10 +133,10 @@ class ClassificationService:
         project_uuid = str(conversation.project.uuid)
 
         if messages is None:
-            messages = self._get_conversation_messages(conversation)
+            messages = self.get_conversation_messages(conversation)
 
         if topics_payload is None:
-            topics_payload = self._get_topics_payload(conversation.project)
+            topics_payload = self.get_topics_payload(conversation.project)
         has_active_topics = len(topics_payload) > 0
 
         classification: Optional[ConversationClassification] = None
@@ -217,7 +217,7 @@ class ClassificationService:
         """
         # Retrieve topics for this project to send as context (or use cache)
         if topics_payload is None:
-            topics_payload = self._get_topics_payload(conversation.project)
+            topics_payload = self.get_topics_payload(conversation.project)
         if not topics_payload:
             logger.info(
                 f"[ClassificationService] No topics configured for project {conversation.project.uuid}, "
@@ -315,7 +315,7 @@ class ClassificationService:
             logger.debug("[ClassificationService] Unknown message source '%s', defaulting to user", source)
         return "user"
 
-    def _get_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
+    def get_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
         """
         Retrieve messages from DynamoDB or fallback to Postgres (ConversationMessages).
         """
@@ -344,7 +344,7 @@ class ClassificationService:
 
         return []
 
-    def _get_topics_payload(self, project) -> List[Dict[str, Any]]:
+    def get_topics_payload(self, project) -> List[Dict[str, Any]]:
         """
         Serialize topics and subtopics for the Lambda context.
         Uses prefetch_related to avoid N+1 queries.

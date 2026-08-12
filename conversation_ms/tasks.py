@@ -17,6 +17,11 @@ from conversation_ms.archive.worker import process_archive_conversation
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_LAMBDA_SOFT_TIME_LIMIT_SECONDS,
+    CLOSE_PIPELINE_LAMBDA_TIME_LIMIT_SECONDS,
+    CLOSE_PIPELINE_SIDEEFFECT_SOFT_TIME_LIMIT_SECONDS,
+    CLOSE_PIPELINE_SIDEEFFECT_TIME_LIMIT_SECONDS,
+    CLOSE_PIPELINE_STAGE_RETRY_DELAY_SECONDS,
     SYNC_PROJECT_TIMEZONES_LOCK_KEY,
     SYNC_PROJECT_TIMEZONES_LOCK_TTL_SECONDS,
 )
@@ -686,9 +691,9 @@ def _mark_stage_failed(conversation_id: str, stage: str, error: str) -> None:
     name="conversation_ms.tasks.close_pipeline_classify_task",
     bind=True,
     max_retries=getattr(settings, "CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES", 3),
-    default_retry_delay=60,
-    soft_time_limit=300,
-    time_limit=360,
+    default_retry_delay=CLOSE_PIPELINE_STAGE_RETRY_DELAY_SECONDS,
+    soft_time_limit=CLOSE_PIPELINE_LAMBDA_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=CLOSE_PIPELINE_LAMBDA_TIME_LIMIT_SECONDS,
 )
 def close_pipeline_classify_task(self, conversation_id: str):
     from conversation_ms.close_daily.stages import run_classify_stage
@@ -706,9 +711,9 @@ def close_pipeline_classify_task(self, conversation_id: str):
     name="conversation_ms.tasks.close_pipeline_topics_task",
     bind=True,
     max_retries=getattr(settings, "CLOSE_PIPELINE_TOPICS_MAX_RETRIES", 3),
-    default_retry_delay=60,
-    soft_time_limit=300,
-    time_limit=360,
+    default_retry_delay=CLOSE_PIPELINE_STAGE_RETRY_DELAY_SECONDS,
+    soft_time_limit=CLOSE_PIPELINE_LAMBDA_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=CLOSE_PIPELINE_LAMBDA_TIME_LIMIT_SECONDS,
 )
 def close_pipeline_topics_task(self, conversation_id: str):
     from conversation_ms.close_daily.stages import run_topics_stage
@@ -726,9 +731,9 @@ def close_pipeline_topics_task(self, conversation_id: str):
     name="conversation_ms.tasks.close_pipeline_billing_task",
     bind=True,
     max_retries=getattr(settings, "CLOSE_PIPELINE_BILLING_MAX_RETRIES", 5),
-    default_retry_delay=60,
-    soft_time_limit=120,
-    time_limit=180,
+    default_retry_delay=CLOSE_PIPELINE_STAGE_RETRY_DELAY_SECONDS,
+    soft_time_limit=CLOSE_PIPELINE_SIDEEFFECT_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=CLOSE_PIPELINE_SIDEEFFECT_TIME_LIMIT_SECONDS,
 )
 def close_pipeline_billing_task(self, conversation_id: str):
     from conversation_ms.close_daily.stages import BillingConfigError, run_billing_stage
@@ -748,9 +753,9 @@ def close_pipeline_billing_task(self, conversation_id: str):
     name="conversation_ms.tasks.close_pipeline_datalake_task",
     bind=True,
     max_retries=getattr(settings, "CLOSE_PIPELINE_DATALAKE_MAX_RETRIES", 5),
-    default_retry_delay=60,
-    soft_time_limit=120,
-    time_limit=180,
+    default_retry_delay=CLOSE_PIPELINE_STAGE_RETRY_DELAY_SECONDS,
+    soft_time_limit=CLOSE_PIPELINE_SIDEEFFECT_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=CLOSE_PIPELINE_SIDEEFFECT_TIME_LIMIT_SECONDS,
 )
 def close_pipeline_datalake_task(self, conversation_id: str):
     from conversation_ms.close_daily.stages import run_datalake_stage

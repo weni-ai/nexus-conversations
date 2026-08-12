@@ -41,6 +41,10 @@ app.conf.beat_schedule = {
         "task": "conversation_ms.tasks.reclassify_unclassified_conversations",
         "schedule": schedules.crontab(minute=0),
     },
+    "drain_close_pipeline": {
+        "task": "conversation_ms.tasks.drain_close_pipeline_task",
+        "schedule": schedules.crontab(minute="*/10"),
+    },
 }
 
 if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):

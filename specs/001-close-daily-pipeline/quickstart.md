@@ -29,7 +29,7 @@ export SPECIFY_FEATURE=001-close-daily-pipeline
 - Enqueue graph: classify → topics + billing + datalake; topics `done`/`skipped` → datalake again
 - Topics `skipped` still publishes topics datalake event (bias path); topics `dead` does **not**
 - Remove ThreadPool inline classify/billing/datalake path in the same change set
-- Celery retries: classify/topics **3**, billing/datalake **5**; `close_lambda` concurrency 1 (same image)
+- Celery retries: classify/topics **3**, billing/datalake **5**; queues `close_lambda` / `close_billing` / `close_datalake` on the **same** `conversations-celery` worker (`-Q celery,close_lambda,close_billing,close_datalake`) — no dedicated pod required
 
 ### Drain
 
@@ -112,9 +112,15 @@ Uses `ClosePipelineStateMachine.reclaim_dead` (resets `{stage}_reclaim_count` to
 
 ### Classify `dead` recovery
 
-1. **Retry classify:** `reclaim_dead(record, "classify")` (or the management command) then ensure a worker picks up `close_lambda`.
+1. **Retry classify:** `reclaim_dead(record, "classify")` (or the management command) then ensure `conversations-celery` is consuming `close_lambda` (same pod `-Q` includes it).
 2. **Abandon:** `ClosePipelineStateMachine.abandon_pipeline(record, resolution="3")` → Shape E / intentional Unclassified. Never update `Conversation.resolution` while a Shape B record still exists.
 
-### Metrics to watch
+### Worker queues (same pod)
 
-Drain ticks emit `[ClosePipelineDrainMetrics]` with `dead_by_stage`, `oldest_pending_age_seconds`, `billing_outage_pause`, `datalake_blocked_by_topics_dead`. Alert on **rate/spike** of new `dead`, not every row.
+`conversations-celery` must listen to:
+
+```text
+celery,close_lambda,close_billing,close_datalake
+```
+
+Manifests: `deployment-celery.yaml` args → `celery-worker` + that list. Publishing without the matching `-Q` leaves messages stuck in the broker.

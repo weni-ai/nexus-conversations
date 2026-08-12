@@ -12,6 +12,7 @@ TERMINAL_RESOLUTIONS = frozenset({"0", "1", "3", "4"})
 
 CLOSE_PIPELINE_STAGES = ("classify", "topics", "billing", "datalake")
 
+# Separate Celery queues for observability; same conversations-celery pod consumes all via -Q.
 CLOSE_PIPELINE_QUEUE_LAMBDA = "close_lambda"
 CLOSE_PIPELINE_QUEUE_BILLING = "close_billing"
 CLOSE_PIPELINE_QUEUE_DATALAKE = "close_datalake"

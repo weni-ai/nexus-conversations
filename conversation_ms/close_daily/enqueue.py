@@ -33,6 +33,16 @@ def enqueue_datalake(conversation_id: str) -> None:
     close_pipeline_datalake_task.delay(str(conversation_id))
 
 
+def enqueue_stage(stage: str, conversation_id: str) -> None:
+    """Dispatch the Celery task for a pipeline stage by name."""
+    {
+        "classify": enqueue_classify,
+        "topics": enqueue_topics,
+        "billing": enqueue_billing,
+        "datalake": enqueue_datalake,
+    }[stage](str(conversation_id))
+
+
 def enqueue_downstream_after_classify(conversation_id: str, record=None) -> None:
     """
     Enqueue only stages still ``pending`` after classify commit.

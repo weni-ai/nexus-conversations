@@ -11,7 +11,7 @@ from django.utils import timezone
 from conversation_ms.close_daily.constants import CloseDatalakeEventKind, ClosePipelineStageStatus
 from conversation_ms.models import CloseDatalakeOutbox, ClosePipelineRecord, Conversation
 
-_backfill_module = importlib.import_module("conversation_ms.migrations.0007_close_pipeline_record")
+_backfill_module = importlib.import_module("conversation_ms.migrations.0008_close_pipeline_record")
 backfill_legacy_close_pipeline_records = _backfill_module.backfill_legacy_close_pipeline_records
 
 
@@ -68,6 +68,27 @@ class TestClosePipelineShapeConstraints:
                 classify_status=ClosePipelineStageStatus.FAILED,
                 classify_error="",
             )
+
+    def test_dead_requires_non_empty_error(self, project):
+        conversation = _conversation(project)
+        with pytest.raises(IntegrityError):
+            ClosePipelineRecord.objects.create(
+                conversation=conversation,
+                classify_status=ClosePipelineStageStatus.DEAD,
+                classify_error="",
+            )
+
+    def test_valid_dead_shape(self, project):
+        conversation = _conversation(project)
+        record = ClosePipelineRecord.objects.create(
+            conversation=conversation,
+            classify_status=ClosePipelineStageStatus.DEAD,
+            classify_error="reclaim budget exhausted",
+            classify_reclaim_count=5,
+        )
+        assert record.classify_status == ClosePipelineStageStatus.DEAD
+        assert record.classify_pending_at is None
+        assert record.classify_at is None
 
     def test_valid_pending_shape(self, project):
         conversation = _conversation(project)
@@ -180,6 +201,10 @@ class TestLegacyBackfill:
         assert record.topics_status == ClosePipelineStageStatus.DONE
         assert record.billing_status == ClosePipelineStageStatus.DONE
         assert record.datalake_status == ClosePipelineStageStatus.DONE
+        assert record.classify_reclaim_count == 0
+        assert record.topics_reclaim_count == 0
+        assert record.billing_reclaim_count == 0
+        assert record.datalake_reclaim_count == 0
         assert record.datalake_classification_at is not None
         assert record.datalake_topics_at is not None
         assert not ClosePipelineRecord.objects.filter(conversation=in_progress).exists()

@@ -11,7 +11,7 @@ from conversation_ms.close_daily.constants import (
     TERMINAL_RESOLUTIONS,
     ClosePipelineStageStatus,
 )
-from conversation_ms.models import ClosePipelineRecord, Conversation
+from conversation_ms.models import CloseDatalakeOutbox, ClosePipelineRecord, Conversation
 
 
 class InvalidClosePipelineTransition(Exception):
@@ -30,18 +30,24 @@ class ClosePipelineStateMachine:
 
         NULL → pending → done
                    ├→ skipped ⇄ pending   (ops reclaim only)
-                   └→ failed  → pending   (drain / ops)
+                   ├→ failed  → pending   (drain / ops; may consume reclaim budget)
+                   └→ failed|pending → dead (drain when reclaim budget exhausted)
+        dead → pending                 (ops only; resets reclaim_count)
     """
 
     _OPS_RECLAIM_SKIPPED_STAGES = frozenset({"topics", "billing", "datalake"})
 
     @classmethod
     def _locked_record(cls, record: ClosePipelineRecord) -> ClosePipelineRecord:
-        return ClosePipelineRecord.objects.select_for_update().get(pk=record.pk)
+        return ClosePipelineRecord.objects.select_related("conversation").select_for_update().get(pk=record.pk)
 
     @classmethod
     def _locked_conversation(cls, conversation: Conversation) -> Conversation:
-        return Conversation.objects.select_for_update().get(pk=conversation.pk)
+        return cls._locked_conversation_by_pk(conversation.pk)
+
+    @classmethod
+    def _locked_conversation_by_pk(cls, conversation_id) -> Conversation:
+        return Conversation.objects.select_for_update().get(pk=conversation_id)
 
     @staticmethod
     def _require_stage(stage: str) -> None:
@@ -63,6 +69,10 @@ class ClosePipelineStateMachine:
     @classmethod
     def _error_field(cls, stage: str) -> str:
         return f"{stage}_error"
+
+    @classmethod
+    def _reclaim_count_field(cls, stage: str) -> str:
+        return f"{stage}_reclaim_count"
 
     @classmethod
     def _get_status(cls, record: ClosePipelineRecord, stage: str) -> str | None:
@@ -104,16 +114,19 @@ class ClosePipelineStateMachine:
         ]
 
     @classmethod
-    def _leave_pending_to_failed(
+    def _leave_to_failed_or_dead(
         cls,
         record: ClosePipelineRecord,
         stage: str,
         *,
+        status: str,
         error: str,
     ) -> list[str]:
+        if status not in {ClosePipelineStageStatus.FAILED, ClosePipelineStageStatus.DEAD}:
+            raise InvalidClosePipelineData(f"Error status must be failed/dead, got {status!r}")
         if not error or not str(error).strip():
-            raise InvalidClosePipelineData("failed status requires a non-empty error")
-        setattr(record, cls._status_field(stage), ClosePipelineStageStatus.FAILED)
+            raise InvalidClosePipelineData(f"{status} status requires a non-empty error")
+        setattr(record, cls._status_field(stage), status)
         setattr(record, cls._at_field(stage), None)
         setattr(record, cls._pending_at_field(stage), None)
         setattr(record, cls._error_field(stage), str(error).strip())
@@ -123,6 +136,21 @@ class ClosePipelineStateMachine:
             cls._pending_at_field(stage),
             cls._error_field(stage),
         ]
+
+    @classmethod
+    def _leave_pending_to_failed(
+        cls,
+        record: ClosePipelineRecord,
+        stage: str,
+        *,
+        error: str,
+    ) -> list[str]:
+        return cls._leave_to_failed_or_dead(
+            record,
+            stage,
+            status=ClosePipelineStageStatus.FAILED,
+            error=error,
+        )
 
     @classmethod
     @transaction.atomic
@@ -170,7 +198,6 @@ class ClosePipelineStateMachine:
         record: ClosePipelineRecord,
         *,
         resolution: str,
-        classify_status: str = ClosePipelineStageStatus.DONE,
         topics_status: str = ClosePipelineStageStatus.PENDING,
         billing_status: str = ClosePipelineStageStatus.PENDING,
         datalake_status: str = ClosePipelineStageStatus.PENDING,
@@ -180,8 +207,6 @@ class ClosePipelineStateMachine:
         """
         if resolution not in TERMINAL_RESOLUTIONS:
             raise InvalidClosePipelineData(f"commit_classify_success requires terminal resolution, got {resolution!r}")
-        if classify_status not in ClosePipelineStageStatus.FINISHED:
-            raise InvalidClosePipelineData(f"classify_status must be done/skipped, got {classify_status!r}")
         if topics_status not in {
             ClosePipelineStageStatus.PENDING,
             ClosePipelineStageStatus.SKIPPED,
@@ -196,7 +221,7 @@ class ClosePipelineStateMachine:
             raise InvalidClosePipelineData(f"datalake_status at Shape C must be pending in v1, got {datalake_status!r}")
 
         record = cls._locked_record(record)
-        conversation = cls._locked_conversation(record.conversation)
+        conversation = cls._locked_conversation_by_pk(record.conversation_id)
 
         if record.classify_status != ClosePipelineStageStatus.PENDING:
             raise InvalidClosePipelineTransition(f"Cannot commit classify from status {record.classify_status!r}")
@@ -209,7 +234,12 @@ class ClosePipelineStateMachine:
         conversation.resolution = resolution
         conversation.save(update_fields=["resolution"])
 
-        update_fields = cls._leave_pending_to_finished(record, "classify", status=classify_status, now=now)
+        update_fields = cls._leave_pending_to_finished(
+            record,
+            "classify",
+            status=ClosePipelineStageStatus.DONE,
+            now=now,
+        )
 
         for stage, init_status in (
             ("topics", topics_status),
@@ -291,8 +321,36 @@ class ClosePipelineStateMachine:
 
     @classmethod
     @transaction.atomic
-    def reclaim_failed(cls, record: ClosePipelineRecord, stage: str) -> ClosePipelineRecord:
-        """Drain / ops: failed → pending (clears error only; preserves datalake event ats)."""
+    def mark_dead(cls, record: ClosePipelineRecord, stage: str, error: str) -> ClosePipelineRecord:
+        """Drain: failed|pending → dead (logical dead letter; no enqueue)."""
+        cls._require_stage(stage)
+        record = cls._locked_record(record)
+        current = cls._get_status(record, stage)
+        if current == ClosePipelineStageStatus.DEAD:
+            return record
+        if current not in {ClosePipelineStageStatus.FAILED, ClosePipelineStageStatus.PENDING}:
+            raise InvalidClosePipelineTransition(f"Cannot mark {stage} dead from status {current!r}")
+        update_fields = cls._leave_to_failed_or_dead(
+            record,
+            stage,
+            status=ClosePipelineStageStatus.DEAD,
+            error=error,
+        )
+        record.save(update_fields=update_fields)
+        return record
+
+    @classmethod
+    @transaction.atomic
+    def reclaim_failed(
+        cls,
+        record: ClosePipelineRecord,
+        stage: str,
+        *,
+        consume_budget: bool = True,
+    ) -> ClosePipelineRecord:
+        """
+        Drain / ops: failed → pending.
+        """
         cls._require_stage(stage)
         record = cls._locked_record(record)
         current = cls._get_status(record, stage)
@@ -302,6 +360,60 @@ class ClosePipelineStateMachine:
             raise InvalidClosePipelineTransition(f"Cannot reclaim {stage} from status {current!r} (expected failed)")
         now = timezone.now()
         update_fields = cls._enter_pending(record, stage, now=now)
+        if consume_budget:
+            count_field = cls._reclaim_count_field(stage)
+            setattr(record, count_field, getattr(record, count_field) + 1)
+            update_fields.append(count_field)
+        record.save(update_fields=update_fields)
+        return record
+
+    @classmethod
+    @transaction.atomic
+    def reclaim_stale_pending(
+        cls,
+        record: ClosePipelineRecord,
+        stage: str,
+        *,
+        consume_budget: bool = True,
+    ) -> ClosePipelineRecord:
+        """
+        Drain: stale pending → pending with fresh ``pending_at``.
+
+        When ``consume_budget`` is True (default), increments ``{stage}_reclaim_count``.
+        """
+        cls._require_stage(stage)
+        record = cls._locked_record(record)
+        current = cls._get_status(record, stage)
+        if current != ClosePipelineStageStatus.PENDING:
+            raise InvalidClosePipelineTransition(
+                f"Cannot reclaim stale pending {stage} from status {current!r} (expected pending)"
+            )
+        now = timezone.now()
+        setattr(record, cls._pending_at_field(stage), now)
+        update_fields = [cls._pending_at_field(stage)]
+        if consume_budget:
+            count_field = cls._reclaim_count_field(stage)
+            setattr(record, count_field, getattr(record, count_field) + 1)
+            update_fields.append(count_field)
+        record.save(update_fields=update_fields)
+        return record
+
+    @classmethod
+    @transaction.atomic
+    def reclaim_dead(cls, record: ClosePipelineRecord, stage: str) -> ClosePipelineRecord:
+        """Ops-only: dead → pending and reset reclaim_count to 0."""
+        cls._require_stage(stage)
+        record = cls._locked_record(record)
+        current = cls._get_status(record, stage)
+        if current == ClosePipelineStageStatus.PENDING:
+            return record
+        if current != ClosePipelineStageStatus.DEAD:
+            raise InvalidClosePipelineTransition(f"Cannot reclaim dead {stage} from status {current!r}")
+        now = timezone.now()
+        update_fields = cls._enter_pending(record, stage, now=now)
+        count_field = cls._reclaim_count_field(stage)
+        setattr(record, count_field, 0)
+        update_fields.append(count_field)
         record.save(update_fields=update_fields)
         return record
 
@@ -322,6 +434,33 @@ class ClosePipelineStateMachine:
         update_fields = cls._enter_pending(record, stage, now=now)
         record.save(update_fields=update_fields)
         return record
+
+    @classmethod
+    @transaction.atomic
+    def abandon_pipeline(
+        cls,
+        record: ClosePipelineRecord,
+        *,
+        resolution: str | None = None,
+    ) -> Conversation:
+        """
+        Ops-only: delete the pipeline record (± set resolution).
+        """
+        if resolution is not None and resolution not in TERMINAL_RESOLUTIONS:
+            raise InvalidClosePipelineData(f"abandon_pipeline resolution must be terminal or None, got {resolution!r}")
+
+        record = cls._locked_record(record)
+        conversation = cls._locked_conversation_by_pk(record.conversation_id)
+        conversation_id = conversation.pk
+
+        CloseDatalakeOutbox.objects.filter(conversation_id=conversation_id).delete()
+        record.delete()
+
+        if resolution is not None:
+            conversation.resolution = resolution
+            conversation.save(update_fields=["resolution"])
+
+        return conversation
 
     @classmethod
     @transaction.atomic
@@ -348,9 +487,10 @@ class ClosePipelineStateMachine:
 
         field = "datalake_classification_at" if event == "classification" else "datalake_topics_at"
         now = timezone.now()
-        update_fields = [field]
+        update_fields: list[str] = []
         if getattr(record, field) is None:
             setattr(record, field, now)
+            update_fields.append(field)
 
         if record.datalake_classification_at is not None and record.datalake_topics_at is not None:
             record.datalake_status = ClosePipelineStageStatus.DONE
@@ -358,6 +498,9 @@ class ClosePipelineStateMachine:
             record.datalake_pending_at = None
             record.datalake_error = None
             update_fields.extend(["datalake_status", "datalake_at", "datalake_pending_at", "datalake_error"])
+
+        if not update_fields:
+            return record
 
         record.save(update_fields=sorted(set(update_fields)))
         return record

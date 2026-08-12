@@ -60,3 +60,7 @@ if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):
         return task.apply(args, kwargs, **opts)
 
     current_app.send_task = send_task
+
+app.conf.task_create_missing_queues = True
+if getattr(settings, "CELERY_TASK_ROUTES", None):
+    app.conf.task_routes = settings.CELERY_TASK_ROUTES

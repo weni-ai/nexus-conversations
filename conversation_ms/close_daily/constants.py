@@ -12,23 +12,36 @@ TERMINAL_RESOLUTIONS = frozenset({"0", "1", "3", "4"})
 
 CLOSE_PIPELINE_STAGES = ("classify", "topics", "billing", "datalake")
 
+CLOSE_PIPELINE_QUEUE_LAMBDA = "close_lambda"
+CLOSE_PIPELINE_QUEUE_BILLING = "close_billing"
+CLOSE_PIPELINE_QUEUE_DATALAKE = "close_datalake"
+
+CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES = 3
+CLOSE_PIPELINE_TOPICS_MAX_RETRIES = 3
+CLOSE_PIPELINE_BILLING_MAX_RETRIES = 5
+CLOSE_PIPELINE_DATALAKE_MAX_RETRIES = 5
+
+CLOSE_PIPELINE_PENDING_HEARTBEAT_SECONDS_DEFAULT = 600
+
 
 class ClosePipelineStageStatus:
     PENDING = "pending"
     DONE = "done"
     SKIPPED = "skipped"
     FAILED = "failed"
+    DEAD = "dead"
 
     CHOICES = (
         (PENDING, "Pending"),
         (DONE, "Done"),
         (SKIPPED, "Skipped"),
         (FAILED, "Failed"),
+        (DEAD, "Dead"),
     )
 
-    ALL = frozenset({PENDING, DONE, SKIPPED, FAILED})
+    ALL = frozenset({PENDING, DONE, SKIPPED, FAILED, DEAD})
     FINISHED = frozenset({DONE, SKIPPED})
-    TERMINAL = frozenset({DONE, SKIPPED, FAILED})
+    TERMINAL = frozenset({DONE, SKIPPED, FAILED, DEAD})
 
 
 class CloseDatalakeEventKind:

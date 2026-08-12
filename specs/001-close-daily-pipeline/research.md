@@ -33,11 +33,11 @@ topics ──────► datalake event: topics
 
 ## R4 — ClosePipelineRecord 1:1 (not columns on Conversation)
 
-**Decision**: Persist the 18 stage fields on a separate **`ClosePipelineRecord`** (OneToOne → `Conversation`), plus `CloseDatalakeOutbox`. Do **not** add pipeline columns to `Conversation`.
+**Decision**: Persist the stage fields on a separate **`ClosePipelineRecord`** (OneToOne → `Conversation`), plus `CloseDatalakeOutbox`. Do **not** add pipeline columns to `Conversation`. Field count is **22** after Session 2026-08-04 (`dead` + reclaim_count × 4 on top of the prior 18).
 
 **Rationale**: Keeps `Conversation` as the business entity (`resolution` only). Drain still queries one control-plane table; CheckConstraints stay on that table. Cross-table resolution↔shape rules stay in the state machine (+ tests).
 
-**Alternatives rejected**: 18 columns on `Conversation`; one Django model per stage (schema fan-out); fully normalized stage-row table in v1 (stronger extensibility, more join complexity — revisit post-v1).
+**Alternatives rejected**: columns on `Conversation`; one Django model per stage (schema fan-out); fully normalized stage-row table in v1 (stronger extensibility, more join complexity — revisit post-v1).
 
 ## R5 — Legacy backfill as done
 
@@ -125,9 +125,9 @@ topics ──────► datalake event: topics
 
 ## R18 — Celery pending → failed ownership
 
-**Decision**: Stage task marks `failed` after `max_retries` or non-retryable error; heartbeat refreshes `pending_at` each attempt; SIGKILL → drain stale path. Defaults: max_retries=5, stale TTL ≥ retry window (suggest 3600s).
+**Decision**: Stage task marks `failed` after `max_retries` or non-retryable error; heartbeat refreshes `pending_at` each attempt; SIGKILL → drain stale path. Defaults: classify/topics `max_retries=3`, billing/datalake `max_retries=5`, stale TTL **1800s** (≥ retry window).
 
-**Rationale**: Removes ambiguity between Celery autoretry and drain reclaim; prevents double-queue while retries are healthy.
+**Rationale**: Removes ambiguity between Celery autoretry and drain reclaim; prevents double-queue while retries are healthy. Aligns with Session 2026-08-04 operational limits.
 
 ## R19 — Phase 1→2 Shape E gap
 
@@ -140,3 +140,43 @@ topics ──────► datalake event: topics
 **Decision**: No cleanup/archival in v1; document post-v1 follow-up.
 
 **Rationale**: Correctness first; ~2 rows/conversation is acceptable until volume justifies a retention job.
+
+## R21 — Logical dead letter (status `dead`)
+
+**Decision**: After `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` (**5**) automatic **budget-consuming** drain reclaim/stale re-enqueues, the stage becomes `dead` with error; drain never auto-reclaims `dead`. Ops-only `dead → pending` (single or **bulk**) resets reclaim count. **Not** an SQS/Celery DLQ. Persist `{stage}_reclaim_count` on `ClosePipelineRecord`. Classify `dead` leaves the conversation **In Progress** (Shape B) with no automatic Unclassified fallback — ops `dead → pending` or SM `abandon_pipeline` only (never raw resolution update with live record).
+
+**Rationale**: Alisson review (2026-08-03): without a reclaim ceiling, poison stages loop forever. A control-plane status keeps dead letter visible next to other stage fields and avoids new infra. Auto-terminalizing classify-dead would hide Lambda/data bugs.
+
+**Alternatives rejected**: SQS redrive/DLQ as primary mechanism; infinite drain reclaim; collapsing `dead` into `failed` without a stop condition.
+
+## R22 — Throughput target under concurrency-1
+
+**Decision**: Ops target — claimed cohort reaches classify finished (or classify `dead`) within **12 hours** of the claiming selector. Capacity formula: `eligible × p95_lambda_s / 1`. Missing the target → measure → models discussion (batch/concurrency) — do **not** silently restore ThreadPool fan-out.
+
+**Rationale**: Serial Lambda is an explicit tradeoff; a numeric target makes the Alisson “will this take longer?” question reviewable in soak, not vibes.
+
+## R23 — Poison vs brownout (billing outage mode)
+
+**Decision (v1):** Reclaim→`dead` is for **poison**. Billing brownout mitigation in v1 is **`CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE`** (+ bulk `dead → pending`). While pause is on, drain may re-enqueue billing but MUST NOT increment `billing_reclaim_count` / mark billing `dead`. No SQS DLQ.
+
+**Decision (post-v1, design locked):** Automatic rate/Redis circuit with defaults pause / min samples **10** / open rate **0.5** / open abs **50** / clear rate **0.2** / clear ticks **2**; Redis key `conversation_ms:close_pipeline:billing_outage` (TTL refresh 86400s) storing `active` + `clear_streak`. Deferred to avoid shipping unnecessary complexity before real brownout experience (Session 2026-08-07 / Alisson simplicity preference).
+
+**Accepted v1 risk:** classify/topics (and datalake transport) infra brownout may still mass-`dead` those stages; mitigate with ops pause/bulk reopen — no second automatic circuit in v1.
+
+**Rationale**: Alisson review (2026-08-05) required outage×reclaim policy; numbers locked so review is not reopened. Session 2026-08-07 splits **ship pause now** vs **circuit later**.
+
+**Alternatives rejected**: Undefined `*` thresholds; process-memory-only circuit; infinite reclaim for everyone; SQS DLQ as primary control plane; shipping full circuit in v1 without proven need.
+
+## R24 — Datalake when topics is `dead`
+
+**Decision**: Partial datalake (`datalake_classification_at` set, topics event blocked) while topics is `failed`/`pending`/`dead` is **expected**. Do **not** auto-bias-publish or auto-finish datalake when topics is `dead`. Emit a blocked-by-topics-dead metric. Recovery = reclaim topics (or a later product decision).
+
+**Rationale**: Alisson review (2026-08-05): waiting is correct DAG behavior; the gap was undocumented limbo. Auto-bias would mask topics poison.
+
+**Alternatives rejected**: Auto-bias on topics `dead`; promoting datalake to `dead` solely for waiting; inventing a fifth “blocked” status in v1 (metric + docs suffice).
+
+## R25 — Aggregated alerting for `dead`
+
+**Decision**: Prefer metrics (counts, rate of new `dead`, outage-mode flag, datalake-blocked-by-topics-dead) and rate/spike alerts. Sentry fingerprints by `stage + error_class`, not one issue per conversation.
+
+**Rationale**: Mass brownout must not page thousands of per-row Sentry events; poison still needs a human-visible stop signal.

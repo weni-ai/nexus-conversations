@@ -67,8 +67,16 @@ def _stage_shape_constraint(stage: str) -> models.CheckConstraint:
             f"{error}__isnull": False,
         }
     ) & ~Q(**{error: ""})
+    dead_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.DEAD,
+            f"{at}__isnull": True,
+            f"{pending_at}__isnull": True,
+            f"{error}__isnull": False,
+        }
+    ) & ~Q(**{error: ""})
     return models.CheckConstraint(
-        check=null_ok | pending_ok | done_ok | skipped_ok | failed_ok,
+        check=null_ok | pending_ok | done_ok | skipped_ok | failed_ok | dead_ok,
         name=f"cpipe_{stage}_shape",
     )
 
@@ -347,6 +355,10 @@ class ClosePipelineRecord(models.Model):
     classify_at = models.DateTimeField(null=True, blank=True)
     classify_pending_at = models.DateTimeField(null=True, blank=True)
     classify_error = models.TextField(null=True, blank=True)
+    classify_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for classify.",
+    )
 
     topics_status = models.CharField(
         max_length=16,
@@ -358,6 +370,10 @@ class ClosePipelineRecord(models.Model):
     topics_at = models.DateTimeField(null=True, blank=True)
     topics_pending_at = models.DateTimeField(null=True, blank=True)
     topics_error = models.TextField(null=True, blank=True)
+    topics_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for topics.",
+    )
 
     billing_status = models.CharField(
         max_length=16,
@@ -369,6 +385,10 @@ class ClosePipelineRecord(models.Model):
     billing_at = models.DateTimeField(null=True, blank=True)
     billing_pending_at = models.DateTimeField(null=True, blank=True)
     billing_error = models.TextField(null=True, blank=True)
+    billing_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for billing.",
+    )
 
     datalake_status = models.CharField(
         max_length=16,
@@ -380,6 +400,10 @@ class ClosePipelineRecord(models.Model):
     datalake_at = models.DateTimeField(null=True, blank=True)
     datalake_pending_at = models.DateTimeField(null=True, blank=True)
     datalake_error = models.TextField(null=True, blank=True)
+    datalake_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for datalake.",
+    )
     datalake_classification_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -413,6 +437,26 @@ class ClosePipelineRecord(models.Model):
                 fields=["datalake_status", "datalake_pending_at"],
                 name="cpipe_datalake_drain_idx",
                 condition=Q(datalake_status__in=["pending", "failed"]),
+            ),
+            models.Index(
+                fields=["classify_status"],
+                name="cpipe_classify_dead_idx",
+                condition=Q(classify_status="dead"),
+            ),
+            models.Index(
+                fields=["topics_status"],
+                name="cpipe_topics_dead_idx",
+                condition=Q(topics_status="dead"),
+            ),
+            models.Index(
+                fields=["billing_status"],
+                name="cpipe_billing_dead_idx",
+                condition=Q(billing_status="dead"),
+            ),
+            models.Index(
+                fields=["datalake_status"],
+                name="cpipe_datalake_dead_idx",
+                condition=Q(datalake_status="dead"),
             ),
         ]
         constraints = [

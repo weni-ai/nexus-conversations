@@ -20,7 +20,6 @@ from conversation_ms.close_daily.runner import (
     _process_project_conversations,
     _process_single_project,
 )
-from conversation_ms.models import ConversationMessages
 from conversation_ms.tasks import close_daily_conversations_task, close_project_conversations_task
 from conversation_ms.tests.factories import ConversationFactory, ProjectFactory, Resolution
 from conversation_ms.utils.date_helpers import ProjectDay
@@ -136,21 +135,13 @@ class TestCloseDailyConversationsTask:
         mock_cache.add.return_value = True  # Day ended
 
         yesterday = pendulum.now("America/Sao_Paulo").subtract(days=1)
-        conversation = ConversationFactory(
+        ConversationFactory(
             project=project,
             resolution=Resolution.IN_PROGRESS,
             start_date=yesterday.start_of("day").in_timezone("UTC"),
         )
 
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.return_value = (
-                conversation,
-                None,
-                Resolution.RESOLVED,
-            )
-            mock_class_service.return_value = mock_service
-
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
             conversations_closed = _process_project_conversations(
                 str(project.uuid),
                 "America/Sao_Paulo",
@@ -159,7 +150,8 @@ class TestCloseDailyConversationsTask:
                 force_close=False,
             )
 
-            assert conversations_closed >= 0
+            assert conversations_closed >= 1
+            assert mock_enqueue.call_count >= 1
 
     @pytest.mark.django_db
     def test_automatic_single_project_always_attempts_processing(self):
@@ -267,224 +259,104 @@ class TestCloseDailyConversationsTask:
 
     @pytest.mark.django_db
     def test_classification_error_continues(self):
-        """Test that classification errors don't break batch processing."""
+        """One claim failure does not block other conversations in the batch."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
         conversation1 = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
         conversation2 = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
 
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = [
-                (conversation1, None, Resolution.RESOLVED),
-                Exception("Classification error"),
-            ]
-            mock_class_service.return_value = mock_service
+        from conversation_ms.close_daily import state_machine as sm_mod
 
-            conversations_closed = _process_conversation_batch(
-                [conversation1, conversation2],
-                str(project.uuid),
-                project_day.get_end_date_utc(),
-            )
+        real_claim = sm_mod.ClosePipelineStateMachine.claim_classify.__func__
 
-            assert conversations_closed >= 1
+        def _claim(conversation):
+            if conversation.uuid == conversation1.uuid:
+                raise RuntimeError("claim failed")
+            return real_claim(sm_mod.ClosePipelineStateMachine, conversation)
+
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            with patch(
+                "conversation_ms.close_daily.runner.ClosePipelineStateMachine.claim_classify",
+                side_effect=_claim,
+            ):
+                conversations_closed = _process_conversation_batch(
+                    [conversation1, conversation2], str(project.uuid), project_day.get_end_date_utc()
+                )
+        assert conversations_closed == 1
+        mock_enqueue.assert_called_once_with(str(conversation2.uuid))
 
     @pytest.mark.django_db
     def test_batch_processing(self):
-        """Test processing conversations in batches."""
+        """Selector claims and enqueues classify for each conversation."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
         conversations = ConversationFactory.create_batch(
-            5,
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            5, project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.return_value = (
-                conversations[0],
-                None,
-                Resolution.RESOLVED,
-            )
-            mock_class_service.return_value = mock_service
-
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
             conversations_closed = _process_conversation_batch(
-                conversations,
-                str(project.uuid),
-                project_day.get_end_date_utc(),
+                conversations, str(project.uuid), project_day.get_end_date_utc()
             )
-
-            assert conversations_closed >= 0
+        assert conversations_closed == 5
+        assert mock_enqueue.call_count == 5
 
     @pytest.mark.django_db
     def test_batch_processing_sends_billing_sqs_when_queue_configured(self, settings):
+        """Selector no longer sends billing; it only enqueues classify."""
         settings.SQS_BILLING_QUEUE_URL = "https://sqs.test/q.fifo"
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
         conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-        conversation.end_date = project_day.get_end_date_utc()
-        mock_producer = Mock()
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner.get_billing_sqs_producer", return_value=mock_producer):
-                with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                    mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                        "persisted": False
-                    }
-                    _process_conversation_batch(
-                        [conversation],
-                        str(project.uuid),
-                        project_day.get_end_date_utc(),
-                    )
-
-        mock_producer.send_conversation_close.assert_called_once()
-        args, _kwargs = mock_producer.send_conversation_close.call_args
-        assert args[0]["resolution"] == Resolution.RESOLVED
-        assert args[0]["contact_urn"] == conversation.contact_urn
-        assert args[0]["channel_uuid"] == str(conversation.channel_uuid)
-        assert args[0]["uuid"] == str(conversation.uuid)
-        assert args[0]["end_date"].endswith("Z")
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            closed = _process_conversation_batch([conversation], str(project.uuid), project_day.get_end_date_utc())
+        assert closed == 1
+        mock_enqueue.assert_called_once_with(str(conversation.uuid))
 
     @pytest.mark.django_db
     def test_batch_processing_skips_billing_sqs_when_resolution_bulk_update_fails(self, settings):
+        """Billing is not invoked from the selector after cutover."""
         settings.SQS_BILLING_QUEUE_URL = "https://sqs.test/q.fifo"
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
         conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-        mock_producer = Mock()
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner.get_billing_sqs_producer", return_value=mock_producer):
-
-                def _bulk_update_side_effect(objs, fields, batch_size=50):
-                    if list(fields) == ["resolution"]:
-                        raise RuntimeError("bulk_update failed")
-
-                with patch(
-                    "conversation_ms.close_daily.runner.Conversation.objects.bulk_update",
-                    side_effect=_bulk_update_side_effect,
-                ):
-                    with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                        mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                            "persisted": False
-                        }
-                        _process_conversation_batch(
-                            [conversation],
-                            str(project.uuid),
-                            project_day.get_end_date_utc(),
-                        )
-
-        mock_producer.send_conversation_close.assert_not_called()
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            closed = _process_conversation_batch([conversation], str(project.uuid), project_day.get_end_date_utc())
+        assert closed == 1
+        mock_enqueue.assert_called_once()
 
     @pytest.mark.django_db
     def test_batch_processing_sends_datalake_events_after_resolution_persisted(self):
-        """Datalake events are sent only after resolution bulk_update succeeds."""
+        """Datalake is not invoked from the selector after cutover."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
         conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner._send_datalake_events") as mock_datalake:
-                with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                    mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                        "persisted": False
-                    }
-                    _process_conversation_batch(
-                        [conversation],
-                        str(project.uuid),
-                        project_day.get_end_date_utc(),
-                    )
-
-        mock_datalake.assert_called_once()
-        sent_conversations = mock_datalake.call_args[0][0]
-        assert len(sent_conversations) == 1
-        assert sent_conversations[0].uuid == conversation.uuid
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            closed = _process_conversation_batch([conversation], str(project.uuid), project_day.get_end_date_utc())
+        assert closed == 1
+        mock_enqueue.assert_called_once()
 
     @pytest.mark.django_db
     def test_batch_processing_skips_datalake_events_when_resolution_bulk_update_fails(self):
-        """Datalake events are NOT sent when resolution bulk_update fails."""
+        """Datalake is not invoked from the selector after cutover."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
         conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner._send_datalake_events") as mock_datalake:
-
-                def _bulk_update_side_effect(objs, fields, batch_size=50):
-                    if list(fields) == ["resolution"]:
-                        raise RuntimeError("bulk_update failed")
-
-                with patch(
-                    "conversation_ms.close_daily.runner.Conversation.objects.bulk_update",
-                    side_effect=_bulk_update_side_effect,
-                ):
-                    with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                        mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                            "persisted": False
-                        }
-                        _process_conversation_batch(
-                            [conversation],
-                            str(project.uuid),
-                            project_day.get_end_date_utc(),
-                        )
-
-        mock_datalake.assert_not_called()
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            closed = _process_conversation_batch([conversation], str(project.uuid), project_day.get_end_date_utc())
+        assert closed == 1
+        mock_enqueue.assert_called_once()
 
     @pytest.mark.django_db
     def test_project_processing_error_returns_failure(self):
@@ -508,116 +380,36 @@ class TestCloseDailyConversationsTask:
 
     @pytest.mark.django_db
     def test_conversation_with_has_chats_room(self):
-        """Test conversation with has_chats_room flag."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
         conversation = ConversationFactory(
             project=project,
             resolution=Resolution.IN_PROGRESS,
             has_chats_room=True,
             start_date=project_day.start_of_day_utc,
         )
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.return_value = (
-                conversation,
-                None,
-                Resolution.HAS_CHAT_ROOM,
-            )
-            mock_class_service.return_value = mock_service
-
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
             conversations_closed = _process_conversation_batch(
-                [conversation],
-                str(project.uuid),
-                project_day.get_end_date_utc(),
+                [conversation], str(project.uuid), project_day.get_end_date_utc()
             )
-
-            assert conversations_closed >= 0
+        assert conversations_closed == 1
+        mock_enqueue.assert_called_once_with(str(conversation.uuid))
 
     @pytest.mark.django_db
     def test_conversation_without_messages(self):
-        """Test conversation without messages in DynamoDB."""
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
         conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.return_value = (conversation, None, None)
-            mock_class_service.return_value = mock_service
-
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
             conversations_closed = _process_conversation_batch(
-                [conversation],
-                str(project.uuid),
-                project_day.get_end_date_utc(),
+                [conversation], str(project.uuid), project_day.get_end_date_utc()
             )
-
-            assert conversations_closed >= 0
+        assert conversations_closed == 1
+        mock_enqueue.assert_called_once()
 
     @pytest.mark.django_db(transaction=True)
-    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=1)
-    @patch("conversation_ms.close_daily.runner._queue_message_migrations")
-    @patch("conversation_ms.services.message_migration_service.MessageRepository.get_messages_from_dynamo")
-    def test_batch_persists_messages_before_classification_for_retry(
-        self, mock_get_messages_from_dynamo, mock_queue_message_migrations
-    ):
-        """
-        Integration coverage for retry-safety path:
-        - messages are persisted to Postgres before classification
-        - classification consumes preloaded messages
-        - async migration queue is not required for that conversation
-        """
-        project = ProjectFactory()
-        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-        conversation = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
-        )
-
-        persisted_messages = [
-            {"text": "Oi", "source": "user", "created_at": "2026-03-23T12:00:00Z", "message_id": "msg-1"},
-            {"text": "Tudo bem?", "source": "user", "created_at": "2026-03-23T12:00:05Z", "message_id": "msg-2"},
-        ]
-        mock_get_messages_from_dynamo.return_value = persisted_messages
-
-        mock_classification_service = Mock()
-        mock_classification_service.classify_conversation.return_value = (
-            conversation,
-            None,
-            Resolution.RESOLVED,
-        )
-
-        conversations_closed = _process_conversation_batch(
-            [conversation],
-            str(project.uuid),
-            project_day.get_end_date_utc(),
-            classification_service=mock_classification_service,
-            project_timezone="America/Sao_Paulo",
-        )
-
-        assert conversations_closed == 1
-
-        messages_row = ConversationMessages.objects.get(conversation=conversation)
-        assert len(messages_row.messages) == 2
-        assert messages_row.messages[0]["text"] == "Oi"
-        assert messages_row.messages[1]["text"] == "Tudo bem?"
-
-        mock_classification_service.classify_conversation.assert_called_once()
-        call_kwargs = mock_classification_service.classify_conversation.call_args.kwargs
-        assert call_kwargs["messages_override"] is not None
-        assert len(call_kwargs["messages_override"]) == 2
-
-        mock_queue_message_migrations.assert_called_once_with([], str(project.uuid))
-
-    @pytest.mark.django_db
     def test_determine_date_range_with_force_close(self):
         """Test _determine_date_range with force_close."""
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
@@ -748,118 +540,17 @@ class TestCloseDailyConversationsTask:
         assert result["conversations_closed"] == 0
 
 
-class TestThreadedClassification:
-    """Tests for threaded classification within _process_conversation_batch."""
-
+class TestSelectorClassificationCutover:
     @pytest.mark.django_db
-    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=1)
-    def test_single_thread_processes_all_conversations(self):
-        """With threads=1 the batch still classifies every conversation."""
+    def test_batch_claims_all_conversations(self):
         project = ProjectFactory()
         project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
         conversations = ConversationFactory.create_batch(
-            3,
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
+            3, project=project, resolution=Resolution.IN_PROGRESS, start_date=project_day.start_of_day_utc
         )
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                    "persisted": False
-                }
-                conversations_closed = _process_conversation_batch(
-                    conversations,
-                    str(project.uuid),
-                    project_day.get_end_date_utc(),
-                )
-
+        with patch("conversation_ms.close_daily.runner.enqueue_classify") as mock_enqueue:
+            conversations_closed = _process_conversation_batch(
+                conversations, str(project.uuid), project_day.get_end_date_utc()
+            )
         assert conversations_closed == 3
-
-    @pytest.mark.django_db
-    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=3)
-    def test_multiple_threads_process_all_conversations(self):
-        """With threads>1, all conversations are classified regardless of execution order."""
-        project = ProjectFactory()
-        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
-        conversations = ConversationFactory.create_batch(
-            5,
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
-        )
-
-        def _classify(conv, *args, **kwargs):
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                    "persisted": False
-                }
-                conversations_closed = _process_conversation_batch(
-                    conversations,
-                    str(project.uuid),
-                    project_day.get_end_date_utc(),
-                )
-
-        assert conversations_closed == 5
-
-    @pytest.mark.django_db
-    @override_settings(CLOSE_DAILY_CLASSIFICATION_THREADS=2)
-    def test_thread_exception_does_not_block_other_conversations(self):
-        """An exception in one thread does not prevent other conversations from being processed."""
-        project = ProjectFactory()
-        project_day = ProjectDay.for_yesterday("America/Sao_Paulo")
-
-        conv_ok = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
-        )
-        conv_fail = ConversationFactory(
-            project=project,
-            resolution=Resolution.IN_PROGRESS,
-            start_date=project_day.start_of_day_utc,
-        )
-
-        call_count = 0
-
-        def _classify(conv, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if conv.uuid == conv_fail.uuid:
-                raise RuntimeError("Lambda timeout")
-            conv.resolution = Resolution.RESOLVED
-            return (conv, None, Resolution.RESOLVED)
-
-        with patch("conversation_ms.close_daily.runner.ClassificationService") as mock_class_service:
-            mock_service = Mock()
-            mock_service.classify_conversation.side_effect = _classify
-            mock_class_service.return_value = mock_service
-            with patch("conversation_ms.close_daily.runner.MessageMigrationService") as mock_migration_cls:
-                mock_migration_cls.return_value.persist_conversation_messages_to_postgres.return_value = {
-                    "persisted": False
-                }
-                conversations_closed = _process_conversation_batch(
-                    [conv_ok, conv_fail],
-                    str(project.uuid),
-                    project_day.get_end_date_utc(),
-                )
-
-        assert call_count == 2
-        assert conversations_closed == 1
+        assert mock_enqueue.call_count == 3

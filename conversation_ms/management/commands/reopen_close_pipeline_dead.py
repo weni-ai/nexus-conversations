@@ -4,24 +4,14 @@ from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
 
-from conversation_ms.close_daily.constants import CLOSE_PIPELINE_STAGES, ClosePipelineStageStatus
-from conversation_ms.close_daily.enqueue import (
-    enqueue_billing,
-    enqueue_classify,
-    enqueue_datalake,
-    enqueue_topics,
+from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_DRAIN_BATCH_SIZE_DEFAULT,
+    CLOSE_PIPELINE_STAGES,
+    ClosePipelineStageStatus,
 )
+from conversation_ms.close_daily.enqueue import enqueue_stage
 from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
 from conversation_ms.models import ClosePipelineRecord
-
-
-def _enqueue_for_stage(stage: str):
-    return {
-        "classify": enqueue_classify,
-        "topics": enqueue_topics,
-        "billing": enqueue_billing,
-        "datalake": enqueue_datalake,
-    }[stage]
 
 
 class Command(BaseCommand):
@@ -40,8 +30,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--limit",
             type=int,
-            default=100,
-            help="Max rows to reopen (default 100)",
+            default=CLOSE_PIPELINE_DRAIN_BATCH_SIZE_DEFAULT,
+            help=f"Max rows to reopen (default {CLOSE_PIPELINE_DRAIN_BATCH_SIZE_DEFAULT})",
         )
         parser.add_argument(
             "--error-contains",
@@ -87,7 +77,7 @@ class Command(BaseCommand):
         for record in rows:
             updated = ClosePipelineStateMachine.reclaim_dead(record, stage)
             if options["enqueue"]:
-                _enqueue_for_stage(stage)(str(updated.conversation_id))
+                enqueue_stage(stage, str(updated.conversation_id))
             reopened += 1
             self.stdout.write(f"  reopened conversation={updated.conversation_id}")
 

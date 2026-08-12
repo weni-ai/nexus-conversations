@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any
 
 from django.conf import settings
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 
 from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE_DEFAULT,
     CLOSE_PIPELINE_DEAD_BUDGET_EXHAUSTED,
     CLOSE_PIPELINE_DRAIN_BATCH_SIZE_DEFAULT,
     CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS_DEFAULT,
@@ -18,26 +19,12 @@ from conversation_ms.close_daily.constants import (
     CLOSE_PIPELINE_STALE_PENDING_SECONDS_DEFAULT,
     ClosePipelineStageStatus,
 )
-from conversation_ms.close_daily.enqueue import (
-    enqueue_billing,
-    enqueue_classify,
-    enqueue_datalake,
-    enqueue_topics,
-)
+from conversation_ms.close_daily.enqueue import enqueue_stage
 from conversation_ms.close_daily.metrics import emit_drain_metrics
 from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
 from conversation_ms.models import ClosePipelineRecord
 
 logger = logging.getLogger(__name__)
-
-
-def _enqueue_for_stage(stage: str) -> Callable[[str], None]:
-    return {
-        "classify": enqueue_classify,
-        "topics": enqueue_topics,
-        "billing": enqueue_billing,
-        "datalake": enqueue_datalake,
-    }[stage]
 
 
 def _max_reclaims() -> int:
@@ -53,7 +40,7 @@ def _batch_size() -> int:
 
 
 def _billing_pause() -> bool:
-    return bool(getattr(settings, "CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", False))
+    return bool(getattr(settings, "CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE_DEFAULT))
 
 
 def _status_field(stage: str) -> str:
@@ -120,10 +107,6 @@ def _budget_exhausted(record: ClosePipelineRecord, stage: str) -> bool:
     return _reclaim_count(record, stage) >= _max_reclaims()
 
 
-def _enqueue_stage(stage: str, conversation_id) -> None:
-    _enqueue_for_stage(stage)(str(conversation_id))
-
-
 def _handle_candidate(
     record: ClosePipelineRecord,
     stage: str,
@@ -133,7 +116,7 @@ def _handle_candidate(
     """
     Process one drain candidate.
 
-    Returns action: ``requeued`` | ``marked_dead`` | ``skipped``.
+    Returns action: ``requeued`` | ``marked_dead``.
     """
     conversation_id = record.conversation_id
     pause_exempt = _is_billing_pause_exempt(stage)
@@ -155,7 +138,7 @@ def _handle_candidate(
     else:
         ClosePipelineStateMachine.reclaim_stale_pending(record, stage, consume_budget=consume_budget)
 
-    _enqueue_stage(stage, conversation_id)
+    enqueue_stage(stage, str(conversation_id))
     logger.info(
         "[ClosePipelineDrain] requeued stage=%s conversation=%s kind=%s consume_budget=%s pause=%s",
         stage,
@@ -177,15 +160,18 @@ def drain_stage(stage: str, *, batch_size: int | None = None) -> dict[str, int]:
     stats = {"failed_seen": 0, "stale_seen": 0, "requeued": 0, "marked_dead": 0, "skipped": 0}
     remaining = limit
 
-    for record in _failed_queryset(stage)[:remaining]:
+    # Count only real actions against the batch budget (not defensive skips / races).
+    for record in _failed_queryset(stage).iterator(chunk_size=limit):
+        if remaining <= 0:
+            break
         stats["failed_seen"] += 1
         action = _handle_candidate(record, stage, kind="failed")
         stats[action] = stats.get(action, 0) + 1
         remaining -= 1
-        if remaining <= 0:
-            return stats
 
-    for record in _stale_pending_queryset(stage, cutoff)[:remaining]:
+    for record in _stale_pending_queryset(stage, cutoff).iterator(chunk_size=max(limit, 1)):
+        if remaining <= 0:
+            break
         stats["stale_seen"] += 1
         if not is_stale_pending_eligible(record, stage, cutoff=cutoff):
             stats["skipped"] += 1
@@ -193,8 +179,6 @@ def drain_stage(stage: str, *, batch_size: int | None = None) -> dict[str, int]:
         action = _handle_candidate(record, stage, kind="stale")
         stats[action] = stats.get(action, 0) + 1
         remaining -= 1
-        if remaining <= 0:
-            break
 
     return stats
 

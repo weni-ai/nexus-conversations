@@ -6,10 +6,14 @@ import logging
 from typing import Any
 
 import sentry_sdk
-from django.db.models import Min
+from django.db.models import Case, Count, IntegerField, Min, When
 from django.utils import timezone
 
-from conversation_ms.close_daily.constants import CLOSE_PIPELINE_STAGES, ClosePipelineStageStatus
+from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE_DEFAULT,
+    CLOSE_PIPELINE_STAGES,
+    ClosePipelineStageStatus,
+)
 from conversation_ms.models import ClosePipelineRecord
 
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ logger = logging.getLogger(__name__)
 def billing_outage_pause_enabled() -> bool:
     from django.conf import settings
 
-    return bool(getattr(settings, "CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", False))
+    return bool(getattr(settings, "CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE_DEFAULT))
 
 
 def count_datalake_blocked_by_topics_dead() -> int:
@@ -33,20 +37,30 @@ def count_datalake_blocked_by_topics_dead() -> int:
 def collect_drain_snapshot() -> dict[str, Any]:
     """Aggregate ops snapshot for one drain tick (or on-demand)."""
     now = timezone.now()
+    aggregates: dict[str, Any] = {}
+    for stage in CLOSE_PIPELINE_STAGES:
+        aggregates[f"{stage}_dead"] = Count(
+            Case(
+                When(**{f"{stage}_status": ClosePipelineStageStatus.DEAD}, then=1),
+                output_field=IntegerField(),
+            )
+        )
+        aggregates[f"{stage}_oldest_pending"] = Min(
+            Case(
+                When(
+                    **{f"{stage}_status": ClosePipelineStageStatus.PENDING},
+                    then=f"{stage}_pending_at",
+                )
+            )
+        )
+
+    result = ClosePipelineRecord.objects.aggregate(**aggregates)
+
     dead_by_stage: dict[str, int] = {}
     oldest_pending_age_seconds: dict[str, float | None] = {}
-
     for stage in CLOSE_PIPELINE_STAGES:
-        status_field = f"{stage}_status"
-        pending_field = f"{stage}_pending_at"
-        dead_by_stage[stage] = ClosePipelineRecord.objects.filter(
-            **{status_field: ClosePipelineStageStatus.DEAD}
-        ).count()
-        oldest = (
-            ClosePipelineRecord.objects.filter(**{status_field: ClosePipelineStageStatus.PENDING})
-            .exclude(**{f"{pending_field}__isnull": True})
-            .aggregate(oldest=Min(pending_field))["oldest"]
-        )
+        dead_by_stage[stage] = int(result[f"{stage}_dead"] or 0)
+        oldest = result[f"{stage}_oldest_pending"]
         if oldest is None:
             oldest_pending_age_seconds[stage] = None
         else:

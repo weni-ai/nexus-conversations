@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import sentry_sdk
+from kombu.exceptions import OperationalError
 
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.close_daily.constants import ClosePipelineStageStatus
@@ -40,6 +41,22 @@ def _persist_messages(conversation, project_uuid: str) -> list | None:
         return None
 
 
+def _downstream_statuses_after_classify(conversation, *, messages, topics_payload) -> tuple[str, str, bool]:
+    """Decide topics/billing init status for Shape C (billing stays outside ClassificationService)."""
+    has_messages = bool(messages)
+    topics_status = (
+        ClosePipelineStageStatus.SKIPPED
+        if (not topics_payload or not has_messages)
+        else ClosePipelineStageStatus.PENDING
+    )
+    billing_status = (
+        ClosePipelineStageStatus.SKIPPED
+        if build_conversation_close_billing_payload(conversation) is None
+        else ClosePipelineStageStatus.PENDING
+    )
+    return topics_status, billing_status, has_messages
+
+
 def run_classify_stage(conversation_id: str) -> None:
     conversation, record = load_pipeline_record(conversation_id)
 
@@ -73,24 +90,15 @@ def run_classify_stage(conversation_id: str) -> None:
         resolution = str(ResolutionEntities.UNCLASSIFIED)
         logger.warning(f"[ClosePipelineClassify] no messages — Unclassified conversation={conversation_id}")
 
-    topics_payload = service._get_topics_payload(conversation.project)
-    has_messages = bool(messages) if messages is not None else bool(service._get_conversation_messages(conversation))
-    if conversation.has_chats_room:
-        if messages is None:
-            messages = service._get_conversation_messages(conversation)
-            has_messages = bool(messages)
-
-    topics_status = (
-        ClosePipelineStageStatus.SKIPPED
-        if (not topics_payload or not has_messages)
-        else ClosePipelineStageStatus.PENDING
-    )
+    topics_payload = service.get_topics_payload(conversation.project)
+    if messages is None:
+        messages = service.get_conversation_messages(conversation)
 
     conversation.resolution = resolution
-    billing_status = (
-        ClosePipelineStageStatus.SKIPPED
-        if build_conversation_close_billing_payload(conversation) is None
-        else ClosePipelineStageStatus.PENDING
+    topics_status, billing_status, has_messages = _downstream_statuses_after_classify(
+        conversation,
+        messages=messages,
+        topics_payload=topics_payload,
     )
 
     record = ClosePipelineStateMachine.commit_classify_success(
@@ -108,7 +116,7 @@ def run_classify_stage(conversation_id: str) -> None:
 
         try:
             migrate_messages_task.delay(str(conversation.uuid))
-        except Exception as exc:
+        except OperationalError as exc:
             logger.warning(
                 f"[ClosePipelineClassify] Failed to enqueue migrate_messages "
                 f"conversation={conversation.uuid} error={exc}"

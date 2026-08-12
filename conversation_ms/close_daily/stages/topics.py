@@ -28,14 +28,14 @@ def run_topics_stage(conversation_id: str) -> None:
 
     record = heartbeat_attempt_start(record, "topics")
     service = ClassificationService()
-    topics_payload = service._get_topics_payload(conversation.project)
+    topics_payload = service.get_topics_payload(conversation.project)
 
     if not topics_payload:
         record = ClosePipelineStateMachine.mark_skipped(record, "topics")
     else:
         classification = service.classify_topics(conversation, topics_payload=topics_payload)
         if classification is None:
-            messages = service._get_conversation_messages(conversation)
+            messages = service.get_conversation_messages(conversation)
             if not messages:
                 record = ClosePipelineStateMachine.mark_skipped(record, "topics")
             else:

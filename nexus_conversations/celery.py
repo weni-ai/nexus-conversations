@@ -48,6 +48,10 @@ app.conf.beat_schedule = {
             "queue": getattr(settings, "CONVERSATION_ARCHIVE_CELERY_QUEUE", "conversations-archive"),
         },
     },
+    "drain_close_pipeline": {
+        "task": "conversation_ms.tasks.drain_close_pipeline_task",
+        "schedule": schedules.crontab(minute="*/10"),
+    },
 }
 
 if "test" in sys.argv or getattr(settings, "CELERY_ALWAYS_EAGER", False):

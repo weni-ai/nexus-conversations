@@ -83,3 +83,38 @@ CLEAR after 2 consecutive ticks with (attempts == 0 or rate < 0.2), pause false
 - Stale pending age: `now() - {stage}_pending_at` when status is `pending`
 - Pipeline complete: all four stages in `{done, skipped}`
 - Shape E: terminal `Conversation` with **no** `ClosePipelineRecord`
+
+## On-call (drain / dead / pause)
+
+### Flags & knobs
+
+| Knob | Purpose |
+|------|---------|
+| `CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE` | While `true`, drain may re-enqueue billing **without** consuming reclaim budget and **without** marking billing `dead` |
+| `CLOSE_PIPELINE_STALE_PENDING_SECONDS` | Stale clock on `{stage}_pending_at` (default 1800) |
+| `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` | After this many budget-consuming reclaims, drain marks `dead` (default 5) |
+| Beat `drain_close_pipeline` | Every 10 minutes |
+
+### Bulk reopen after incident
+
+```bash
+# Dry-run
+python manage.py reopen_close_pipeline_dead --stage billing --dry-run
+
+# Reopen + enqueue workers
+python manage.py reopen_close_pipeline_dead --stage billing --enqueue --limit 500
+
+# Filter by error substring
+python manage.py reopen_close_pipeline_dead --stage billing --error-contains "SQS" --enqueue
+```
+
+Uses `ClosePipelineStateMachine.reclaim_dead` (resets `{stage}_reclaim_count` to 0). Prefer this over raw SQL status edits.
+
+### Classify `dead` recovery
+
+1. **Retry classify:** `reclaim_dead(record, "classify")` (or the management command) then ensure a worker picks up `close_lambda`.
+2. **Abandon:** `ClosePipelineStateMachine.abandon_pipeline(record, resolution="3")` → Shape E / intentional Unclassified. Never update `Conversation.resolution` while a Shape B record still exists.
+
+### Metrics to watch
+
+Drain ticks emit `[ClosePipelineDrainMetrics]` with `dead_by_stage`, `oldest_pending_age_seconds`, `billing_outage_pause`, `datalake_blocked_by_topics_dead`. Alert on **rate/spike** of new `dead`, not every row.

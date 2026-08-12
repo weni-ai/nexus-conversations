@@ -174,6 +174,7 @@ CLOSE_PIPELINE_DRAIN_BATCH_SIZE = env.int("CLOSE_PIPELINE_DRAIN_BATCH_SIZE", def
 CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE = env.bool("CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", default=False)
 
 CELERY_TASK_ROUTES = {
+    # Separate queues for backlog visibility; consumed by the same conversations-celery pod (-Q).
     "conversation_ms.tasks.close_pipeline_classify_task": {"queue": "close_lambda"},
     "conversation_ms.tasks.close_pipeline_topics_task": {"queue": "close_lambda"},
     "conversation_ms.tasks.close_pipeline_billing_task": {"queue": "close_billing"},

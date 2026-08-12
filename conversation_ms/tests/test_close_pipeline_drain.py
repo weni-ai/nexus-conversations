@@ -49,7 +49,7 @@ def _shape_c(project, *, topics_status=ClosePipelineStageStatus.PENDING, **kwarg
 @pytest.mark.django_db
 class TestDrainStaleAndFailed:
     @override_settings(CLOSE_PIPELINE_STALE_PENDING_SECONDS=60, CLOSE_PIPELINE_DRAIN_BATCH_SIZE=100)
-    @patch("conversation_ms.close_daily.drain.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_stale_pending_reenqueue(self, mock_enq, project):
         record = _shape_c(project)
         stale = timezone.now() - timedelta(seconds=120)
@@ -66,7 +66,7 @@ class TestDrainStaleAndFailed:
         mock_enq.assert_called_once_with(str(record.conversation_id))
 
     @override_settings(CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS=5)
-    @patch("conversation_ms.close_daily.drain.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_exhausted_reclaim_marks_dead(self, mock_enq, project):
         record = _shape_c(project)
         record = ClosePipelineStateMachine.mark_failed(record, "billing", "sqs down")
@@ -82,7 +82,7 @@ class TestDrainStaleAndFailed:
         mock_enq.assert_not_called()
 
     @override_settings(CLOSE_PIPELINE_STALE_PENDING_SECONDS=60)
-    @patch("conversation_ms.close_daily.drain.enqueue_datalake")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
     def test_skips_datalake_waiting_on_topics(self, mock_enq, project):
         record = _shape_c(project, topics_status=ClosePipelineStageStatus.PENDING)
         stale = timezone.now() - timedelta(seconds=120)
@@ -100,7 +100,7 @@ class TestDrainStaleAndFailed:
         mock_enq.assert_not_called()
 
     @override_settings(CLOSE_PIPELINE_STALE_PENDING_SECONDS=60)
-    @patch("conversation_ms.close_daily.drain.enqueue_datalake")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
     def test_datalake_stale_with_null_classification_at_requeues(self, mock_enq, project):
         record = _shape_c(project, topics_status=ClosePipelineStageStatus.PENDING)
         stale = timezone.now() - timedelta(seconds=120)
@@ -116,7 +116,7 @@ class TestDrainStaleAndFailed:
         assert record.datalake_reclaim_count == 1
         mock_enq.assert_called_once()
 
-    @patch("conversation_ms.close_daily.drain.enqueue_classify")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_classify")
     def test_does_not_invent_shape_e(self, mock_enq, project):
         # Terminal conversation without pipeline record (Shape E / legacy hole).
         _open_conversation(project, resolution="0")
@@ -127,7 +127,7 @@ class TestDrainStaleAndFailed:
         assert ClosePipelineRecord.objects.count() == before
         mock_enq.assert_not_called()
 
-    @patch("conversation_ms.close_daily.drain.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_never_auto_reclaims_skipped_or_dead(self, mock_enq, project):
         record = _shape_c(project)
         record = ClosePipelineStateMachine.mark_skipped(record, "billing")
@@ -147,7 +147,7 @@ class TestDrainStaleAndFailed:
 @pytest.mark.django_db
 class TestDrainBillingPause:
     @override_settings(CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE=True, CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS=5)
-    @patch("conversation_ms.close_daily.drain.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_pause_requeues_without_budget_or_dead(self, mock_enq, project):
         record = _shape_c(project)
         record = ClosePipelineStateMachine.mark_failed(record, "billing", "sqs brownout")
@@ -167,7 +167,7 @@ class TestDrainBillingPause:
 @pytest.mark.django_db
 class TestDrainTopicsDeadPartial:
     @override_settings(CLOSE_PIPELINE_STALE_PENDING_SECONDS=60)
-    @patch("conversation_ms.close_daily.drain.enqueue_datalake")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_datalake")
     def test_topics_dead_leaves_datalake_pending_partial(self, mock_enq, project):
         record = _shape_c(project)
         record = ClosePipelineStateMachine.mark_failed(record, "topics", "poison")
@@ -192,7 +192,7 @@ class TestDrainTopicsDeadPartial:
 
 @pytest.mark.django_db
 class TestBulkReopenCommand:
-    @patch("conversation_ms.management.commands.reopen_close_pipeline_dead.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_bulk_dead_to_pending(self, mock_enq, project):
         record = _shape_c(project)
         record = ClosePipelineStateMachine.mark_failed(record, "billing", "sqs")
@@ -212,7 +212,7 @@ class TestBulkReopenCommand:
 @pytest.mark.django_db
 class TestDrainBatchCap:
     @override_settings(CLOSE_PIPELINE_DRAIN_BATCH_SIZE=2, CLOSE_PIPELINE_STALE_PENDING_SECONDS=60)
-    @patch("conversation_ms.close_daily.drain.enqueue_billing")
+    @patch("conversation_ms.close_daily.enqueue.enqueue_billing")
     def test_respects_batch_size(self, mock_enq, project):
         for _ in range(4):
             record = _shape_c(project)

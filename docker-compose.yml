@@ -74,7 +74,7 @@ services:
       - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
       - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
       - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
-    command: celery-worker
+    command: celery-worker celery,close_lambda,close_billing,close_datalake
 
   celery-beat:
     build:

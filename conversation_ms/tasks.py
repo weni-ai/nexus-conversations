@@ -657,6 +657,11 @@ def archive_conversation_task(self, record_id: str):
 
 
 def _mark_stage_failed(conversation_id: str, stage: str, error: str) -> None:
+    """
+    Best-effort persistence after Celery retries are exhausted.
+
+    Must not raise: the caller re-raises the original stage exception next.
+    """
     from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
     from conversation_ms.models import ClosePipelineRecord
 
@@ -666,6 +671,10 @@ def _mark_stage_failed(conversation_id: str, stage: str, error: str) -> None:
             ClosePipelineStateMachine.fail_classify(record, error)
         else:
             ClosePipelineStateMachine.mark_failed(record, stage, error)
+    except ClosePipelineRecord.DoesNotExist:
+        logger.error(
+            f"[ClosePipeline] Record not found for conversation={conversation_id} while marking {stage} failed",
+        )
     except Exception as mark_exc:
         logger.error(
             f"[ClosePipeline] Failed to mark {stage} failed conversation={conversation_id} error={mark_exc}",

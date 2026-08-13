@@ -3,7 +3,9 @@ from django.urls import path
 from improvements.views import (
     ConversationsImprovements,
     ConversationsImprovementsCancel,
+    ImprovementsMetricsView,
     ImprovementsOpenSupportTicket,
+    ImprovementsSuggestionsPerProjectView,
     ProjectCustomAnalysisDetail,
     ProjectCustomAnalysisListCreate,
     ProjectImprovementAffectedConversations,
@@ -12,6 +14,16 @@ from improvements.views import (
 )
 
 urlpatterns = [
+    path(
+        "improvements/metrics/",
+        ImprovementsMetricsView.as_view(),
+        name="improvements-metrics",
+    ),
+    path(
+        "improvements/metrics/suggestions-per-project/",
+        ImprovementsSuggestionsPerProjectView.as_view(),
+        name="improvements-metrics-suggestions-per-project",
+    ),
     path(
         "projects/<uuid:project_uuid>/improvements/run/",
         ConversationsImprovements.as_view(),

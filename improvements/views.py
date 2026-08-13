@@ -3,12 +3,13 @@ import logging
 import requests
 from django.conf import settings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import status
+from rest_framework import permissions, status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from conversation_ms.api.permissions import InternalOrProjectPermission
+from conversation_ms.authentication import InternalTokenAuthentication
 from conversation_ms.models import Project
 from improvements.serializers import (
     ConversationsCountRequestSerializer,
@@ -22,6 +23,10 @@ from improvements.serializers import (
     ImprovementsCancelRequestSerializer,
     ImprovementsCancelResponseSerializer,
     ImprovementsListResponseSerializer,
+    ImprovementsMetricsQuerySerializer,
+    ImprovementsMetricsResponseSerializer,
+    ImprovementsSuggestionsPerProjectQuerySerializer,
+    ImprovementsSuggestionsPerProjectResponseSerializer,
     ImprovementStatusUpdateSerializer,
     OpenSupportTicketRequestSerializer,
     OpenSupportTicketResponseSerializer,
@@ -48,6 +53,12 @@ from improvements.services.improvements_detail_service import (
 from improvements.services.improvements_list_service import (
     IDLE_IMPROVEMENTS_TASK,
     list_project_improvements,
+)
+from improvements.services.improvements_metrics_service import (
+    DEFAULT_SUGGESTIONS_PER_PROJECT_PAGE_SIZE,
+    MAX_SUGGESTIONS_PER_PROJECT_PAGE_SIZE,
+    build_improvements_metrics,
+    list_suggestions_per_project,
 )
 from improvements.services.improvements_redbeat_service import (
     TERMINAL_STATUSES,
@@ -642,3 +653,70 @@ class ImprovementsOpenSupportTicket(APIView):
             )
 
         return Response(nexus_response, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    summary="Improvements platform metrics",
+    description=(
+        "Internal aggregated metrics for the Improvements feature. "
+        "Optional start_date and end_date filter runs by started_at (UTC day bounds)."
+    ),
+    parameters=[
+        OpenApiParameter(name="start_date", type=str, location=OpenApiParameter.QUERY, required=False),
+        OpenApiParameter(name="end_date", type=str, location=OpenApiParameter.QUERY, required=False),
+    ],
+    responses={200: ImprovementsMetricsResponseSerializer},
+)
+class ImprovementsMetricsView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        ser = ImprovementsMetricsQuerySerializer(data=request.query_params)
+        ser.is_valid(raise_exception=True)
+        payload = build_improvements_metrics(
+            start_date=ser.validated_data.get("start_date"),
+            end_date=ser.validated_data.get("end_date"),
+        )
+        response_ser = ImprovementsMetricsResponseSerializer(data=payload)
+        response_ser.is_valid(raise_exception=True)
+        return Response(response_ser.data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    summary="Suggestions per project (paginated)",
+    description=(
+        "Paginated breakdown of improvement suggestions per project for completed runs. "
+        "Optional start_date and end_date filter by run started_at."
+    ),
+    parameters=[
+        OpenApiParameter(name="start_date", type=str, location=OpenApiParameter.QUERY, required=False),
+        OpenApiParameter(name="end_date", type=str, location=OpenApiParameter.QUERY, required=False),
+        OpenApiParameter(name="page", type=int, location=OpenApiParameter.QUERY, required=False),
+        OpenApiParameter(name="page_size", type=int, location=OpenApiParameter.QUERY, required=False),
+    ],
+    responses={200: ImprovementsSuggestionsPerProjectResponseSerializer},
+)
+class ImprovementsSuggestionsPerProjectView(APIView):
+    authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        ser = ImprovementsSuggestionsPerProjectQuerySerializer(data=request.query_params)
+        ser.is_valid(raise_exception=True)
+
+        page = ser.validated_data.get("page", 1)
+        page_size = ser.validated_data.get("page_size", DEFAULT_SUGGESTIONS_PER_PROJECT_PAGE_SIZE)
+        page_size = min(max(page_size, 1), MAX_SUGGESTIONS_PER_PROJECT_PAGE_SIZE)
+        base_url = request.build_absolute_uri(request.path)
+
+        payload = list_suggestions_per_project(
+            start_date=ser.validated_data.get("start_date"),
+            end_date=ser.validated_data.get("end_date"),
+            page=page,
+            page_size=page_size,
+            base_url=base_url,
+        )
+        response_ser = ImprovementsSuggestionsPerProjectResponseSerializer(data=payload)
+        response_ser.is_valid(raise_exception=True)
+        return Response(response_ser.data, status=status.HTTP_200_OK)

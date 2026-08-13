@@ -1,8 +1,11 @@
 import logging
+import time
 from typing import Any
 
 import pendulum
+import requests
 import sentry_sdk
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from improvements.enums import ImprovementRunStatus
@@ -13,6 +16,7 @@ from improvements.services.analysis_persistence_service import (
 )
 from improvements.services.analysis_run_service import (
     create_analysis_run_from_payload,
+    fail_stale_building_runs,
     get_analysis_run_for_payload,
     mark_run_status,
     sync_run_cancel_requested,
@@ -59,11 +63,26 @@ from nexus_conversations.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
 
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 502, 503})
+BUILD_SOFT_TIME_LIMIT_FAILURE_REASON = "build_soft_time_limit_exceeded"
+
 
 def _iter_normalized_conversations_for_uuids(uuids: list) -> Any:
     batch_size = getattr(settings, "IMPROVEMENTS_CONVERSATION_BATCH_SIZE", 50)
     for batch in iter_conversation_batches_by_uuids(uuids, batch_size):
         yield from iter_normalized_conversations(batch)
+
+
+def _is_transient_exception(exc: BaseException) -> bool:
+    if isinstance(exc, SoftTimeLimitExceeded):
+        return False
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        return status in RETRYABLE_HTTP_STATUS_CODES
+    return False
 
 
 def _enrich_batches_with_submitted_at(batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -373,12 +392,23 @@ def _expire_stale_improvements_run(
     bind=True,
     max_retries=3,
     default_retry_delay=60,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=getattr(settings, "IMPROVEMENTS_BUILD_SOFT_TIME_LIMIT_SECONDS", 1500),
+    time_limit=getattr(settings, "IMPROVEMENTS_BUILD_TIME_LIMIT_SECONDS", 1800),
 )
 def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str, Any]:
     run = None
     project_uuid = str(payload.get("project_uuid", ""))
     target_date = str(payload.get("target_date", ""))
+    task_started = time.monotonic()
     try:
+        expired = fail_stale_building_runs()
+        if expired:
+            logger.warning(
+                "[start_conversations_improvements] Expired stale building runs count=%s",
+                expired,
+            )
         logger.info(
             "[start_conversations_improvements] Started project_uuid=%s target_date=%s run_uuid=%s",
             project_uuid,
@@ -413,11 +443,14 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             len(conversation_uuids),
         )
 
+        customization_started = time.monotonic()
         customization = build_customization_for_lambda_upload(str(payload["project_uuid"]))
         logger.info(
-            "[start_conversations_improvements] Customization built project_uuid=%s",
+            "[start_conversations_improvements] Customization built project_uuid=%s elapsed_seconds=%.2f",
             project_uuid,
+            time.monotonic() - customization_started,
         )
+        upload_started = time.monotonic()
         upload_result = upload_improvements_build_artifacts_to_s3(
             customization,
             _iter_normalized_conversations_for_uuids(conversation_uuids),
@@ -425,12 +458,13 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
         )
         logger.info(
             "[start_conversations_improvements] Build artifacts uploaded project_uuid=%s s3_uri=%s "
-            "conversation_count=%s conversations_key=%s customization_key=%s",
+            "conversation_count=%s conversations_key=%s customization_key=%s elapsed_seconds=%.2f",
             project_uuid,
             upload_result["s3_uri"],
             upload_result["conversation_count"],
             upload_result["conversations_key"],
             upload_result["customization_key"],
+            time.monotonic() - upload_started,
         )
         conversations_url = generate_presigned_s3_url(
             upload_result["bucket"],
@@ -454,11 +488,14 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             population_n=int(payload["total_count"]),
             n_conversations=int(upload_result["conversation_count"]),
         )
+        lambda_started = time.monotonic()
         analysis_result = invoke_conversations_improvements_analysis_lambda(analysis_payload)
         logger.info(
-            "[start_conversations_improvements] Build Lambda invoked project_uuid=%s batch_count=%s",
+            "[start_conversations_improvements] Build Lambda invoked project_uuid=%s batch_count=%s "
+            "elapsed_seconds=%.2f",
             project_uuid,
             len(analysis_result.get("batches", [])),
+            time.monotonic() - lambda_started,
         )
 
         enriched_batches = _enrich_batches_with_submitted_at(list(analysis_result.get("batches", [])))
@@ -508,7 +545,8 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
         }
         logger.info(
             "[start_conversations_improvements] Uploaded improvements JSON and invoked analysis Lambda "
-            "project_uuid=%s target_date=%s sample_size=%s s3_uri=%s batch_count=%s check_schedule_key=%s run_uuid=%s",
+            "project_uuid=%s target_date=%s sample_size=%s s3_uri=%s batch_count=%s check_schedule_key=%s "
+            "run_uuid=%s total_elapsed_seconds=%.2f",
             payload.get("project_uuid"),
             payload.get("target_date"),
             sample_size,
@@ -516,16 +554,34 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             len(analysis_result["batches"]),
             check_schedule_key,
             run.uuid,
+            time.monotonic() - task_started,
         )
         return result
+    except SoftTimeLimitExceeded:
+        if run is not None:
+            mark_run_status(
+                run,
+                ImprovementRunStatus.FAILED,
+                failure_reason=BUILD_SOFT_TIME_LIMIT_FAILURE_REASON,
+            )
+        logger.exception(
+            "[start_conversations_improvements] Soft time limit exceeded project_uuid=%s "
+            "elapsed_seconds=%.2f",
+            payload.get("project_uuid"),
+            time.monotonic() - task_started,
+        )
+        raise
     except Exception as exc:
         if run is not None:
             mark_run_status(run, ImprovementRunStatus.FAILED, failure_reason=str(exc))
         logger.exception(
-            "[start_conversations_improvements] Failed project_uuid=%s",
+            "[start_conversations_improvements] Failed project_uuid=%s elapsed_seconds=%.2f",
             payload.get("project_uuid"),
+            time.monotonic() - task_started,
         )
-        raise self.retry(exc=exc) from exc
+        if _is_transient_exception(exc):
+            raise self.retry(exc=exc) from exc
+        raise
 
 
 @celery_app.task(

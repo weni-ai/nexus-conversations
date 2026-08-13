@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from django.conf import settings
@@ -23,12 +26,17 @@ def get_knowledge_base_chunks(project_uuid: str) -> list[dict[str, Any]]:
 
 def build_customization_for_lambda_upload(project_uuid: str) -> dict[str, Any]:
     """Build customization for Lambda build upload without knowledge_base."""
-    customization = get_project_customization(project_uuid)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        customization_future = executor.submit(get_project_customization, project_uuid)
+        agents_future = executor.submit(get_collaborative_agents, project_uuid)
+        customization = customization_future.result()
+        collaborative_agents = agents_future.result()
+
     enriched = dict(customization)
     enriched.setdefault("agent", {})
     enriched.setdefault("instructions", [])
     enriched.setdefault("team", {})
-    enriched["collaborative_agents"] = get_collaborative_agents(project_uuid)
+    enriched["collaborative_agents"] = collaborative_agents
     return enriched
 
 

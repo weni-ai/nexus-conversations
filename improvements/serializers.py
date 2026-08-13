@@ -204,3 +204,97 @@ class OpenSupportTicketResponseSerializer(serializers.Serializer):
         if isinstance(instance, dict):
             return instance
         return super().to_representation(instance)
+
+
+class ImprovementsMetricsQuerySerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False, allow_null=True, default=None)
+    end_date = serializers.DateField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        from improvements.services.improvements_metrics_service import resolve_metrics_date_range
+
+        start_date = attrs.get("start_date")
+        end_date = attrs.get("end_date")
+        try:
+            resolve_metrics_date_range(start_date, end_date)
+        except ValueError as exc:
+            message = str(exc)
+            raise serializers.ValidationError({"start_date": message, "end_date": message}) from exc
+        return attrs
+
+
+class ImprovementsMetricsUsageSerializer(serializers.Serializer):
+    projects_with_runs = serializers.IntegerField()
+    projects_with_more_than_one_run = serializers.IntegerField()
+    total_runs = serializers.IntegerField()
+    completed_runs = serializers.IntegerField()
+
+
+class ImprovementsMetricsTypeCountSerializer(serializers.Serializer):
+    dimension_id = serializers.CharField()
+    count = serializers.IntegerField()
+
+
+class ImprovementsMetricsDeliverySerializer(serializers.Serializer):
+    avg_suggestions_per_completed_run = serializers.FloatField()
+    projects_with_suggestions_count = serializers.IntegerField()
+    top_improvement_types = ImprovementsMetricsTypeCountSerializer(many=True)
+
+
+class ImprovementsMetricsActionsSerializer(serializers.Serializer):
+    resolved_count = serializers.IntegerField()
+    ignored_count = serializers.IntegerField()
+    active_count = serializers.IntegerField()
+    superseded_count = serializers.IntegerField()
+
+
+class ImprovementsMetricsCustomAnalysisSerializer(serializers.Serializer):
+    projects_with_active_custom_monitors = serializers.IntegerField()
+    active_custom_monitors_total = serializers.IntegerField()
+    project_uuids = serializers.ListField(child=serializers.UUIDField())
+
+
+class ImprovementsMetricsOrphanRunSerializer(serializers.Serializer):
+    run_uuid = serializers.UUIDField()
+    project_uuid = serializers.UUIDField()
+    status = serializers.CharField()
+    started_at = serializers.DateTimeField()
+    age_hours = serializers.FloatField()
+
+
+class ImprovementsMetricsRuntimeSerializer(serializers.Serializer):
+    avg_duration_seconds = serializers.FloatField(allow_null=True)
+    p50_duration_seconds = serializers.FloatField(allow_null=True)
+    p95_duration_seconds = serializers.FloatField(allow_null=True)
+    avg_seconds_to_first_suggestion = serializers.FloatField(allow_null=True)
+    orphan_runs_over_24h = ImprovementsMetricsOrphanRunSerializer(many=True)
+
+
+class ImprovementsMetricsResponseSerializer(serializers.Serializer):
+    start_date = serializers.DateField(allow_null=True)
+    end_date = serializers.DateField(allow_null=True)
+    usage = ImprovementsMetricsUsageSerializer()
+    delivery = ImprovementsMetricsDeliverySerializer()
+    actions = ImprovementsMetricsActionsSerializer()
+    custom_analysis = ImprovementsMetricsCustomAnalysisSerializer()
+    runtime = ImprovementsMetricsRuntimeSerializer()
+
+
+class ImprovementsSuggestionsPerProjectQuerySerializer(ImprovementsMetricsQuerySerializer):
+    page = serializers.IntegerField(required=False, default=1, min_value=1)
+    page_size = serializers.IntegerField(required=False, default=50, min_value=1, max_value=100)
+
+
+class ImprovementsSuggestionsPerProjectItemSerializer(serializers.Serializer):
+    project_uuid = serializers.UUIDField()
+    suggestions_count = serializers.IntegerField()
+    completed_runs = serializers.IntegerField()
+
+
+class ImprovementsSuggestionsPerProjectResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.CharField(allow_null=True)
+    previous = serializers.CharField(allow_null=True)
+    start_date = serializers.DateField(allow_null=True)
+    end_date = serializers.DateField(allow_null=True)
+    results = ImprovementsSuggestionsPerProjectItemSerializer(many=True)

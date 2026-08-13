@@ -183,8 +183,7 @@ def start_conversations_improvements_build(payload: dict[str, Any]) -> dict[str,
         analysis_result=analysis_result,
     )
     logger.info(
-        "[start_conversations_improvements_build] Build phase persisted project_uuid=%s run_uuid=%s "
-        "status=polling",
+        "[start_conversations_improvements_build] Build phase persisted project_uuid=%s run_uuid=%s " "status=polling",
         project_uuid,
         run.uuid,
     )

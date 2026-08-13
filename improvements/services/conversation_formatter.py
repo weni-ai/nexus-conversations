@@ -141,8 +141,7 @@ def get_traces_by_message_id(conversation: Conversation) -> dict[str, list[dict[
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_key = {
-            executor.submit(fetch_agent_traces, project_uuid, log_id): message_key
-            for message_key, log_id in log_ids
+            executor.submit(fetch_agent_traces, project_uuid, log_id): message_key for message_key, log_id in log_ids
         }
         for future in as_completed(future_to_key):
             message_key = future_to_key[future]

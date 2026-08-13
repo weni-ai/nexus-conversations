@@ -374,8 +374,7 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
             target_date=str(payload["target_date"]),
         )
         logger.info(
-            "[start_conversations_improvements] Check task enqueued project_uuid=%s "
-            "check_schedule_key=%s",
+            "[start_conversations_improvements] Check task enqueued project_uuid=%s " "check_schedule_key=%s",
             payload.get("project_uuid"),
             result.get("check_schedule_key"),
         )
@@ -389,8 +388,7 @@ def start_conversations_improvements(self, payload: dict[str, Any]) -> dict[str,
                 failure_reason=BUILD_SOFT_TIME_LIMIT_FAILURE_REASON,
             )
         logger.exception(
-            "[start_conversations_improvements] Soft time limit exceeded project_uuid=%s "
-            "elapsed_seconds=%.2f",
+            "[start_conversations_improvements] Soft time limit exceeded project_uuid=%s " "elapsed_seconds=%.2f",
             payload.get("project_uuid"),
             time.monotonic() - task_started,
         )

@@ -155,7 +155,7 @@ def fail_stale_building_runs(*, older_than_seconds: int | None = None) -> int:
     """Mark BUILDING runs older than the timeout as FAILED. Returns how many were expired."""
     timeout = older_than_seconds
     if timeout is None:
-        timeout = int(getattr(settings, "IMPROVEMENTS_BUILDING_TIMEOUT_SECONDS", 2700))
+        timeout = int(settings.IMPROVEMENTS_BUILDING_TIMEOUT_SECONDS)
     cutoff = utc_now() - timedelta(seconds=timeout)
     stale_runs = ImprovementAnalysisRun.objects.filter(
         status=ImprovementRunStatus.BUILDING,

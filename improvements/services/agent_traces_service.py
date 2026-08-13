@@ -75,6 +75,13 @@ def fetch_agent_traces(project_uuid: str, log_id: str) -> list[dict[str, Any]]:
             time.sleep(delay)
         except Exception as exc:
             last_exc = exc
+            logger.error(
+                "[fetch_agent_traces] Unexpected error project_uuid=%s log_id=%s error=%s",
+                project_uuid,
+                log_id,
+                exc,
+                exc_info=True,
+            )
             break
 
     if last_exc is not None:

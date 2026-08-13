@@ -16,8 +16,8 @@ from improvements.models import (
     ImprovementRunConversation,
 )
 from improvements.services.improvements_redbeat_service import get_run_metadata, save_run_metadata
+from improvements.services.start_improvements_build_service import enrich_batches_with_submitted_at
 from improvements.tasks import (
-    _enrich_batches_with_submitted_at,
     cancel_improvements_batches,
     check_improvements_batches,
 )
@@ -82,7 +82,7 @@ class TestEnrichBatchesWithSubmittedAt:
     def test_adds_submitted_at_when_missing(self):
         batches = [{"batch_id": "b1"}]
 
-        enriched = _enrich_batches_with_submitted_at(batches)
+        enriched = enrich_batches_with_submitted_at(batches)
 
         assert enriched[0]["submitted_at"].endswith("Z")
         assert "submitted_at" not in batches[0]
@@ -90,7 +90,7 @@ class TestEnrichBatchesWithSubmittedAt:
     def test_preserves_existing_submitted_at(self):
         batches = [{"batch_id": "b1", "submitted_at": "2026-05-29T12:00:00Z"}]
 
-        enriched = _enrich_batches_with_submitted_at(batches)
+        enriched = enrich_batches_with_submitted_at(batches)
 
         assert enriched[0]["submitted_at"] == "2026-05-29T12:00:00Z"
 

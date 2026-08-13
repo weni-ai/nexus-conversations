@@ -14,10 +14,11 @@ from improvements.dependencies import get_improvements_dependencies
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503})
+EXPONENTIAL_BACKOFF_BASE = 2
 
 
 def _retry_delay_seconds(attempt: int, base: float) -> float:
-    return (base * (2**attempt)) + random.uniform(0, base)
+    return (base * (EXPONENTIAL_BACKOFF_BASE**attempt)) + random.uniform(0, base)
 
 
 def _http_status(exc: requests.HTTPError) -> int | None:

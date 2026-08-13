@@ -19,6 +19,7 @@ from improvements.services.improvements_check_service import (
 from improvements.services.improvements_json_builder import build_conversations_s3_key
 from improvements.services.improvements_redbeat_service import TERMINAL_STATUSES
 from improvements.services.improvements_state_ingest_service import ingest_improvements_state_data
+from improvements.utils.time import utc_now
 
 
 def _sync_run_from_metadata_passthrough(
@@ -44,7 +45,12 @@ def _sync_run_from_metadata_passthrough(
 
 
 def mark_run_building(run: ImprovementAnalysisRun) -> ImprovementAnalysisRun:
-    return mark_run_status(run, ImprovementRunStatus.BUILDING)
+    run.status = ImprovementRunStatus.BUILDING
+    run.started_at = utc_now()
+    run.failure_reason = None
+    run.completed_at = None
+    run.save(update_fields=["status", "started_at", "failure_reason", "completed_at"])
+    return run
 
 
 @transaction.atomic

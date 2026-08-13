@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 from typing import Any
 from uuid import UUID
@@ -176,12 +177,14 @@ def select_random_conversation_uuids_in_range(
         return []
 
     queryset = _conversations_in_range_queryset(project_uuid, start, end)
-    total = queryset.count()
-    if total == 0:
+    uuids = list(queryset.values_list("uuid", flat=True))
+    if not uuids:
         return []
 
-    limit = min(sample_size, total)
-    return list(queryset.order_by("?").values_list("uuid", flat=True)[:limit])
+    limit = min(sample_size, len(uuids))
+    if limit == len(uuids):
+        return uuids
+    return random.sample(uuids, limit)
 
 
 def iter_conversation_batches_by_uuids(

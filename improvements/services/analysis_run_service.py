@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
 import pendulum
+from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from conversation_ms.models import Project
@@ -23,6 +25,9 @@ from improvements.utils.time import parse_to_django_utc, utc_now
 
 class AnalysisRunAlreadyExistsError(Exception):
     """Raised when a run already exists for the project on the given calendar day."""
+
+
+BUILDING_TIMEOUT_FAILURE_REASON = "building_timeout"
 
 
 def _parse_uuid(value: Any) -> UUID | None:
@@ -144,6 +149,23 @@ def mark_run_status(
         ],
     )
     return run
+
+
+def fail_stale_building_runs(*, older_than_seconds: int | None = None) -> int:
+    """Mark BUILDING runs older than the timeout as FAILED. Returns how many were expired."""
+    timeout = older_than_seconds
+    if timeout is None:
+        timeout = int(getattr(settings, "IMPROVEMENTS_BUILDING_TIMEOUT_SECONDS", 2700))
+    cutoff = utc_now() - timedelta(seconds=timeout)
+    stale_runs = ImprovementAnalysisRun.objects.filter(
+        status=ImprovementRunStatus.BUILDING,
+        started_at__lt=cutoff,
+    )
+    expired = 0
+    for run in stale_runs.iterator():
+        mark_run_status(run, ImprovementRunStatus.FAILED, failure_reason=BUILDING_TIMEOUT_FAILURE_REASON)
+        expired += 1
+    return expired
 
 
 def populate_run_conversations(run: ImprovementAnalysisRun, conversation_uuids: list[UUID | str]) -> int:

@@ -62,13 +62,19 @@ class TestStartConversationsImprovements:
 
     @patch("improvements.tasks.check_improvements_batches.delay")
     @patch("improvements.services.project_customization_service.get_collaborative_agents", return_value=[])
-    @patch("improvements.tasks.register_batch_check_schedule", return_value="uuid:2026-02-05")
-    @patch("improvements.tasks.invoke_conversations_improvements_analysis_lambda")
-    @patch("improvements.tasks.generate_presigned_s3_url")
-    @patch("improvements.tasks.upload_improvements_build_artifacts_to_s3")
+    @patch(
+        "improvements.services.start_improvements_build_service.register_batch_check_schedule",
+        return_value="uuid:2026-02-05",
+    )
+    @patch("improvements.services.start_improvements_build_service.invoke_conversations_improvements_analysis_lambda")
+    @patch("improvements.services.start_improvements_build_service.generate_presigned_s3_url")
+    @patch("improvements.services.start_improvements_build_service.upload_improvements_build_artifacts_to_s3")
     @patch("improvements.services.project_customization_service.get_project_customization")
     @patch("improvements.services.conversation_formatter.fetch_agent_traces", return_value=[])
-    @patch("improvements.tasks.get_conversations_sample_size_lambda", return_value=2)
+    @patch(
+        "improvements.services.start_improvements_build_service.get_conversations_sample_size_lambda",
+        return_value=2,
+    )
     def test_start_conversations_improvements_selects_random_conversations(
         self,
         mock_sample_size,

@@ -14,10 +14,11 @@ from improvements.dependencies import get_improvements_dependencies
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503})
+EXPONENTIAL_BACKOFF_BASE = 2
 
 
 def _retry_delay_seconds(attempt: int, base: float) -> float:
-    return (base * (2**attempt)) + random.uniform(0, base)
+    return (base * (EXPONENTIAL_BACKOFF_BASE**attempt)) + random.uniform(0, base)
 
 
 def _http_status(exc: requests.HTTPError) -> int | None:
@@ -75,6 +76,13 @@ def fetch_agent_traces(project_uuid: str, log_id: str) -> list[dict[str, Any]]:
             time.sleep(delay)
         except Exception as exc:
             last_exc = exc
+            logger.error(
+                "[fetch_agent_traces] Unexpected error project_uuid=%s log_id=%s error=%s",
+                project_uuid,
+                log_id,
+                exc,
+                exc_info=True,
+            )
             break
 
     if last_exc is not None:

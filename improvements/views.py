@@ -55,8 +55,6 @@ from improvements.services.improvements_list_service import (
     list_project_improvements,
 )
 from improvements.services.improvements_metrics_service import (
-    DEFAULT_SUGGESTIONS_PER_PROJECT_PAGE_SIZE,
-    MAX_SUGGESTIONS_PER_PROJECT_PAGE_SIZE,
     build_improvements_metrics,
     list_suggestions_per_project,
 )
@@ -705,17 +703,12 @@ class ImprovementsSuggestionsPerProjectView(APIView):
         ser = ImprovementsSuggestionsPerProjectQuerySerializer(data=request.query_params)
         ser.is_valid(raise_exception=True)
 
-        page = ser.validated_data.get("page", 1)
-        page_size = ser.validated_data.get("page_size", DEFAULT_SUGGESTIONS_PER_PROJECT_PAGE_SIZE)
-        page_size = min(max(page_size, 1), MAX_SUGGESTIONS_PER_PROJECT_PAGE_SIZE)
-        base_url = request.build_absolute_uri(request.path)
-
         payload = list_suggestions_per_project(
             start_date=ser.validated_data.get("start_date"),
             end_date=ser.validated_data.get("end_date"),
-            page=page,
-            page_size=page_size,
-            base_url=base_url,
+            page=ser.validated_data["page"],
+            page_size=ser.validated_data["page_size"],
+            base_url=request.build_absolute_uri(request.path),
         )
         response_ser = ImprovementsSuggestionsPerProjectResponseSerializer(data=payload)
         response_ser.is_valid(raise_exception=True)

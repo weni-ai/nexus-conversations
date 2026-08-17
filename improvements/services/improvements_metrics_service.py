@@ -279,18 +279,19 @@ def list_suggestions_per_project(
         start_date=start_date,
         end_date=end_date,
     )
-    rows = list(
-        ImprovementBacklogItem.objects.filter(run_id__in=completed_runs_qs.values("uuid"))
-        .values("project_id")
+    backlog_for_completed_runs = ImprovementBacklogItem.objects.filter(
+        run_id__in=completed_runs_qs.values("uuid"),
+    )
+    total_count = backlog_for_completed_runs.values("project_id").distinct().count()
+    offset = (page - 1) * page_size
+    page_rows = list(
+        backlog_for_completed_runs.values("project_id")
         .annotate(
             suggestions_count=Count("uuid"),
             completed_runs=Count("run_id", distinct=True),
         )
-        .order_by("-suggestions_count", "project_id")
+        .order_by("-suggestions_count", "project_id")[offset : offset + page_size]
     )
-    total_count = len(rows)
-    offset = (page - 1) * page_size
-    page_rows = rows[offset : offset + page_size]
     total_pages = math.ceil(total_count / page_size) if total_count else 0
 
     extra_params: dict[str, str] = {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 from collections.abc import Iterable
 from io import TextIOWrapper
 from typing import Any
@@ -197,17 +198,19 @@ def upload_improvements_build_artifacts_to_s3(
 
     conversations_key = build_conversations_s3_key(payload)
     customization_key = build_customization_s3_key(payload)
-    conversations_list = list(normalized_conversations)
     customization_artifact = build_customization_artifact(
         customization,
-        conversations_list,
         project_uuid=str(payload.get("project_uuid", "")),
     )
+    upload_started = time.monotonic()
 
     with tempfile.NamedTemporaryFile(mode="w+b") as conversations_tmp:
         conversations_text = TextIOWrapper(conversations_tmp, encoding="utf-8")
         try:
-            conversation_count = stream_conversations_jsonl_to_file(conversations_text, conversations_list)
+            conversation_count = stream_conversations_jsonl_to_file(
+                conversations_text,
+                normalized_conversations,
+            )
             conversations_text.flush()
         finally:
             conversations_text.detach()
@@ -237,11 +240,13 @@ def upload_improvements_build_artifacts_to_s3(
     s3_uri = f"s3://{bucket}/{conversations_key}"
     logger.info(
         "[upload_improvements_build_artifacts_to_s3] Uploaded build artifacts "
-        "project_uuid=%s conversations_key=%s customization_key=%s conversation_count=%s",
+        "project_uuid=%s conversations_key=%s customization_key=%s conversation_count=%s "
+        "elapsed_seconds=%.2f",
         payload.get("project_uuid"),
         conversations_key,
         customization_key,
         conversation_count,
+        time.monotonic() - upload_started,
     )
     return {
         "s3_uri": s3_uri,

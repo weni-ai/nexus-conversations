@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+
+from django.conf import settings
 
 from conversation_ms.models import Conversation
 from improvements.services.agent_traces_service import fetch_agent_traces
+
+logger = logging.getLogger(__name__)
 
 _RESOLUTION_LABELS = {
     "0": "Resolved",
@@ -123,13 +130,35 @@ def build_all_messages(conversation: Conversation) -> list[dict[str, Any]]:
 
 def get_traces_by_message_id(conversation: Conversation) -> dict[str, list[dict[str, Any]]]:
     project_uuid = str(conversation.project.uuid)
+    log_ids = _iter_outgoing_message_log_ids(conversation)
+    if not log_ids:
+        return {}
+
+    max_workers = int(getattr(settings, "IMPROVEMENTS_TRACES_MAX_WORKERS", 8))
+    worker_count = max(1, min(max_workers, len(log_ids)))
     traces_by_message_id: dict[str, list[dict[str, Any]]] = {}
+    started = time.monotonic()
 
-    for message_key, log_id in _iter_outgoing_message_log_ids(conversation):
-        traces = fetch_agent_traces(project_uuid, log_id)
-        if traces:
-            traces_by_message_id[message_key] = traces
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_key = {
+            executor.submit(fetch_agent_traces, project_uuid, log_id): message_key for message_key, log_id in log_ids
+        }
+        for future in as_completed(future_to_key):
+            message_key = future_to_key[future]
+            traces = future.result()
+            if traces:
+                traces_by_message_id[message_key] = traces
 
+    logger.info(
+        "[get_traces_by_message_id] Fetched traces conversation_uuid=%s project_uuid=%s "
+        "message_count=%s hit_count=%s workers=%s elapsed_seconds=%.2f",
+        conversation.uuid,
+        project_uuid,
+        len(log_ids),
+        len(traces_by_message_id),
+        worker_count,
+        time.monotonic() - started,
+    )
     return traces_by_message_id
 
 

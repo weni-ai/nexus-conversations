@@ -140,6 +140,41 @@ class TestConversationFormatter:
             "c80dec64-c98b-41d6-b2a7-b2420d090dc3",
         )
 
+    def test_get_traces_by_message_id_fetches_multiple_outgoing_in_parallel(self, project):
+        conversation = Conversation.objects.create(
+            project=project,
+            contact_urn="ext:parallel",
+            contact_name="Cliente",
+            resolution="0",
+            start_date=datetime(2026, 5, 29, 15, 29, 33, tzinfo=dt_tz.utc),
+            end_date=datetime(2026, 5, 30, 2, 59, 59, tzinfo=dt_tz.utc),
+        )
+        ConversationMessages.objects.create(
+            conversation=conversation,
+            messages=[
+                {
+                    "uuid": "msg-out-1",
+                    "text": "Resposta 1",
+                    "source": "outgoing",
+                    "created_at": "2026-05-29T15:29:43",
+                },
+                {
+                    "uuid": "msg-out-2",
+                    "text": "Resposta 2",
+                    "source": "outgoing",
+                    "created_at": "2026-05-29T15:29:44",
+                },
+            ],
+        )
+        conversation = Conversation.objects.select_related("project", "messages_data").get(uuid=conversation.uuid)
+
+        with patch("improvements.services.conversation_formatter.fetch_agent_traces") as mock_fetch:
+            mock_fetch.side_effect = lambda _project_uuid, log_id: [{"trace": {"log_id": log_id}}]
+            traces = get_traces_by_message_id(conversation)
+
+        assert set(traces.keys()) == {"msg-out-1", "msg-out-2"}
+        assert mock_fetch.call_count == 2
+
     def test_build_raw_conversation(self, conversation):
         with patch("improvements.services.conversation_formatter.fetch_agent_traces") as mock_fetch:
             mock_fetch.return_value = [{"trace": {"config": {}, "trace": {}}}]

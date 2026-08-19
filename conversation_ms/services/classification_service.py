@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
+from django.core.cache import cache
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.data_lake import (
@@ -20,6 +21,16 @@ from conversation_ms.utils.resolution_lambda_routing import (
 )
 
 logger = logging.getLogger(__name__)
+
+AI_RESOLUTION_USER_RULES_CACHE_KEY_PREFIX = "conversation_ms:ai_resolution_user_rules:"
+
+
+def _ai_resolution_user_rules_cache_key(project_uuid: str) -> str:
+    return f"{AI_RESOLUTION_USER_RULES_CACHE_KEY_PREFIX}{project_uuid}"
+
+
+def _ai_resolution_criteria_cache_ttl_seconds() -> int:
+    return max(0, int(getattr(settings, "AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", 3600) or 0))
 
 
 class ClassificationService:
@@ -279,21 +290,8 @@ class ClassificationService:
             "user_rules": self._get_user_rules_for_project(project_uuid),
         }
 
-    def _get_user_rules_for_project(self, project_uuid: str) -> List[str]:
-        """Load base + custom resolution criteria texts from Nexus for daily close."""
-        try:
-            from conversation_ms.clients.nexus_client import NexusClient
-
-            payload = NexusClient().get_ai_resolution_criteria(project_uuid)
-        except Exception as exc:
-            logger.error(
-                "[ClassificationService] Failed to load AI resolution criteria for project %s: %s",
-                project_uuid,
-                exc,
-                exc_info=True,
-            )
-            return []
-
+    @staticmethod
+    def _parse_user_rules_payload(payload: dict[str, Any]) -> List[str]:
         user_rules: List[str] = []
         for section in ("base_criteria", "custom_criteria"):
             for item in payload.get(section) or []:
@@ -302,6 +300,32 @@ class ClassificationService:
                 text = str(item.get("text") or "").strip()
                 if text:
                     user_rules.append(text)
+        return user_rules
+
+    def _get_user_rules_for_project(self, project_uuid: str) -> List[str]:
+        """Load base + custom resolution criteria texts from Nexus for daily close."""
+        cache_key = _ai_resolution_user_rules_cache_key(project_uuid)
+        ttl_seconds = _ai_resolution_criteria_cache_ttl_seconds()
+        if ttl_seconds > 0:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return list(cached)
+
+        try:
+            from conversation_ms.clients.nexus_client import NexusClient
+
+            payload = NexusClient().get_ai_resolution_criteria(project_uuid)
+        except Exception as exc:
+            logger.warning(
+                "[ClassificationService] Failed to load AI resolution criteria for project %s: %s",
+                project_uuid,
+                exc,
+            )
+            return []
+
+        user_rules = self._parse_user_rules_payload(payload if isinstance(payload, dict) else {})
+        if ttl_seconds > 0:
+            cache.set(cache_key, user_rules, timeout=ttl_seconds)
         return user_rules
 
     @staticmethod

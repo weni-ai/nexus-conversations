@@ -28,6 +28,7 @@ TOP_IMPROVEMENT_TYPES_LIMIT = 20
 DEFAULT_SUGGESTIONS_PER_PROJECT_PAGE_SIZE = 50
 MAX_SUGGESTIONS_PER_PROJECT_PAGE_SIZE = 100
 ORPHAN_AGE_THRESHOLD = timedelta(hours=24)
+SECONDS_PER_HOUR = 3600
 
 
 def resolve_metrics_date_range(
@@ -223,7 +224,7 @@ def _runtime_metrics(
             "project_uuid": str(row["project_id"]),
             "status": row["status"],
             "started_at": row["started_at"],
-            "age_hours": round((now - row["started_at"]).total_seconds() / 3600, 2),
+            "age_hours": round((now - row["started_at"]).total_seconds() / SECONDS_PER_HOUR, 2),
         }
         for row in orphan_runs
     ]
@@ -279,18 +280,19 @@ def list_suggestions_per_project(
         start_date=start_date,
         end_date=end_date,
     )
-    rows = list(
-        ImprovementBacklogItem.objects.filter(run_id__in=completed_runs_qs.values("uuid"))
-        .values("project_id")
+    backlog_for_completed_runs = ImprovementBacklogItem.objects.filter(
+        run_id__in=completed_runs_qs.values("uuid"),
+    )
+    total_count = backlog_for_completed_runs.values("project_id").distinct().count()
+    offset = (page - 1) * page_size
+    page_rows = list(
+        backlog_for_completed_runs.values("project_id")
         .annotate(
             suggestions_count=Count("uuid"),
             completed_runs=Count("run_id", distinct=True),
         )
-        .order_by("-suggestions_count", "project_id")
+        .order_by("-suggestions_count", "project_id")[offset : offset + page_size]
     )
-    total_count = len(rows)
-    offset = (page - 1) * page_size
-    page_rows = rows[offset : offset + page_size]
     total_pages = math.ceil(total_count / page_size) if total_count else 0
 
     extra_params: dict[str, str] = {}

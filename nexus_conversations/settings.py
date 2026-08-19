@@ -146,6 +146,8 @@ CLOSE_PIPELINE_TOPICS_MAX_RETRIES = env.int("CLOSE_PIPELINE_TOPICS_MAX_RETRIES",
 CLOSE_PIPELINE_BILLING_MAX_RETRIES = env.int("CLOSE_PIPELINE_BILLING_MAX_RETRIES", default=5)
 CLOSE_PIPELINE_DATALAKE_MAX_RETRIES = env.int("CLOSE_PIPELINE_DATALAKE_MAX_RETRIES", default=5)
 
+AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS = env.int("AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", default=3600)
+
 CELERY_TASK_ROUTES = {
     "conversation_ms.tasks.close_pipeline_classify_task": {"queue": "close_lambda"},
     "conversation_ms.tasks.close_pipeline_topics_task": {"queue": "close_lambda"},

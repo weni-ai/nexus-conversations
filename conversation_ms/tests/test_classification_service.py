@@ -14,6 +14,23 @@ from conversation_ms.tests.factories import (
     sample_order_status_messages,
 )
 
+LOC_MEM_CACHE = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "classification-service-tests",
+    }
+}
+
+
+@pytest.fixture(autouse=True)
+def use_locmem_cache():
+    from django.core.cache import cache
+
+    with override_settings(CACHES=LOC_MEM_CACHE):
+        cache.clear()
+        yield
+        cache.clear()
+
 
 @pytest.fixture
 def classification_service():
@@ -288,3 +305,59 @@ def test_classify_conversation_lambda_error(classification_service):
     assert result_conversation.uuid == conversation.uuid
     assert result_classification is None
     assert result_resolution is None
+
+
+@pytest.mark.django_db
+@override_settings(AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS=3600)
+@patch("conversation_ms.clients.nexus_client.NexusClient.get_ai_resolution_criteria")
+def test_get_user_rules_for_project_caches_nexus_response(mock_get_ai_resolution_criteria, classification_service):
+    from django.core.cache import cache
+
+    cache.clear()
+    project_uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    mock_get_ai_resolution_criteria.return_value = {
+        "base_criteria": [{"id": "base_resolved", "text": "Resolved when customer confirms"}],
+        "custom_criteria": [],
+    }
+
+    first = classification_service._get_user_rules_for_project(project_uuid)
+    second = classification_service._get_user_rules_for_project(project_uuid)
+
+    assert first == ["Resolved when customer confirms"]
+    assert second == first
+    mock_get_ai_resolution_criteria.assert_called_once_with(project_uuid)
+
+
+@pytest.mark.django_db
+@override_settings(AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS=0)
+@patch("conversation_ms.clients.nexus_client.NexusClient.get_ai_resolution_criteria")
+def test_get_user_rules_for_project_skips_cache_when_ttl_zero(mock_get_ai_resolution_criteria, classification_service):
+    from django.core.cache import cache
+
+    cache.clear()
+    project_uuid = "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+    mock_get_ai_resolution_criteria.return_value = {"base_criteria": [], "custom_criteria": []}
+
+    classification_service._get_user_rules_for_project(project_uuid)
+    classification_service._get_user_rules_for_project(project_uuid)
+
+    assert mock_get_ai_resolution_criteria.call_count == 2
+
+
+@pytest.mark.django_db
+@override_settings(AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS=3600)
+@patch("conversation_ms.clients.nexus_client.NexusClient.get_ai_resolution_criteria")
+def test_get_user_rules_for_project_nexus_failure_returns_empty_without_caching(
+    mock_get_ai_resolution_criteria,
+    classification_service,
+):
+    import requests
+    from django.core.cache import cache
+
+    cache.clear()
+    project_uuid = "c3d4e5f6-a7b8-9012-cdef-123456789012"
+    mock_get_ai_resolution_criteria.side_effect = requests.HTTPError("503 Service Unavailable")
+
+    assert classification_service._get_user_rules_for_project(project_uuid) == []
+    assert classification_service._get_user_rules_for_project(project_uuid) == []
+    assert mock_get_ai_resolution_criteria.call_count == 2

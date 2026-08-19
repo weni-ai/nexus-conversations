@@ -173,6 +173,8 @@ CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS = env.int("CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS",
 CLOSE_PIPELINE_DRAIN_BATCH_SIZE = env.int("CLOSE_PIPELINE_DRAIN_BATCH_SIZE", default=100)
 CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE = env.bool("CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", default=False)
 
+AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS = env.int("AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", default=3600)
+
 CELERY_TASK_ROUTES = {
     # Separate queues for backlog visibility; consumed by the same conversations-celery pod (-Q).
     "conversation_ms.tasks.close_pipeline_classify_task": {"queue": "close_lambda"},

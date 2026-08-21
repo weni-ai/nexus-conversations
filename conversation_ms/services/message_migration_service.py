@@ -12,14 +12,23 @@ class MessageMigrationService:
     def __init__(self):
         self.message_repository = MessageRepository()
 
+    @staticmethod
+    def _sanitize_pg_text(value) -> str:
+        """Strip NUL bytes; PostgreSQL rejects \\u0000 in text/JSON."""
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        return value.replace("\x00", "")
+
     def _format_messages_for_storage(self, messages):
         formatted_messages = []
         for msg in messages:
             message_id = msg.get("message_id")
             formatted_message = {
-                "text": msg.get("text", ""),
-                "source": msg.get("source", ""),
-                "created_at": msg.get("created_at", ""),
+                "text": self._sanitize_pg_text(msg.get("text", "")),
+                "source": self._sanitize_pg_text(msg.get("source", "")),
+                "created_at": self._sanitize_pg_text(msg.get("created_at", "")),
             }
             if message_id:
                 formatted_message["message_id"] = str(message_id)

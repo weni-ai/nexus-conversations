@@ -31,8 +31,9 @@ class MessageMigrationService:
                 "created_at": self._sanitize_pg_text(msg.get("created_at", "")),
             }
             if message_id:
-                formatted_message["message_id"] = str(message_id)
-                formatted_message["uuid"] = str(message_id)
+                sanitized_id = self._sanitize_pg_text(message_id)
+                formatted_message["message_id"] = sanitized_id
+                formatted_message["uuid"] = sanitized_id
             formatted_messages.append(formatted_message)
         return formatted_messages
 

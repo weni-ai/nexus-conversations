@@ -591,6 +591,7 @@ class TestMessageMigrationService:
                 "text": "hello\x00world",
                 "source": "in\x00coming",
                 "created_at": "2024-01-01T12:00:00\x00",
+                "message_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890\x00",
             },
         ]
 
@@ -607,9 +608,13 @@ class TestMessageMigrationService:
         assert msg["text"] == "helloworld"
         assert msg["source"] == "incoming"
         assert msg["created_at"] == "2024-01-01T12:00:00"
+        assert msg["message_id"] == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        assert msg["uuid"] == msg["message_id"]
         assert "\x00" not in msg["text"]
         assert "\x00" not in msg["source"]
         assert "\x00" not in msg["created_at"]
+        assert "\x00" not in msg["message_id"]
+        assert "\x00" not in msg["uuid"]
 
     def test_sanitize_pg_text_handles_none_and_non_string(self):
         assert MessageMigrationService._sanitize_pg_text(None) == ""

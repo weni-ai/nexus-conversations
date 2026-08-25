@@ -11,6 +11,73 @@ Note: These models are simplified versions. In a real scenario, you might want t
 from uuid import uuid4
 
 from django.db import models
+from django.db.models import Q
+
+from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_STAGES,
+    CloseDatalakeEventKind,
+    ClosePipelineStageStatus,
+)
+
+
+def _stage_shape_constraint(stage: str) -> models.CheckConstraint:
+    status = f"{stage}_status"
+    at = f"{stage}_at"
+    pending_at = f"{stage}_pending_at"
+    error = f"{stage}_error"
+
+    null_ok = Q(
+        **{
+            f"{status}__isnull": True,
+            f"{at}__isnull": True,
+            f"{pending_at}__isnull": True,
+            f"{error}__isnull": True,
+        }
+    )
+    pending_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.PENDING,
+            f"{at}__isnull": True,
+            f"{error}__isnull": True,
+            f"{pending_at}__isnull": False,
+        }
+    )
+    done_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.DONE,
+            f"{at}__isnull": False,
+            f"{error}__isnull": True,
+            f"{pending_at}__isnull": True,
+        }
+    )
+    skipped_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.SKIPPED,
+            f"{at}__isnull": False,
+            f"{error}__isnull": True,
+            f"{pending_at}__isnull": True,
+        }
+    )
+    failed_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.FAILED,
+            f"{at}__isnull": True,
+            f"{pending_at}__isnull": True,
+            f"{error}__isnull": False,
+        }
+    ) & ~Q(**{error: ""})
+    dead_ok = Q(
+        **{
+            status: ClosePipelineStageStatus.DEAD,
+            f"{at}__isnull": True,
+            f"{pending_at}__isnull": True,
+            f"{error}__isnull": False,
+        }
+    ) & ~Q(**{error: ""})
+    return models.CheckConstraint(
+        check=null_ok | pending_ok | done_ok | skipped_ok | failed_ok | dead_ok,
+        name=f"cpipe_{stage}_shape",
+    )
 
 
 class Project(models.Model):
@@ -164,3 +231,231 @@ class ConversationMessages(models.Model):
 
     def __str__(self):
         return f"ConversationMessages - {self.conversation.uuid}"
+
+
+class ClosePipelineRecord(models.Model):
+    """
+    1:1 close-daily control plane for a Conversation.
+
+    Conversation keeps only business fields (resolution). Pipeline stage tracking
+    lives here so illegal status/at/pending_at/error shapes are unrepresentable.
+    """
+
+    conversation = models.OneToOneField(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="close_pipeline",
+        primary_key=True,
+        help_text="Conversation owned by this close-pipeline control-plane row.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    classify_status = models.CharField(
+        max_length=16,
+        choices=ClosePipelineStageStatus.CHOICES,
+        null=True,
+        blank=True,
+        help_text="Classify (resolution) stage status.",
+    )
+    classify_at = models.DateTimeField(null=True, blank=True)
+    classify_pending_at = models.DateTimeField(null=True, blank=True)
+    classify_error = models.TextField(null=True, blank=True)
+    classify_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for classify.",
+    )
+
+    topics_status = models.CharField(
+        max_length=16,
+        choices=ClosePipelineStageStatus.CHOICES,
+        null=True,
+        blank=True,
+        help_text="Topics classification stage status.",
+    )
+    topics_at = models.DateTimeField(null=True, blank=True)
+    topics_pending_at = models.DateTimeField(null=True, blank=True)
+    topics_error = models.TextField(null=True, blank=True)
+    topics_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for topics.",
+    )
+
+    billing_status = models.CharField(
+        max_length=16,
+        choices=ClosePipelineStageStatus.CHOICES,
+        null=True,
+        blank=True,
+        help_text="Billing SQS publish stage status.",
+    )
+    billing_at = models.DateTimeField(null=True, blank=True)
+    billing_pending_at = models.DateTimeField(null=True, blank=True)
+    billing_error = models.TextField(null=True, blank=True)
+    billing_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for billing.",
+    )
+
+    datalake_status = models.CharField(
+        max_length=16,
+        choices=ClosePipelineStageStatus.CHOICES,
+        null=True,
+        blank=True,
+        help_text="Datalake events stage status.",
+    )
+    datalake_at = models.DateTimeField(null=True, blank=True)
+    datalake_pending_at = models.DateTimeField(null=True, blank=True)
+    datalake_error = models.TextField(null=True, blank=True)
+    datalake_reclaim_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Automatic drain reclaim budget consumed for datalake.",
+    )
+    datalake_classification_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set once when conversation_classification datalake event is published.",
+    )
+    datalake_topics_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set once when topics datalake event is published.",
+    )
+
+    class Meta:
+        db_table = "conversation_ms_closepipelinerecord"
+        indexes = [
+            models.Index(
+                fields=["classify_status", "classify_pending_at"],
+                name="cpipe_classify_drain_idx",
+                condition=Q(classify_status__in=["pending", "failed"]),
+            ),
+            models.Index(
+                fields=["topics_status", "topics_pending_at"],
+                name="cpipe_topics_drain_idx",
+                condition=Q(topics_status__in=["pending", "failed"]),
+            ),
+            models.Index(
+                fields=["billing_status", "billing_pending_at"],
+                name="cpipe_billing_drain_idx",
+                condition=Q(billing_status__in=["pending", "failed"]),
+            ),
+            models.Index(
+                fields=["datalake_status", "datalake_pending_at"],
+                name="cpipe_datalake_drain_idx",
+                condition=Q(datalake_status__in=["pending", "failed"]),
+            ),
+            models.Index(
+                fields=["classify_status"],
+                name="cpipe_classify_dead_idx",
+                condition=Q(classify_status="dead"),
+            ),
+            models.Index(
+                fields=["topics_status"],
+                name="cpipe_topics_dead_idx",
+                condition=Q(topics_status="dead"),
+            ),
+            models.Index(
+                fields=["billing_status"],
+                name="cpipe_billing_dead_idx",
+                condition=Q(billing_status="dead"),
+            ),
+            models.Index(
+                fields=["datalake_status"],
+                name="cpipe_datalake_dead_idx",
+                condition=Q(datalake_status="dead"),
+            ),
+        ]
+        constraints = [
+            *[_stage_shape_constraint(stage) for stage in CLOSE_PIPELINE_STAGES],
+            models.CheckConstraint(
+                check=(
+                    ~Q(
+                        datalake_status__isnull=True,
+                        datalake_at__isnull=True,
+                        datalake_pending_at__isnull=True,
+                        datalake_error__isnull=True,
+                    )
+                    | Q(
+                        datalake_classification_at__isnull=True,
+                        datalake_topics_at__isnull=True,
+                    )
+                ),
+                name="cpipe_dl_unset_no_ev_ats",
+            ),
+            models.CheckConstraint(
+                check=(
+                    Q(datalake_classification_at__isnull=True)
+                    | Q(datalake_topics_at__isnull=True)
+                    | (Q(datalake_status__in=["done", "skipped"]) & Q(datalake_at__isnull=False))
+                ),
+                name="cpipe_dl_both_ev_imply_done",
+            ),
+            models.CheckConstraint(
+                check=(
+                    (Q(topics_status__isnull=True) & Q(billing_status__isnull=True) & Q(datalake_status__isnull=True))
+                    | Q(classify_status__in=["done", "skipped"])
+                ),
+                name="cpipe_down_needs_classify",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~Q(classify_status__in=["done", "skipped"])
+                    | (
+                        Q(topics_status__isnull=False)
+                        & Q(billing_status__isnull=False)
+                        & Q(datalake_status__isnull=False)
+                    )
+                ),
+                name="cpipe_classify_sets_down",
+            ),
+        ]
+
+    def __str__(self):
+        return f"ClosePipelineRecord - {self.conversation_id}"
+
+
+class CloseDatalakeOutbox(models.Model):
+    """Durable unique intent for close-daily datalake event production."""
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="close_datalake_outbox",
+        help_text="Conversation this datalake intent belongs to.",
+    )
+    event_kind = models.CharField(
+        max_length=32,
+        choices=CloseDatalakeEventKind.CHOICES,
+        help_text="Datalake event kind: classification or topics.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when external publish is considered successful.",
+    )
+    last_error = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Last publish failure detail for this event kind.",
+    )
+
+    class Meta:
+        db_table = "conversation_ms_closedatalakeoutbox"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "event_kind"],
+                name="cdl_outbox_conv_event_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["created_at"],
+                name="cdl_outbox_unpub_idx",
+                condition=Q(published_at__isnull=True),
+            ),
+        ]
+
+    def __str__(self):
+        return f"CloseDatalakeOutbox - {self.conversation_id} - {self.event_kind}"

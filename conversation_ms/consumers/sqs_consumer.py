@@ -9,6 +9,8 @@ from typing import Dict, Optional, Union
 import sentry_sdk
 from botocore.exceptions import ClientError
 from django.conf import settings
+from django.db import close_old_connections, connections
+from django.db.utils import InterfaceError, OperationalError
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.dynamo import DynamoMessageRepository, get_message_table
@@ -96,6 +98,7 @@ class ConversationSQSConsumer:
 
         while self.running:
             self._update_heartbeat()
+            self._refresh_db_connections()
 
             try:
                 messages = self._poll_messages()
@@ -112,6 +115,15 @@ class ConversationSQSConsumer:
 
             except Exception as e:
                 self._handle_unexpected_error(e)
+
+    @staticmethod
+    def _refresh_db_connections():
+        """Drop stale Postgres connections after idle SQS polls."""
+        close_old_connections()
+
+    @staticmethod
+    def _close_all_db_connections():
+        connections.close_all()
 
     def _update_heartbeat(self):
         """Update heartbeat file for liveness probe."""
@@ -265,7 +277,7 @@ class ConversationSQSConsumer:
                     event_data = {"correlation_id": event_data.get("correlation_id"), "data": event_data}
 
             # Route event to appropriate handler
-            self._route_event(event_type, event_data)
+            self._route_event_with_stale_db_retry(event_type, event_data)
 
             # Simulate processing delay (e.g., DB insertion)
             if self.processing_delay > 0:
@@ -287,6 +299,20 @@ class ConversationSQSConsumer:
                 exc_info=True,
             )
             raise
+
+    def _route_event_with_stale_db_retry(self, event_type: str, event_data: Dict):
+        """Retry once if Postgres closed the idle connection mid-handler."""
+        try:
+            self._route_event(event_type, event_data)
+        except (InterfaceError, OperationalError) as exc:
+            logger.warning(
+                "[ConversationSQSConsumer] Stale DB connection, retrying once error=%s correlation_id=%s",
+                exc,
+                event_data.get("correlation_id"),
+            )
+            self._close_all_db_connections()
+            self._refresh_db_connections()
+            self._route_event(event_type, event_data)
 
     def _route_event(self, event_type: str, event_data: Dict):
         """

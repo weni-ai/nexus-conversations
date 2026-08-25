@@ -128,27 +128,32 @@ USE_TZ = True
 # Timezone Configuration
 FALLBACK_TIMEZONE = env.str("FALLBACK_TIMEZONE", default="America/Sao_Paulo")
 
-# Close daily Celery task: distributed lock (TTL should exceed typical run; tune via metrics)
+# Close daily Celery task: distributed lock
 CLOSE_DAILY_LOCK_ENABLED = env.bool("CLOSE_DAILY_LOCK_ENABLED", default=not TESTING)
-CLOSE_DAILY_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_LOCK_TTL_SECONDS", default=7200)
-# Max IN_PROGRESS conversations per project per normal run (0 = unlimited). Reduces long single-task runs.
+CLOSE_DAILY_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_LOCK_TTL_SECONDS", default=3600)
+# Max IN_PROGRESS conversations per project per normal run (0 = unlimited)
 CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT = env.int("CLOSE_DAILY_MAX_CONVERSATIONS_PER_PROJECT", default=0)
 
-# Per-project sub-task limits (fan-out architecture)
-CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT", default=1800)
-CLOSE_DAILY_PROJECT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_TIME_LIMIT", default=2100)
-CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", default=2400)
+# Per-project selector limits (claim + enqueue)
+CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT", default=300)
+CLOSE_DAILY_PROJECT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_TIME_LIMIT", default=600)
+CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", default=900)
 
-# Close-pipeline stage workers (cutover)
+# Close-pipeline stage workers and drain
 CLOSE_PIPELINE_PENDING_HEARTBEAT_SECONDS = env.int("CLOSE_PIPELINE_PENDING_HEARTBEAT_SECONDS", default=600)
 CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES = env.int("CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES", default=3)
 CLOSE_PIPELINE_TOPICS_MAX_RETRIES = env.int("CLOSE_PIPELINE_TOPICS_MAX_RETRIES", default=3)
 CLOSE_PIPELINE_BILLING_MAX_RETRIES = env.int("CLOSE_PIPELINE_BILLING_MAX_RETRIES", default=5)
 CLOSE_PIPELINE_DATALAKE_MAX_RETRIES = env.int("CLOSE_PIPELINE_DATALAKE_MAX_RETRIES", default=5)
+CLOSE_PIPELINE_STALE_PENDING_SECONDS = env.int("CLOSE_PIPELINE_STALE_PENDING_SECONDS", default=1800)
+CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS = env.int("CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS", default=5)
+CLOSE_PIPELINE_DRAIN_BATCH_SIZE = env.int("CLOSE_PIPELINE_DRAIN_BATCH_SIZE", default=100)
+CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE = env.bool("CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE", default=False)
 
 AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS = env.int("AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", default=3600)
 
 CELERY_TASK_ROUTES = {
+    # Separate queues for backlog visibility; consumed by the same conversations-celery pod (-Q).
     "conversation_ms.tasks.close_pipeline_classify_task": {"queue": "close_lambda"},
     "conversation_ms.tasks.close_pipeline_topics_task": {"queue": "close_lambda"},
     "conversation_ms.tasks.close_pipeline_billing_task": {"queue": "close_billing"},

@@ -29,7 +29,7 @@ export SPECIFY_FEATURE=001-close-daily-pipeline
 - Enqueue graph: classify → topics + billing + datalake; topics `done`/`skipped` → datalake again
 - Topics `skipped` still publishes topics datalake event (bias path); topics `dead` does **not**
 - Remove ThreadPool inline classify/billing/datalake path in the same change set
-- Celery retries: classify/topics **3**, billing/datalake **5**; `close_lambda` concurrency 1 (same image)
+- Celery retries: classify/topics **3**, billing/datalake **5**; queues `close_lambda` / `close_billing` / `close_datalake` on the **same** `conversations-celery` worker (`-Q celery,close_lambda,close_billing,close_datalake`) — no dedicated pod required
 
 ### Drain
 
@@ -83,3 +83,44 @@ CLEAR after 2 consecutive ticks with (attempts == 0 or rate < 0.2), pause false
 - Stale pending age: `now() - {stage}_pending_at` when status is `pending`
 - Pipeline complete: all four stages in `{done, skipped}`
 - Shape E: terminal `Conversation` with **no** `ClosePipelineRecord`
+
+## On-call (drain / dead / pause)
+
+### Flags & knobs
+
+| Knob | Purpose |
+|------|---------|
+| `CLOSE_PIPELINE_BILLING_OUTAGE_PAUSE` | While `true`, drain may re-enqueue billing **without** consuming reclaim budget and **without** marking billing `dead` |
+| `CLOSE_PIPELINE_STALE_PENDING_SECONDS` | Stale clock on `{stage}_pending_at` (default 1800) |
+| `CLOSE_PIPELINE_MAX_DRAIN_RECLAIMS` | After this many budget-consuming reclaims, drain marks `dead` (default 5) |
+| Beat `drain_close_pipeline` | Every 10 minutes |
+
+### Bulk reopen after incident
+
+```bash
+# Dry-run
+python manage.py reopen_close_pipeline_dead --stage billing --dry-run
+
+# Reopen + enqueue workers
+python manage.py reopen_close_pipeline_dead --stage billing --enqueue --limit 500
+
+# Filter by error substring
+python manage.py reopen_close_pipeline_dead --stage billing --error-contains "SQS" --enqueue
+```
+
+Uses `ClosePipelineStateMachine.reclaim_dead` (resets `{stage}_reclaim_count` to 0). Prefer this over raw SQL status edits.
+
+### Classify `dead` recovery
+
+1. **Retry classify:** `reclaim_dead(record, "classify")` (or the management command) then ensure `conversations-celery` is consuming `close_lambda` (same pod `-Q` includes it).
+2. **Abandon:** `ClosePipelineStateMachine.abandon_pipeline(record, resolution="3")` → Shape E / intentional Unclassified. Never update `Conversation.resolution` while a Shape B record still exists.
+
+### Worker queues (same pod)
+
+`conversations-celery` must listen to:
+
+```text
+celery,close_lambda,close_billing,close_datalake
+```
+
+Manifests: `deployment-celery.yaml` args → `celery-worker` + that list. Publishing without the matching `-Q` leaves messages stuck in the broker.

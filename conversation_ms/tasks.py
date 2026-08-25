@@ -14,6 +14,8 @@ from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.close_daily.constants import (
+    CLOSE_PIPELINE_DRAIN_SOFT_TIME_LIMIT_SECONDS,
+    CLOSE_PIPELINE_DRAIN_TIME_LIMIT_SECONDS,
     CLOSE_PIPELINE_LAMBDA_SOFT_TIME_LIMIT_SECONDS,
     CLOSE_PIPELINE_LAMBDA_TIME_LIMIT_SECONDS,
     CLOSE_PIPELINE_SIDEEFFECT_SOFT_TIME_LIMIT_SECONDS,
@@ -724,3 +726,15 @@ def close_pipeline_datalake_task(self, conversation_id: str):
             _mark_stage_failed(conversation_id, "datalake", str(exc))
             raise
         raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="conversation_ms.tasks.drain_close_pipeline_task",
+    soft_time_limit=CLOSE_PIPELINE_DRAIN_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=CLOSE_PIPELINE_DRAIN_TIME_LIMIT_SECONDS,
+)
+def drain_close_pipeline_task():
+    """Beat every 10 min: reclaim failed/stale pending stages (budget → dead; billing pause)."""
+    from conversation_ms.close_daily.drain import run_close_pipeline_drain
+
+    return run_close_pipeline_drain()

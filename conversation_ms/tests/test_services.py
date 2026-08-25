@@ -583,3 +583,40 @@ class TestMessageMigrationService:
         assert msg["text"] == "No id"
         assert "message_id" not in msg
         assert "uuid" not in msg
+
+    def test_migrate_strips_null_bytes_from_message_fields(self, conversation, mock_sentry):
+        """NUL bytes must be stripped so PostgreSQL JSONField insert does not raise DataError."""
+        mock_messages = [
+            {
+                "text": "hello\x00world",
+                "source": "in\x00coming",
+                "created_at": "2024-01-01T12:00:00\x00",
+                "message_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890\x00",
+            },
+        ]
+
+        with patch("conversation_ms.services.message_migration_service.MessageRepository") as mock_repo:
+            mock_repo.return_value.get_messages_from_dynamo.return_value = mock_messages
+            mock_repo.return_value.delete_messages_from_dynamo.return_value = 1
+
+            service = MessageMigrationService()
+            service.migrate_conversation_messages_to_postgres(conversation)
+
+        conv_msgs = ConversationMessages.objects.get(conversation=conversation)
+        assert len(conv_msgs.messages) == 1
+        msg = conv_msgs.messages[0]
+        assert msg["text"] == "helloworld"
+        assert msg["source"] == "incoming"
+        assert msg["created_at"] == "2024-01-01T12:00:00"
+        assert msg["message_id"] == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        assert msg["uuid"] == msg["message_id"]
+        assert "\x00" not in msg["text"]
+        assert "\x00" not in msg["source"]
+        assert "\x00" not in msg["created_at"]
+        assert "\x00" not in msg["message_id"]
+        assert "\x00" not in msg["uuid"]
+
+    def test_sanitize_pg_text_handles_none_and_non_string(self):
+        assert MessageMigrationService._sanitize_pg_text(None) == ""
+        assert MessageMigrationService._sanitize_pg_text(42) == "42"
+        assert MessageMigrationService._sanitize_pg_text("a\u0000b") == "ab"

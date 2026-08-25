@@ -311,8 +311,15 @@ class ConversationSQSConsumer:
                 event_data.get("correlation_id"),
             )
             self._close_all_db_connections()
-            self._refresh_db_connections()
-            self._route_event(event_type, event_data)
+            try:
+                self._route_event(event_type, event_data)
+            except (InterfaceError, OperationalError) as retry_exc:
+                logger.error(
+                    "[ConversationSQSConsumer] Retry failed, giving up error=%s correlation_id=%s",
+                    retry_exc,
+                    event_data.get("correlation_id"),
+                )
+                raise
 
     def _route_event(self, event_type: str, event_data: Dict):
         """

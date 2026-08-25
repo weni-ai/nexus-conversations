@@ -139,8 +139,21 @@ CLOSE_DAILY_PROJECT_SOFT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_SOFT_TIME_LIM
 CLOSE_DAILY_PROJECT_TIME_LIMIT = env.int("CLOSE_DAILY_PROJECT_TIME_LIMIT", default=2100)
 CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS = env.int("CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", default=2400)
 
-# Parallel classification within each batch (ThreadPoolExecutor)
-CLOSE_DAILY_CLASSIFICATION_THREADS = env.int("CLOSE_DAILY_CLASSIFICATION_THREADS", default=5)
+# Close-pipeline stage workers (cutover)
+CLOSE_PIPELINE_PENDING_HEARTBEAT_SECONDS = env.int("CLOSE_PIPELINE_PENDING_HEARTBEAT_SECONDS", default=600)
+CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES = env.int("CLOSE_PIPELINE_CLASSIFY_MAX_RETRIES", default=3)
+CLOSE_PIPELINE_TOPICS_MAX_RETRIES = env.int("CLOSE_PIPELINE_TOPICS_MAX_RETRIES", default=3)
+CLOSE_PIPELINE_BILLING_MAX_RETRIES = env.int("CLOSE_PIPELINE_BILLING_MAX_RETRIES", default=5)
+CLOSE_PIPELINE_DATALAKE_MAX_RETRIES = env.int("CLOSE_PIPELINE_DATALAKE_MAX_RETRIES", default=5)
+
+AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS = env.int("AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", default=3600)
+
+CELERY_TASK_ROUTES = {
+    "conversation_ms.tasks.close_pipeline_classify_task": {"queue": "close_lambda"},
+    "conversation_ms.tasks.close_pipeline_topics_task": {"queue": "close_lambda"},
+    "conversation_ms.tasks.close_pipeline_billing_task": {"queue": "close_billing"},
+    "conversation_ms.tasks.close_pipeline_datalake_task": {"queue": "close_datalake"},
+}
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/

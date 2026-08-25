@@ -2,25 +2,22 @@
 Orchestration for close-daily conversation processing (no Celery decorators).
 
 Imported by ``conversation_ms.tasks`` so tests can patch the same public helpers.
+
+After cutover, the per-project runner is a **selector**: set ``end_date``,
+``claim_classify``, enqueue classify stage tasks. Stage workers own Lambda /
+billing / datalake.
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Any
 
 import pendulum
 import sentry_sdk
 from django.conf import settings
 
 from conversation_ms import cache_access
-from conversation_ms.adapters.data_lake import (
-    build_conversation_classification_event,
-    build_topics_event,
-    send_data_lake_event,
-)
 from conversation_ms.adapters.entities import ResolutionEntities
 from conversation_ms.close_daily.constants import (
     CLOSE_DAILY_LOCK_KEY,
@@ -28,13 +25,9 @@ from conversation_ms.close_daily.constants import (
     CLOSE_DAILY_PROJECT_LOCK_KEY_PREFIX,
     SYNC_PROJECT_TIMEZONES_LOCK_KEY,
 )
-from conversation_ms.models import Conversation, ConversationClassification, Project, Topic
-from conversation_ms.producers.sqs_producer import (
-    build_conversation_close_billing_payload,
-    get_billing_sqs_producer,
-)
-from conversation_ms.services.classification_service import ClassificationService
-from conversation_ms.services.message_migration_service import MessageMigrationService
+from conversation_ms.close_daily.enqueue import enqueue_classify
+from conversation_ms.close_daily.state_machine import ClosePipelineStateMachine
+from conversation_ms.models import Conversation, Project
 from conversation_ms.utils.date_helpers import ProjectDay
 
 logger = logging.getLogger(__name__)
@@ -50,10 +43,6 @@ def _close_daily_lock_enabled() -> bool:
 
 def _get_project_lock_ttl_seconds() -> int:
     return int(getattr(settings, "CLOSE_DAILY_PROJECT_LOCK_TTL_SECONDS", 2400))
-
-
-def _get_classification_threads() -> int:
-    return int(getattr(settings, "CLOSE_DAILY_CLASSIFICATION_THREADS", 5))
 
 
 def _max_conversations_per_project_normal_run() -> int | None:
@@ -260,7 +249,6 @@ def _process_single_project(
     force_close: bool,
     start_date: str | None,
     end_date: str | None,
-    classification_service: ClassificationService | None = None,
     batch_metrics: dict | None = None,
 ) -> tuple[int, bool]:
     project_uuid = None
@@ -296,7 +284,6 @@ def _process_single_project(
             start_of_range_utc,
             end_of_range_utc,
             force_close,
-            classification_service,
             batch_metrics=batch_metrics,
         )
 
@@ -314,7 +301,6 @@ def _process_projects_page(
     force_close: bool,
     start_date: str | None,
     end_date: str | None,
-    classification_service: ClassificationService | None = None,
     batch_metrics: dict | None = None,
 ) -> tuple[int, int, list[str]]:
     total_conversations_closed = 0
@@ -329,7 +315,6 @@ def _process_projects_page(
             force_close,
             start_date,
             end_date,
-            classification_service,
             batch_metrics=batch_metrics,
         )
         total_conversations_closed += conversations_closed
@@ -361,317 +346,33 @@ def _bulk_update_conversation_end_dates(conversation_batch: list[Conversation], 
     )
 
 
-def _get_cached_topics_for_batch(
-    conversation_batch: list[Conversation],
-    service: ClassificationService,
-    topics_cache: dict,
-) -> list[dict[str, Any]] | None:
-    if not conversation_batch:
-        return None
-    first_conversation = conversation_batch[0]
-    project_uuid_key = str(first_conversation.project.uuid)
-    if project_uuid_key not in topics_cache:
-        topics_cache[project_uuid_key] = service._get_topics_payload(first_conversation.project)
-    return topics_cache[project_uuid_key]
-
-
-def _calculate_target_date(end_date_utc: pendulum.DateTime, project_timezone: str | None) -> str:
-    if project_timezone:
-        try:
-            return end_date_utc.in_timezone(project_timezone).to_date_string()
-        except Exception:
-            return str(end_date_utc.date())
-    return str(end_date_utc.date())
-
-
-def _handle_conversation_without_messages(
-    conversation: Conversation,
-    conversation_uuid: str,
-    project_uuid: str,
-    end_date_utc: pendulum.DateTime,
-    project_timezone: str | None,
-) -> None:
-    conversation.resolution = str(ResolutionEntities.UNCLASSIFIED)
-    target_date = _calculate_target_date(end_date_utc, project_timezone)
-    sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
-    sentry_sdk.set_tag("project_uuid", project_uuid)
-    sentry_sdk.set_tag("error_type", "no_messages")
-    sentry_sdk.set_context(
-        "conversation_no_messages",
-        {
-            "conversation_uuid": conversation_uuid,
-            "project_uuid": project_uuid,
-            "target_date": target_date,
-            "end_date_utc": str(end_date_utc),
-            "has_chats_room": conversation.has_chats_room,
-        },
-    )
-    sentry_sdk.capture_message(
-        f"Conversation {conversation_uuid} has no messages - marked as UNCLASSIFIED. "
-        f"Project: {project_uuid}, Date: {target_date}",
-        level="warning",
-    )
-    logger.warning(
-        f"[CloseDailyConversationsTask] Conversation {conversation_uuid} has no messages - "
-        f"marked as UNCLASSIFIED. Project: {project_uuid}, Date: {target_date}"
-    )
-
-
-def _classify_single_conversation(
-    conversation: Conversation,
-    service: ClassificationService,
-    cached_topics: list[dict[str, Any]] | None,
-    project_uuid: str,
-    end_date_utc: pendulum.DateTime,
-    project_timezone: str | None,
-    preloaded_messages: list[dict[str, Any]] | None = None,
-) -> tuple[Conversation | None, bool]:
-    conversation_uuid = str(conversation.uuid)
-    try:
-        conv, classification, resolution = service.classify_conversation(
-            conversation,
-            save_resolution=False,
-            topics_payload=cached_topics,
-            messages_override=preloaded_messages,
-            send_to_datalake=False,
-        )
-        if conv and resolution:
-            conv.resolution = resolution
-            should_migrate = classification is not None
-            return (conv, should_migrate)
-        if conv and not resolution:
-            _handle_conversation_without_messages(
-                conversation, conversation_uuid, project_uuid, end_date_utc, project_timezone
-            )
-            return (conversation, False)
-        logger.warning(
-            f"[CloseDailyConversationsTask] Failed to classify conversation {conversation_uuid}. "
-            f"Project: {project_uuid}, Has conv: {conv is not None}, "
-            f"Has resolution: {resolution is not None}"
-        )
-        return (None, False)
-    except Exception as e:
-        sentry_sdk.set_tag("conversation_uuid", conversation_uuid)
-        sentry_sdk.set_tag("project_uuid", project_uuid)
-        sentry_sdk.capture_exception(e)
-        logger.error(
-            f"[CloseDailyConversationsTask] Error classifying conversation {conversation_uuid}. "
-            f"Project: {project_uuid}, Error: {str(e)}",
-            exc_info=True,
-        )
-        return (None, False)
-
-
-def _bulk_update_conversation_resolutions(
-    conversations_to_update: list[Conversation],
-    project_uuid: str,
-    batch_size: int,
-) -> bool:
-    from django.db import transaction
-
-    if not conversations_to_update:
-        return True
-    try:
-        with transaction.atomic():
-            Conversation.objects.bulk_update(conversations_to_update, ["resolution"], batch_size=50)
-        logger.info(
-            f"[CloseDailyConversationsTask] Bulk updated resolution for "
-            f"{len(conversations_to_update)} conversations. "
-            f"Project: {project_uuid}, Updated: {len(conversations_to_update)}, "
-            f"Batch size: {batch_size}"
-        )
-        return True
-    except Exception as e:
-        sentry_sdk.capture_exception(e)
-        conversation_uuids_sample = [str(c.uuid) for c in conversations_to_update[:10]]
-        logger.error(
-            f"[CloseDailyConversationsTask] Error bulk updating resolution - "
-            f"conversations will remain with end_date but IN_PROGRESS. "
-            f"Project: {project_uuid}, Batch size: {len(conversations_to_update)}, "
-            f"Error: {str(e)}, Sample UUIDs: {conversation_uuids_sample}",
-            exc_info=True,
-        )
-        return False
-
-
-def _send_billing_close_to_sqs(conversations: list[Conversation], project_uuid: str) -> None:
-    if not getattr(settings, "SQS_BILLING_QUEUE_URL", ""):
-        return
-
-    producer = get_billing_sqs_producer()
-    for conv in conversations:
-        payload = build_conversation_close_billing_payload(conv)
-        if not payload:
-            logger.warning(
-                "[CloseDailyConversationsTask] Skip billing SQS (missing channel_uuid, contact_urn, or dates) "
-                f"conversation_uuid={conv.uuid} project_uuid={project_uuid}"
-            )
-            continue
-        try:
-            producer.send_conversation_close(payload)
-        except Exception as e:
-            logger.warning(
-                "[CloseDailyConversationsTask] Billing SQS send failed "
-                f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
-                exc_info=True,
-            )
-
-
-def _send_datalake_events(conversations: list[Conversation], project_uuid: str) -> None:
-    if not conversations:
-        return
-
-    conv_ids = [c.uuid for c in conversations]
-    classifications = ConversationClassification.objects.filter(conversation_id__in=conv_ids).select_related(
-        "topic", "subtopic", "subtopic__topic"
-    )
-    classification_by_conversation_id = {cc.conversation_id: cc for cc in classifications}
-    has_active_topics = Topic.objects.filter(project__uuid=project_uuid, is_active=True).exists()
-
-    for conv in conversations:
-        try:
-            classification = classification_by_conversation_id.get(conv.uuid)
-            cc_event = build_conversation_classification_event(conv, project_uuid, str(conv.resolution))
-            send_data_lake_event.delay(cc_event.dict())
-            topics_event = build_topics_event(conv, project_uuid, classification, has_active_topics=has_active_topics)
-            send_data_lake_event.delay(topics_event.dict())
-        except Exception as e:
-            logger.warning(
-                "[CloseDailyConversationsTask] Datalake event send failed "
-                f"conversation_uuid={conv.uuid} project_uuid={project_uuid} error={e!s}",
-                exc_info=True,
-            )
-
-
-def _queue_message_migrations(conversations_to_migrate: list[Conversation], project_uuid: str) -> None:
-    from conversation_ms.tasks import migrate_messages_task
-
-    for conv in conversations_to_migrate:
-        try:
-            migrate_messages_task.delay(str(conv.uuid))
-        except Exception as e:
-            logger.warning(
-                f"[CloseDailyConversationsTask] Failed to queue message migration for conversation {conv.uuid}. "
-                f"Project: {project_uuid}, Error: {str(e)}"
-            )
-
-
-def _persist_messages_before_classification(
-    conversation: Conversation,
-    project_uuid: str,
-    migration_service: MessageMigrationService,
-) -> list[dict[str, Any]] | None:
-    try:
-        result = migration_service.persist_conversation_messages_to_postgres(conversation, delete_from_dynamo=False)
-        if result.get("persisted"):
-            logger.info(
-                f"[CloseDailyConversationsTask] persisted_before_classification conversation={conversation.uuid} "
-                f"project={project_uuid}"
-            )
-            return result.get("messages")
-        logger.info(
-            f"[CloseDailyConversationsTask] dynamo_empty conversation={conversation.uuid} project={project_uuid}"
-        )
-        return None
-    except Exception as exc:
-        sentry_sdk.set_tag("conversation_uuid", str(conversation.uuid))
-        sentry_sdk.set_tag("project_uuid", project_uuid)
-        sentry_sdk.capture_exception(exc)
-        logger.warning(
-            f"[CloseDailyConversationsTask] Failed persisting before classification conversation={conversation.uuid} "
-            f"project={project_uuid} error={exc}"
-        )
-        return None
-
-
-def _classify_conversation_worker(
-    conversation: Conversation,
-    service: ClassificationService,
-    cached_topics: list[dict[str, Any]] | None,
-    project_uuid: str,
-    end_date_utc: pendulum.DateTime,
-    project_timezone: str | None,
-    migration_service: MessageMigrationService,
-) -> tuple[Conversation | None, bool, list[dict[str, Any]] | None]:
-    preloaded_messages = _persist_messages_before_classification(conversation, project_uuid, migration_service)
-    conv, should_migrate = _classify_single_conversation(
-        conversation,
-        service,
-        cached_topics,
-        project_uuid,
-        end_date_utc,
-        project_timezone,
-        preloaded_messages=preloaded_messages,
-    )
-    return conv, should_migrate, preloaded_messages
-
-
 def _process_conversation_batch(
     conversation_batch: list[Conversation],
     project_uuid: str,
     end_date_utc: pendulum.DateTime,
-    classification_service: ClassificationService | None = None,
-    topics_cache: dict | None = None,
-    project_timezone: str | None = None,
     batch_metrics: dict | None = None,
 ) -> int:
-    conversations_closed = 0
-    service = classification_service or ClassificationService()
-    migration_service = MessageMigrationService()
-    conversations_to_update_resolution = []
-    conversations_to_migrate = []
-
-    if topics_cache is None:
-        topics_cache = {}
-
+    """Selector batch: persist end_date, claim pipeline rows, enqueue classify."""
+    claimed = 0
     try:
         _bulk_update_conversation_end_dates(conversation_batch, project_uuid)
-        cached_topics = _get_cached_topics_for_batch(conversation_batch, service, topics_cache)
-
-        max_workers = _get_classification_threads()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    _classify_conversation_worker,
-                    conversation,
-                    service,
-                    cached_topics,
-                    project_uuid,
-                    end_date_utc,
-                    project_timezone,
-                    migration_service,
-                ): conversation
-                for conversation in conversation_batch
-            }
-            for future in as_completed(futures):
-                original_conv = futures[future]
-                try:
-                    conv, should_migrate, preloaded_messages = future.result()
-                except Exception as exc:
-                    with sentry_sdk.push_scope() as scope:
-                        scope.set_tag("conversation_uuid", str(original_conv.uuid))
-                        scope.set_tag("project_uuid", project_uuid)
-                        sentry_sdk.capture_exception(exc)
-                    logger.error(
-                        f"[CloseDailyConversationsTask] thread_failed conversation={original_conv.uuid} "
-                        f"project={project_uuid} error={exc}",
-                        exc_info=True,
-                    )
+        for conversation in conversation_batch:
+            try:
+                record = ClosePipelineStateMachine.claim_classify(conversation)
+                if record is None:
                     continue
-                if conv:
-                    conversations_to_update_resolution.append(conv)
-                    if should_migrate and preloaded_messages is None:
-                        conversations_to_migrate.append(conv)
-                    conversations_closed += 1
-
-        resolutions_persisted = _bulk_update_conversation_resolutions(
-            conversations_to_update_resolution, project_uuid, len(conversation_batch)
-        )
-        if resolutions_persisted:
-            _send_billing_close_to_sqs(conversations_to_update_resolution, project_uuid)
-            _send_datalake_events(conversations_to_update_resolution, project_uuid)
-        _queue_message_migrations(conversations_to_migrate, project_uuid)
-
+                enqueue_classify(str(conversation.uuid))
+                claimed += 1
+            except Exception as exc:
+                with sentry_sdk.push_scope() as scope:
+                    scope.set_tag("conversation_uuid", str(conversation.uuid))
+                    scope.set_tag("project_uuid", project_uuid)
+                    sentry_sdk.capture_exception(exc)
+                logger.error(
+                    f"[CloseDailyConversationsTask] claim_enqueue_failed conversation={conversation.uuid} "
+                    f"project={project_uuid} error={exc}",
+                    exc_info=True,
+                )
     except Exception as e:
         if batch_metrics is not None:
             batch_metrics["batches_failed"] = batch_metrics.get("batches_failed", 0) + 1
@@ -681,8 +382,7 @@ def _process_conversation_batch(
             f"Project: {project_uuid}, Batch size: {len(conversation_batch)}, Error: {str(e)}",
             exc_info=True,
         )
-
-    return conversations_closed
+    return claimed
 
 
 def _process_project_conversations(
@@ -691,8 +391,6 @@ def _process_project_conversations(
     start_of_range_utc: pendulum.DateTime,
     end_of_range_utc: pendulum.DateTime,
     force_close: bool = False,
-    classification_service: ClassificationService | None = None,
-    topics_cache: dict | None = None,
     batch_metrics: dict | None = None,
 ) -> int:
     conversations_closed = 0
@@ -731,16 +429,13 @@ def _process_project_conversations(
     BATCH_SIZE = 50
     conversation_batch = []
 
-    if topics_cache is None:
-        topics_cache = {}
-
     for conversation in conversations:
         conversation_uuid = str(conversation.uuid)
         try:
             if conversation.end_date and conversation.end_date == end_of_range_utc:
                 logger.info(
                     f"[CloseDailyConversationsTask] Conversation {conversation_uuid} has end_date but still "
-                    f"IN_PROGRESS, retrying classification (previous attempt may have failed). "
+                    f"IN_PROGRESS, retrying claim (previous attempt may have failed). "
                     f"Project: {project_uuid}, End date: {conversation.end_date}, "
                     f"Resolution: {conversation.resolution}"
                 )
@@ -756,9 +451,6 @@ def _process_project_conversations(
                     conversation_batch,
                     project_uuid,
                     end_of_range_utc,
-                    classification_service,
-                    topics_cache,
-                    project_timezone,
                     batch_metrics=batch_metrics,
                 )
                 conversations_closed += batch_closed
@@ -779,9 +471,6 @@ def _process_project_conversations(
             conversation_batch,
             project_uuid,
             end_of_range_utc,
-            classification_service,
-            topics_cache,
-            project_timezone,
             batch_metrics=batch_metrics,
         )
         conversations_closed += batch_closed

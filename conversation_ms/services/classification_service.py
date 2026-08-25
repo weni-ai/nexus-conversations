@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
+from django.core.cache import cache
 
 from conversation_ms.adapters.aws import get_boto3_client
 from conversation_ms.adapters.data_lake import (
@@ -21,6 +22,16 @@ from conversation_ms.utils.resolution_lambda_routing import (
 
 logger = logging.getLogger(__name__)
 
+AI_RESOLUTION_USER_RULES_CACHE_KEY_PREFIX = "conversation_ms:ai_resolution_user_rules:"
+
+
+def _ai_resolution_user_rules_cache_key(project_uuid: str) -> str:
+    return f"{AI_RESOLUTION_USER_RULES_CACHE_KEY_PREFIX}{project_uuid}"
+
+
+def _ai_resolution_criteria_cache_ttl_seconds() -> int:
+    return max(0, int(getattr(settings, "AI_RESOLUTION_CRITERIA_CACHE_TTL_SECONDS", 3600) or 0))
+
 
 class ClassificationService:
     """
@@ -37,6 +48,77 @@ class ClassificationService:
             self._lambda_clients[region_name] = get_boto3_client("lambda", region_name=region_name)
         return self._lambda_clients[region_name]
 
+    def _resolve_conversation(self, conversation_or_uuid) -> Optional[Conversation]:
+        if isinstance(conversation_or_uuid, Conversation):
+            return conversation_or_uuid
+        try:
+            return Conversation.objects.get(uuid=conversation_or_uuid)
+        except Conversation.DoesNotExist:
+            logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
+            return None
+
+    def classify_resolution(
+        self,
+        conversation_or_uuid,
+        *,
+        messages_override: Optional[List[Dict[str, Any]]] = None,
+        save_resolution: bool = False,
+    ) -> Tuple[Optional[Conversation], Optional[str], Optional[List[Dict[str, Any]]]]:
+        """
+        Resolution-only path (close-daily classify stage).
+
+        Returns ``(conversation, resolution, messages)``. ``resolution`` is ``None`` when
+        there is no chat room and no messages (caller may mark Unclassified).
+        """
+        conversation = self._resolve_conversation(conversation_or_uuid)
+        if conversation is None:
+            return (None, None, None)
+
+        conversation_uuid = str(conversation.uuid)
+        messages = messages_override
+
+        if conversation.has_chats_room:
+            resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
+            logger.info(
+                f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
+            )
+        else:
+            if messages is None:
+                messages = self.get_conversation_messages(conversation)
+            if not messages:
+                logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+                return (conversation, None, messages)
+            resolution = self._get_resolution_classification(conversation, messages)
+
+        if save_resolution:
+            conversation.resolution = resolution
+            conversation.save(update_fields=["resolution"])
+        else:
+            conversation.resolution = resolution
+
+        return (conversation, resolution, messages)
+
+    def classify_topics(
+        self,
+        conversation_or_uuid,
+        *,
+        messages_override: Optional[List[Dict[str, Any]]] = None,
+        topics_payload: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[ConversationClassification]:
+        """Topics-only path (close-daily topics stage)."""
+        conversation = self._resolve_conversation(conversation_or_uuid)
+        if conversation is None:
+            return None
+
+        messages = messages_override
+        if messages is None:
+            messages = self.get_conversation_messages(conversation)
+        if not messages:
+            logger.warning(f"[ClassificationService] No messages found for topics on conversation {conversation.uuid}.")
+            return None
+
+        return self._classify_topics(conversation, messages, topics_payload=topics_payload)
+
     def classify_conversation(
         self,
         conversation_or_uuid,
@@ -46,75 +128,37 @@ class ClassificationService:
         send_to_datalake: bool = True,
     ) -> Tuple[Optional[Conversation], Optional[ConversationClassification], Optional[str]]:
         """
-        Main entry point to classify a conversation.
-
-        Args:
-            conversation_or_uuid: Conversation object or UUID string
-            save_resolution: If False, returns resolution without saving (for bulk updates)
-            topics_payload: Pre-fetched topics payload (optional, to avoid N+1 queries)
-            messages_override: Optional preloaded messages to avoid refetch from data stores
-            send_to_datalake: If False, skip sending resolution event to data lake.
-                              Callers that defer persistence (bulk updates) should pass False
-                              and send events only after successful persistence.
-
-        Returns:
-            Tuple of (conversation, classification, resolution) where:
-            - conversation: The Conversation object (or None if not found)
-            - classification: The ConversationClassification object (or None if classification failed)
-            - resolution: The resolution string (or None if classification failed)
+        Facade: resolution + topics (+ optional datalake). Prefer ``classify_resolution`` /
+        ``classify_topics`` on the close-daily path.
         """
-        # Accept either Conversation object or UUID string to avoid N+1 queries
-        if isinstance(conversation_or_uuid, Conversation):
-            conversation = conversation_or_uuid
-            conversation_uuid = str(conversation.uuid)
-        else:
-            try:
-                conversation = Conversation.objects.get(uuid=conversation_or_uuid)
-                conversation_uuid = str(conversation.uuid)
-            except Conversation.DoesNotExist:
-                logger.error(f"[ClassificationService] Conversation {conversation_or_uuid} not found.")
-                return (None, None, None)
-
-        messages = messages_override
-        if conversation.has_chats_room:
-            # If has_chats_room is True, skip lambda call and set resolution to "Has Chat Room" (4)
-            resolution = str(ResolutionEntities.HAS_CHAT_ROOM)
-            logger.info(
-                f"[ClassificationService] Conversation {conversation_uuid} has chat room, skipping resolution lambda."
-            )
-        else:
-            # Fetch messages (prefer DynamoDB) only if caller did not preload them.
-            if messages is None:
-                messages = self._get_conversation_messages(conversation)
-            if not messages:
-                logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
-                return (conversation, None, None)
-
-            resolution = self._get_resolution_classification(conversation, messages)
-
-        # Update conversation resolution conditionally
-        if save_resolution:
-            conversation.resolution = resolution
-            conversation.save(update_fields=["resolution"])
-        else:
-            # Just set the resolution on the object without saving (for bulk update)
-            conversation.resolution = resolution
+        conversation, resolution, messages = self.classify_resolution(
+            conversation_or_uuid,
+            messages_override=messages_override,
+            save_resolution=save_resolution,
+        )
+        if conversation is None:
+            return (None, None, None)
+        if resolution is None:
+            return (conversation, None, None)
 
         project_uuid = str(conversation.project.uuid)
 
-        # If messages were not fetched yet (has_chats_room=True), fetch them now if we want to classify topics
         if messages is None:
-            messages = self._get_conversation_messages(conversation)
+            messages = self.get_conversation_messages(conversation)
 
         if topics_payload is None:
-            topics_payload = self._get_topics_payload(conversation.project)
+            topics_payload = self.get_topics_payload(conversation.project)
         has_active_topics = len(topics_payload) > 0
 
         classification: Optional[ConversationClassification] = None
         if messages:
-            classification = self._classify_topics(conversation, messages, topics_payload=topics_payload)
+            classification = self.classify_topics(
+                conversation,
+                messages_override=messages,
+                topics_payload=topics_payload,
+            )
         else:
-            logger.warning(f"[ClassificationService] No messages found for conversation {conversation_uuid}.")
+            logger.warning(f"[ClassificationService] No messages found for conversation {conversation.uuid}.")
 
         if send_to_datalake:
             self._send_resolution_to_datalake(
@@ -184,7 +228,7 @@ class ClassificationService:
         """
         # Retrieve topics for this project to send as context (or use cache)
         if topics_payload is None:
-            topics_payload = self._get_topics_payload(conversation.project)
+            topics_payload = self.get_topics_payload(conversation.project)
         if not topics_payload:
             logger.info(
                 f"[ClassificationService] No topics configured for project {conversation.project.uuid}, "
@@ -246,21 +290,8 @@ class ClassificationService:
             "user_rules": self._get_user_rules_for_project(project_uuid),
         }
 
-    def _get_user_rules_for_project(self, project_uuid: str) -> List[str]:
-        """Load base + custom resolution criteria texts from Nexus for daily close."""
-        try:
-            from conversation_ms.clients.nexus_client import NexusClient
-
-            payload = NexusClient().get_ai_resolution_criteria(project_uuid)
-        except Exception as exc:
-            logger.error(
-                "[ClassificationService] Failed to load AI resolution criteria for project %s: %s",
-                project_uuid,
-                exc,
-                exc_info=True,
-            )
-            return []
-
+    @staticmethod
+    def _parse_user_rules_payload(payload: dict[str, Any]) -> List[str]:
         user_rules: List[str] = []
         for section in ("base_criteria", "custom_criteria"):
             for item in payload.get(section) or []:
@@ -269,6 +300,32 @@ class ClassificationService:
                 text = str(item.get("text") or "").strip()
                 if text:
                     user_rules.append(text)
+        return user_rules
+
+    def _get_user_rules_for_project(self, project_uuid: str) -> List[str]:
+        """Load base + custom resolution criteria texts from Nexus for daily close."""
+        cache_key = _ai_resolution_user_rules_cache_key(project_uuid)
+        ttl_seconds = _ai_resolution_criteria_cache_ttl_seconds()
+        if ttl_seconds > 0:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return list(cached)
+
+        try:
+            from conversation_ms.clients.nexus_client import NexusClient
+
+            payload = NexusClient().get_ai_resolution_criteria(project_uuid)
+        except Exception as exc:
+            logger.warning(
+                "[ClassificationService] Failed to load AI resolution criteria for project %s: %s",
+                project_uuid,
+                exc,
+            )
+            return []
+
+        user_rules = self._parse_user_rules_payload(payload if isinstance(payload, dict) else {})
+        if ttl_seconds > 0:
+            cache.set(cache_key, user_rules, timeout=ttl_seconds)
         return user_rules
 
     @staticmethod
@@ -282,7 +339,7 @@ class ClassificationService:
             logger.debug("[ClassificationService] Unknown message source '%s', defaulting to user", source)
         return "user"
 
-    def _get_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
+    def get_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
         """
         Retrieve messages from DynamoDB or fallback to Postgres (ConversationMessages).
         """
@@ -311,7 +368,7 @@ class ClassificationService:
 
         return []
 
-    def _get_topics_payload(self, project) -> List[Dict[str, Any]]:
+    def get_topics_payload(self, project) -> List[Dict[str, Any]]:
         """
         Serialize topics and subtopics for the Lambda context.
         Uses prefetch_related to avoid N+1 queries.

@@ -37,6 +37,7 @@ from conversation_ms.serializers import (
 from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.tasks import create_external_billing_ticket_task
+from conversation_ms.throttles import ConversationListRateThrottle
 from improvements.models import ImprovementRunConversation
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,8 @@ logger = logging.getLogger(__name__)
             "Cursor-paginated list. Each response includes total_count (COUNT for the current filters, "
             "including status/resolution) and status_summary (GROUP BY resolution for the same filters "
             "but with status and resolution query params removed, matching public supervisor V1 semantics). "
-            "Those aggregates add extra DB work on every request; suitable indexes on filtered columns are important."
+            "Those aggregates add extra DB work on every request; suitable indexes on filtered columns are important. "
+            "page_size is capped (default max 50). List requests are rate-limited per project."
         ),
         responses={200: ConversationListCursorResponseSerializer},
     ),
@@ -105,6 +107,12 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = ConversationFilter
+    throttle_classes = [ConversationListRateThrottle]
+
+    def get_throttles(self):
+        if self.action != "list":
+            return []
+        return super().get_throttles()
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):

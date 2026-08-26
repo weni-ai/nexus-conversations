@@ -1,4 +1,4 @@
-"""Close-pipeline drain tests (NEXUS-5774)."""
+"""Close-pipeline drain tests."""
 
 from datetime import timedelta
 from io import StringIO

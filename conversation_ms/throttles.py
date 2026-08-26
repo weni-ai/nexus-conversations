@@ -1,6 +1,9 @@
 import logging
 
 from django.conf import settings
+from django.core.cache import InvalidCacheBackendError
+from django_redis.exceptions import ConnectionInterrupted
+from redis.exceptions import RedisError
 from rest_framework.throttling import SimpleRateThrottle
 
 logger = logging.getLogger(__name__)
@@ -23,7 +26,7 @@ class ConversationListRateThrottle(SimpleRateThrottle):
     def allow_request(self, request, view):
         try:
             return super().allow_request(request, view)
-        except Exception as exc:
+        except (InvalidCacheBackendError, RedisError, ConnectionInterrupted) as exc:
             logger.warning(
                 "[ConversationListRateThrottle] Cache unavailable, allowing request: %s",
                 exc,

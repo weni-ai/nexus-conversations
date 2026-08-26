@@ -20,7 +20,6 @@ from conversation_ms.filters import ConversationFilter
 from conversation_ms.mixins import JWTModuleMixin
 from conversation_ms.models import Conversation, Project, SubTopic, Topic
 from conversation_ms.pagination import ConversationCursorPagination
-from conversation_ms.throttles import ConversationListRateThrottle
 from conversation_ms.serializers import (
     ChannelConversationCountQuerySerializer,
     ChannelConversationCountResponseSerializer,
@@ -38,6 +37,7 @@ from conversation_ms.serializers import (
 from conversation_ms.services.conversation_csv_export_service import export_conversations_csv_bytes
 from conversation_ms.services.conversation_window_service import ConversationWindowService
 from conversation_ms.tasks import create_external_billing_ticket_task
+from conversation_ms.throttles import ConversationListRateThrottle
 from improvements.models import ImprovementRunConversation
 
 logger = logging.getLogger(__name__)

@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework.pagination import CursorPagination, PageNumberPagination
 
 
@@ -6,6 +7,11 @@ class ConversationCursorPagination(CursorPagination):
     ordering = ("-created_at", "-uuid")
     page_size_query_param = "page_size"
     cursor_query_param = "cursor"
+    max_page_size = 50
+
+    def get_page_size(self, request):
+        self.max_page_size = getattr(settings, "CONVERSATION_LIST_MAX_PAGE_SIZE", self.max_page_size)
+        return super().get_page_size(request)
 
 
 class MessagePagination(PageNumberPagination):

@@ -5,6 +5,7 @@ Tests for SQS consumer event routing.
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pytest
 from django.db.utils import InterfaceError
 
 from conversation_ms.consumers.sqs_consumer import ConversationSQSConsumer
@@ -98,13 +99,27 @@ class TestConsumerEventRouting:
                 consumer, "_route_event", side_effect=[InterfaceError("connection already closed"), None]
             ) as mock_route,
             patch.object(consumer, "_close_all_db_connections") as mock_close_all,
-            patch.object(consumer, "_refresh_db_connections") as mock_refresh,
         ):
             consumer._route_event_with_stale_db_retry("message.sent", event_data)
 
         mock_close_all.assert_called_once()
-        mock_refresh.assert_called_once()
         assert mock_route.call_count == 2
+
+    def test_route_event_logs_and_reraises_when_retry_fails(self):
+        consumer = ConversationSQSConsumer(queue_url="https://sqs.test.queue")
+        event_data = {"correlation_id": "cid-1", "data": {}}
+        stale = InterfaceError("connection already closed")
+
+        with (
+            patch.object(consumer, "_route_event", side_effect=[stale, stale]),
+            patch.object(consumer, "_close_all_db_connections"),
+            patch("conversation_ms.consumers.sqs_consumer.logger") as mock_logger,
+        ):
+            with pytest.raises(InterfaceError):
+                consumer._route_event_with_stale_db_retry("message.sent", event_data)
+
+        mock_logger.error.assert_called_once()
+        assert "Retry failed" in mock_logger.error.call_args.args[0]
 
     def test_process_message_uses_stale_db_retry_wrapper(self):
         consumer = ConversationSQSConsumer(queue_url="https://sqs.test.queue")

@@ -203,6 +203,10 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
+# Conversations list guardrails (dump scripts / unbounded page_size)
+CONVERSATION_LIST_MAX_PAGE_SIZE = env.int("CONVERSATION_LIST_MAX_PAGE_SIZE", default=50)
+CONVERSATION_LIST_THROTTLE_RATE = env.str("CONVERSATION_LIST_THROTTLE_RATE", default="60/min")
+
 # Django REST Framework
 REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
@@ -211,6 +215,9 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": [],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "conversation_list": CONVERSATION_LIST_THROTTLE_RATE,
+    },
 }
 
 SPECTACULAR_SETTINGS = {

@@ -4,6 +4,8 @@ from uuid import uuid4
 
 import pytest
 from django.conf import settings
+from django.core.cache import cache
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -489,3 +491,32 @@ class TestConversationEndpoint:
             str(without_run.uuid),
         }
         assert all(item["is_amazing"] is False for item in not_amazing_response.data["results"])
+
+    def test_list_conversations_caps_page_size(self, api_client, project, auth_headers):
+        for i in range(60):
+            Conversation.objects.create(project=project, contact_urn=f"whatsapp:+5500000{i:04d}")
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, {"page_size": 1000}, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data["results"]) == 50
+        assert response.data["total_count"] == 60
+
+    def test_list_conversations_rate_limited_per_project(self, api_client, project, auth_headers):
+        locmem = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "conversation-list-throttle-test",
+            }
+        }
+        rest = {**settings.REST_FRAMEWORK, "DEFAULT_THROTTLE_RATES": {"conversation_list": "1/min"}}
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+
+        with override_settings(CACHES=locmem, REST_FRAMEWORK=rest):
+            cache.clear()
+            first = api_client.get(url, **auth_headers)
+            second = api_client.get(url, **auth_headers)
+
+        assert first.status_code == status.HTTP_200_OK
+        assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS

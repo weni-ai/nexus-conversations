@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.filters import TOPIC_UNCLASSIFIED_SENTINEL
 from conversation_ms.models import (
     Conversation,
     ConversationClassification,
@@ -113,13 +114,17 @@ class ConversationClassificationSerializer(serializers.ModelSerializer):
         fields = ["topic", "subtopic", "confidence", "created_at", "updated_at"]
 
 
-def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
+def _conversation_topic_name(conversation: Conversation) -> str:
+    """
+    Return the assigned topic name, or the reserved ``unclassified`` sentinel when
+    there is no classification / no linked topic (same token used by the topics filter).
+    """
     try:
         if conversation.classification and conversation.classification.topic:
             return conversation.classification.topic.name
     except (ConversationClassification.DoesNotExist, AttributeError):
         pass
-    return None
+    return TOPIC_UNCLASSIFIED_SENTINEL
 
 
 def _conversation_is_amazing(conversation: Conversation) -> bool:

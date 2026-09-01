@@ -114,16 +114,25 @@ class ConversationClassificationSerializer(serializers.ModelSerializer):
         fields = ["topic", "subtopic", "confidence", "created_at", "updated_at"]
 
 
-def _conversation_topic_name(conversation: Conversation) -> str:
+def _conversation_is_in_progress(conversation: Conversation) -> bool:
+    return str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS)
+
+
+def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
     """
-    Return the assigned topic name, or the reserved ``unclassified`` sentinel when
-    there is no classification / no linked topic (same token used by the topics filter).
+    Return the assigned topic name.
+
+    - Named topic when linked.
+    - ``None`` while conversation is in progress (topics not finalized for display).
+    - ``unclassified`` for closed conversations without a linked topic.
     """
     try:
         if conversation.classification and conversation.classification.topic:
             return conversation.classification.topic.name
     except (ConversationClassification.DoesNotExist, AttributeError):
         pass
+    if _conversation_is_in_progress(conversation):
+        return None
     return TOPIC_UNCLASSIFIED_SENTINEL
 
 

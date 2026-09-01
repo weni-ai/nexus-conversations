@@ -73,7 +73,8 @@ logger = logging.getLogger(__name__)
                 "Comma-separated topic names. Use the reserved value 'unclassified' (case-insensitive) "
                 "to include conversations with no assigned topic (no classification or topic is null). "
                 "Can be combined with named topics, e.g. topics=Sales,unclassified. "
-                "List/detail responses use the same 'unclassified' token in the topic field when no topic is linked."
+                "List/detail responses use 'unclassified' for closed conversations without a linked topic; "
+                "null while the conversation is in progress."
             ),
             required=False,
         ),

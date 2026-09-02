@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.filters import TOPIC_UNCLASSIFIED_SENTINEL
 from conversation_ms.models import (
     Conversation,
     ConversationClassification,
@@ -113,13 +114,26 @@ class ConversationClassificationSerializer(serializers.ModelSerializer):
         fields = ["topic", "subtopic", "confidence", "created_at", "updated_at"]
 
 
+def _conversation_is_in_progress(conversation: Conversation) -> bool:
+    return str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS)
+
+
 def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
+    """
+    Return the assigned topic name.
+
+    - Named topic when linked.
+    - ``None`` while conversation is in progress (topics not finalized for display).
+    - ``unclassified`` for closed conversations without a linked topic.
+    """
     try:
         if conversation.classification and conversation.classification.topic:
             return conversation.classification.topic.name
     except (ConversationClassification.DoesNotExist, AttributeError):
         pass
-    return None
+    if _conversation_is_in_progress(conversation):
+        return None
+    return TOPIC_UNCLASSIFIED_SENTINEL
 
 
 def _conversation_is_amazing(conversation: Conversation) -> bool:

@@ -128,6 +128,42 @@ class TestConversationEndpoint:
         assert item["topic"] == "General"
         assert "classification" not in item
 
+    def test_list_conversations_topic_null_when_in_progress(self, api_client, project, auth_headers):
+        Conversation.objects.create(project=project, resolution="2", contact_name="In Progress No Topic")
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        topics_by_name = {item["contact_name"]: item["topic"] for item in response.data["results"]}
+        assert topics_by_name["In Progress No Topic"] is None
+
+    def test_list_conversations_closed_without_topic_returns_unclassified(self, api_client, project, auth_headers):
+        Conversation.objects.create(project=project, resolution="0", contact_name="Closed No Classification")
+        null_topic = Conversation.objects.create(project=project, resolution="0", contact_name="Closed Null Topic")
+        ConversationClassification.objects.create(conversation=null_topic, topic=None)
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        topics_by_name = {item["contact_name"]: item["topic"] for item in response.data["results"]}
+        assert topics_by_name["Closed No Classification"] == "unclassified"
+        assert topics_by_name["Closed Null Topic"] == "unclassified"
+
+    def test_retrieve_conversation_returns_unclassified_topic_sentinel(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        ConversationClassification.objects.create(conversation=conversation, topic=None)
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["topic"] == "unclassified"
+
     def test_retrieve_conversation_with_messages(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution="0")
         messages_data = [{"source": "user", "text": "Hello"}, {"source": "assistant", "text": "Hi there"}]

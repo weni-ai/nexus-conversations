@@ -186,9 +186,7 @@ class TestConversationEndpoint:
         from conversation_ms.close_daily.constants import ClosePipelineStageStatus
         from conversation_ms.models import ClosePipelineRecord
 
-        conversation = Conversation.objects.create(
-            project=project, resolution="0", contact_name="Closed Topics Failed"
-        )
+        conversation = Conversation.objects.create(project=project, resolution="0", contact_name="Closed Topics Failed")
         now = dj_tz.now()
         ClosePipelineRecord.objects.create(
             conversation=conversation,

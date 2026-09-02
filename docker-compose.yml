@@ -43,6 +43,11 @@ services:
       - USE_SENTRY=${USE_SENTRY:-false}
       - SENTRY_URL=${SENTRY_URL:-}
       - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - APM_DISABLE_SEND=${APM_DISABLE_SEND:-true}
+      - APM_SECRET_TOKEN=${APM_SECRET_TOKEN:-}
+      - APM_SERVER_URL=${APM_SERVER_URL:-}
+      - APM_SERVICE_DEBUG=${APM_SERVICE_DEBUG:-false}
+      - APM_SERVICE_NAME=${APM_SERVICE_NAME:-nexus-conversations}
       - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
       - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
     command: start
@@ -72,6 +77,11 @@ services:
       - USE_SENTRY=${USE_SENTRY:-false}
       - SENTRY_URL=${SENTRY_URL:-}
       - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - APM_DISABLE_SEND=${APM_DISABLE_SEND:-true}
+      - APM_SECRET_TOKEN=${APM_SECRET_TOKEN:-}
+      - APM_SERVER_URL=${APM_SERVER_URL:-}
+      - APM_SERVICE_DEBUG=${APM_SERVICE_DEBUG:-false}
+      - APM_SERVICE_NAME=${APM_SERVICE_NAME:-nexus-conversations}
       - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
       - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
     command: celery-worker celery,close_lambda,close_billing,close_datalake
@@ -101,6 +111,11 @@ services:
       - USE_SENTRY=${USE_SENTRY:-false}
       - SENTRY_URL=${SENTRY_URL:-}
       - FILTER_SENTRY_EVENTS=${FILTER_SENTRY_EVENTS:-}
+      - APM_DISABLE_SEND=${APM_DISABLE_SEND:-true}
+      - APM_SECRET_TOKEN=${APM_SECRET_TOKEN:-}
+      - APM_SERVER_URL=${APM_SERVER_URL:-}
+      - APM_SERVICE_DEBUG=${APM_SERVICE_DEBUG:-false}
+      - APM_SERVICE_NAME=${APM_SERVICE_NAME:-nexus-conversations}
       - AGENT_UUID_CSAT=${AGENT_UUID_CSAT:-}
       - AGENT_UUID_NPS=${AGENT_UUID_NPS:-}
     command: celery-beat

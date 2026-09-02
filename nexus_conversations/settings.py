@@ -62,12 +62,15 @@ INSTALLED_APPS = [
     "corsheaders",
     "drf_spectacular",
     "django_filters",
+    "elasticapm.contrib.django",
     "nexus_conversations.sentry",
     "conversation_ms.apps.ConversationMsConfig",  # Models for Conversation and ConversationMessages
     "improvements.apps.ImprovementsConfig",
 ]
 
 MIDDLEWARE = [
+    "elasticapm.contrib.django.middleware.TracingMiddleware",
+    "elasticapm.contrib.django.middleware.Catch404Middleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -318,6 +321,24 @@ USE_SENTRY = env.bool("USE_SENTRY", default=False)
 SENTRY_URL = env.str("SENTRY_URL", default="")
 ENVIRONMENT = env.str("ENVIRONMENT", default="development")
 FILTER_SENTRY_EVENTS = env.list("FILTER_SENTRY_EVENTS", default=[])
+
+# APM config
+ELASTIC_APM = {
+    "DISABLE_SEND": env.bool("APM_DISABLE_SEND", default=True),
+    "DEBUG": env.bool("APM_SERVICE_DEBUG", default=False),
+    "SERVICE_NAME": env.str("APM_SERVICE_NAME", default="nexus-conversations"),
+    "SECRET_TOKEN": env.str("APM_SECRET_TOKEN", default=""),
+    "SERVER_URL": env.str("APM_SERVER_URL", default=""),
+    "ENVIRONMENT": ENVIRONMENT,
+    "DJANGO_TRANSACTION_NAME_FROM_ROUTE": True,
+    "PROCESSORS": [
+        "elasticapm.processors.sanitize_stacktrace_locals",
+        "elasticapm.processors.sanitize_http_request_cookies",
+        "elasticapm.processors.sanitize_http_headers",
+        "elasticapm.processors.sanitize_http_wsgi_env",
+        "elasticapm.processors.sanitize_http_request_body",
+    ],
+}
 
 # Data Lake SDK (for CSAT/NPS)
 AGENT_UUID_CSAT = env.str("AGENT_UUID_CSAT", default="")

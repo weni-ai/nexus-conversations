@@ -21,6 +21,11 @@ env = environ.Env(
     SENTRY_URL=(str, ""),
     ENVIRONMENT=(str, "development"),
     FILTER_SENTRY_EVENTS=(list, []),
+    APM_DISABLE_SEND=(bool, True),
+    APM_SECRET_TOKEN=(str, ""),
+    APM_SERVER_URL=(str, ""),
+    APM_SERVICE_DEBUG=(bool, False),
+    APM_SERVICE_NAME=(str, "nexus-conversations"),
     # Data Lake SDK (for CSAT/NPS)
     AGENT_UUID_CSAT=(str, ""),
     AGENT_UUID_NPS=(str, ""),

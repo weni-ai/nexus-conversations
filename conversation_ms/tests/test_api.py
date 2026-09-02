@@ -151,6 +151,91 @@ class TestConversationEndpoint:
         assert topics_by_name["Closed No Classification"] == "unclassified"
         assert topics_by_name["Closed Null Topic"] == "unclassified"
 
+    def test_list_conversations_topics_skipped_returns_unclassified(self, api_client, project, auth_headers):
+        from django.utils import timezone as dj_tz
+
+        from conversation_ms.close_daily.constants import ClosePipelineStageStatus
+        from conversation_ms.models import ClosePipelineRecord
+
+        conversation = Conversation.objects.create(
+            project=project, resolution="0", contact_name="Closed Topics Skipped"
+        )
+        now = dj_tz.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conversation,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.SKIPPED,
+            topics_at=now,
+            billing_status=ClosePipelineStageStatus.PENDING,
+            billing_pending_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+        )
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        topics_by_name = {item["contact_name"]: item["topic"] for item in response.data["results"]}
+        assert topics_by_name["Closed Topics Skipped"] == "unclassified"
+
+    def test_list_conversations_topics_failed_returns_null(self, api_client, project, auth_headers):
+        from django.utils import timezone as dj_tz
+
+        from conversation_ms.close_daily.constants import ClosePipelineStageStatus
+        from conversation_ms.models import ClosePipelineRecord
+
+        conversation = Conversation.objects.create(project=project, resolution="0", contact_name="Closed Topics Failed")
+        now = dj_tz.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conversation,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.FAILED,
+            topics_error="lambda error",
+            billing_status=ClosePipelineStageStatus.PENDING,
+            billing_pending_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+        )
+
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        topics_by_name = {item["contact_name"]: item["topic"] for item in response.data["results"]}
+        assert topics_by_name["Closed Topics Failed"] is None
+
+    def test_retrieve_conversation_topics_failed_returns_null(self, api_client, project, auth_headers):
+        from django.utils import timezone as dj_tz
+
+        from conversation_ms.close_daily.constants import ClosePipelineStageStatus
+        from conversation_ms.models import ClosePipelineRecord
+
+        conversation = Conversation.objects.create(project=project, resolution="0")
+        now = dj_tz.now()
+        ClosePipelineRecord.objects.create(
+            conversation=conversation,
+            classify_status=ClosePipelineStageStatus.DONE,
+            classify_at=now,
+            topics_status=ClosePipelineStageStatus.DEAD,
+            topics_error="drain reclaim budget exhausted",
+            billing_status=ClosePipelineStageStatus.PENDING,
+            billing_pending_at=now,
+            datalake_status=ClosePipelineStageStatus.PENDING,
+            datalake_pending_at=now,
+        )
+
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["topic"] is None
+
     def test_retrieve_conversation_returns_unclassified_topic_sentinel(self, api_client, project, auth_headers):
         conversation = Conversation.objects.create(project=project, resolution="0")
         ConversationClassification.objects.create(conversation=conversation, topic=None)

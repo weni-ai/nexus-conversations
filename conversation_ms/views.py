@@ -73,8 +73,9 @@ logger = logging.getLogger(__name__)
                 "Comma-separated topic names. Use the reserved value 'unclassified' (case-insensitive) "
                 "to include conversations with no assigned topic (no classification or topic is null). "
                 "Can be combined with named topics, e.g. topics=Sales,unclassified. "
-                "List/detail responses use 'unclassified' for closed conversations without a linked topic; "
-                "null while the conversation is in progress."
+                "List/detail responses: named topic when linked; null while in progress or when "
+                "topics stage failed; 'unclassified' for closed conversations without a linked topic "
+                "(including topics skipped / no matching topic)."
             ),
             required=False,
         ),
@@ -128,7 +129,10 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
             raise NotFound(detail="Project not found")
 
         queryset = Conversation.objects.filter(project__uuid=project_uuid).select_related(
-            "classification", "classification__topic", "classification__subtopic"
+            "classification",
+            "classification__topic",
+            "classification__subtopic",
+            "close_pipeline",
         )
 
         latest_is_amazing = (

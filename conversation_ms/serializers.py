@@ -7,8 +7,10 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.close_daily.constants import ClosePipelineStageStatus
 from conversation_ms.filters import TOPIC_UNCLASSIFIED_SENTINEL
 from conversation_ms.models import (
+    ClosePipelineRecord,
     Conversation,
     ConversationClassification,
     ConversationMessages,
@@ -19,6 +21,13 @@ from conversation_ms.pagination import MessagePagination
 from conversation_ms.repositories.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
+
+_TOPICS_FAILED_STATUSES = frozenset(
+    {
+        ClosePipelineStageStatus.FAILED,
+        ClosePipelineStageStatus.DEAD,
+    }
+)
 
 
 def _conversation_message_window_utc(conversation: Conversation) -> Tuple[Optional[Any], Optional[Any]]:
@@ -118,13 +127,23 @@ def _conversation_is_in_progress(conversation: Conversation) -> bool:
     return str(conversation.resolution) == str(ResolutionEntities.IN_PROGRESS)
 
 
+def _topics_stage_failed(conversation: Conversation) -> bool:
+    try:
+        pipeline = conversation.close_pipeline
+    except ClosePipelineRecord.DoesNotExist:
+        return False
+    return getattr(pipeline, "topics_status", None) in _TOPICS_FAILED_STATUSES
+
+
 def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
     """
-    Return the assigned topic name.
+    Return the assigned topic name for list/detail APIs.
 
     - Named topic when linked.
-    - ``None`` while conversation is in progress (topics not finalized for display).
-    - ``unclassified`` for closed conversations without a linked topic.
+    - ``None`` while in progress (front shows "-").
+    - ``None`` when topics stage failed/dead (front shows "Couldn't classify").
+    - ``unclassified`` for closed conversations without a linked topic
+      (no match, skipped, or no classification row).
     """
     try:
         if conversation.classification and conversation.classification.topic:
@@ -132,6 +151,8 @@ def _conversation_topic_name(conversation: Conversation) -> Optional[str]:
     except (ConversationClassification.DoesNotExist, AttributeError):
         pass
     if _conversation_is_in_progress(conversation):
+        return None
+    if _topics_stage_failed(conversation):
         return None
     return TOPIC_UNCLASSIFIED_SENTINEL
 

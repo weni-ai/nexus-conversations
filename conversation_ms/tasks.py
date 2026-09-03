@@ -618,8 +618,7 @@ def create_external_billing_ticket_task(self, project_uuid: str, urn: str, creat
         return client.create_external_billing_ticket(resolved_project_uuid, urn, created_on)
     except (BillingPermanentError, ValueError) as exc:
         logger.error(
-            "[CreateExternalBillingTicketTask] Permanent error creating billing ticket "
-            "contact_urn=%s error=%s",
+            "[CreateExternalBillingTicketTask] Permanent error creating billing ticket " "contact_urn=%s error=%s",
             urn,
             exc,
             exc_info=True,

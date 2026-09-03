@@ -63,9 +63,7 @@ class TestReadProjectUuid:
 
 class TestResolveProjectUuid:
     def test_returns_plain_uuid(self):
-        assert resolve_project_uuid("76396786-80de-4dd1-b65a-31bf006435cc") == (
-            "76396786-80de-4dd1-b65a-31bf006435cc"
-        )
+        assert resolve_project_uuid("76396786-80de-4dd1-b65a-31bf006435cc") == ("76396786-80de-4dd1-b65a-31bf006435cc")
 
     def test_recovers_uuid_from_queued_jwt(self):
         with patch(
@@ -82,3 +80,6 @@ class TestResolveProjectUuid:
     def test_raises_when_empty(self):
         with pytest.raises(ValueError, match="project_uuid is required"):
             resolve_project_uuid("")
+
+    def test_extra_dots_are_not_treated_as_jwt(self):
+        assert resolve_project_uuid("a.b.c.d") == "a.b.c.d"

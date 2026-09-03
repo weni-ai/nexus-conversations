@@ -6,6 +6,8 @@ from django.core.exceptions import ImproperlyConfigured
 
 # Minted immediately before each outbound request, so a short lifetime is enough.
 MODULE_JWT_TTL_SECONDS = 300
+# Compact JWT form: header.payload.signature
+_JWT_SEGMENT_SEPARATOR_COUNT = 2
 
 
 def generate_project_jwt(project_uuid: str) -> str:
@@ -52,6 +54,11 @@ def read_project_uuid(token: str) -> str | None:
     return payload.get("project_uuid")
 
 
+def _looks_like_jwt(value: str) -> bool:
+    """True for compact JWS (exactly three base64 segments)."""
+    return value.count(".") == _JWT_SEGMENT_SEPARATOR_COUNT
+
+
 def resolve_project_uuid(project_uuid_or_token: str) -> str:
     """
     Accept either a project UUID or a previously queued module JWT.
@@ -63,7 +70,7 @@ def resolve_project_uuid(project_uuid_or_token: str) -> str:
     if not project_uuid_or_token:
         raise ValueError("project_uuid is required")
 
-    if project_uuid_or_token.count(".") >= 2:
+    if _looks_like_jwt(project_uuid_or_token):
         recovered = read_project_uuid(project_uuid_or_token)
         if not recovered:
             raise ValueError("Could not recover project_uuid from queued token")

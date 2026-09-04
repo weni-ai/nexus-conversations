@@ -73,8 +73,8 @@ class TestCreateExternalBillingTicket:
 
     @patch(
         "conversation_ms.clients.billing.generate_project_jwt",
-        side_effect=ImproperlyConfigured("JWT_PRIVATE_KEY is not configured"),
+        side_effect=ImproperlyConfigured("JWT_SECRET_KEY is not configured"),
     )
     def test_missing_private_key_is_permanent(self, mock_jwt):
-        with _BILLING_SETTINGS, pytest.raises(BillingPermanentError, match="JWT_PRIVATE_KEY"):
+        with _BILLING_SETTINGS, pytest.raises(BillingPermanentError, match="JWT_SECRET_KEY"):
             BillingClient().create_external_billing_ticket("project-uuid", "urn", "now")

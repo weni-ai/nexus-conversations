@@ -385,13 +385,11 @@ else:
     except FileNotFoundError:
         JWT_PUBLIC_KEY = None
 
-JWT_PRIVATE_KEY_ENV = env.str("JWT_PRIVATE_KEY", default="")
-if JWT_PRIVATE_KEY_ENV:
-    JWT_PRIVATE_KEY = base64.b64decode(JWT_PRIVATE_KEY_ENV)
-else:
-    JWT_PRIVATE_KEY_PATH = BASE_DIR / "jwt_keys" / "private_key.pem"
+JWT_SECRET_KEY = env.str("JWT_SECRET_KEY", default="") or None
+if not JWT_SECRET_KEY:
+    JWT_SECRET_KEY_PATH = BASE_DIR / "jwt_keys" / "private_key.pem"
     try:
-        with open(JWT_PRIVATE_KEY_PATH, "rb") as f:
-            JWT_PRIVATE_KEY = f.read()
+        with open(JWT_SECRET_KEY_PATH) as f:
+            JWT_SECRET_KEY = f.read() or None
     except FileNotFoundError:
-        JWT_PRIVATE_KEY = None
+        JWT_SECRET_KEY = None

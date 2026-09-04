@@ -17,9 +17,9 @@ def generate_project_jwt(project_uuid: str) -> str:
     Callers must mint at request time: a token stored in a queue and used on a
     later retry may already be past its expiration.
     """
-    private_key = getattr(settings, "JWT_PRIVATE_KEY", None)
+    private_key = getattr(settings, "JWT_SECRET_KEY", None)
     if not private_key:
-        raise ImproperlyConfigured("JWT_PRIVATE_KEY is not configured")
+        raise ImproperlyConfigured("JWT_SECRET_KEY is not configured")
 
     issued_at = datetime.now(timezone.utc)
     payload = {

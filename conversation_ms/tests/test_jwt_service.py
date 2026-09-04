@@ -15,13 +15,13 @@ from conversation_ms.api.internal.jwt_service import (
 
 class TestGenerateProjectJwt:
     def test_raises_when_private_key_missing(self):
-        with override_settings(JWT_PRIVATE_KEY=None):
-            with pytest.raises(ImproperlyConfigured, match="JWT_PRIVATE_KEY"):
+        with override_settings(JWT_SECRET_KEY=None):
+            with pytest.raises(ImproperlyConfigured, match="JWT_SECRET_KEY"):
                 generate_project_jwt("project-uuid")
 
     def test_encodes_project_uuid_with_ttl(self):
         with (
-            override_settings(JWT_PRIVATE_KEY=b"private-pem"),
+            override_settings(JWT_SECRET_KEY="private-pem"),
             patch("conversation_ms.api.internal.jwt_service.jwt.encode", return_value="signed-token") as mock_encode,
         ):
             token = generate_project_jwt("project-uuid")

@@ -164,6 +164,7 @@ def _upsert_backlog_item(
     item: dict[str, Any],
 ) -> ImprovementBacklogItem | None:
     dimension_id = str(item.get("dimension_id", "")).strip()
+    recommended_action = _normalize_recommended_action(item.get("recommended_action"))
     title = str(item.get("title", dimension_id)).strip()[:512]
     if not dimension_id or not title:
         return None
@@ -182,6 +183,7 @@ def _upsert_backlog_item(
         defaults={
             "project_id": run.project_id,
             "item_type": item_type,
+            "recommended_action": recommended_action,
             "custom_monitor": custom_monitor,
             "diagnosis": str(item.get("diagnosis", "")),
             "suggested_solution": item.get("suggested_solution") or {},
@@ -191,11 +193,13 @@ def _upsert_backlog_item(
     )
 
     if not created:
+        backlog_item.recommended_action = recommended_action
         backlog_item.diagnosis = str(item.get("diagnosis", backlog_item.diagnosis))
         backlog_item.suggested_solution = item.get("suggested_solution") or backlog_item.suggested_solution
         backlog_item.affected_conversations_count = len(affected)
         backlog_item.save(
             update_fields=[
+                "recommended_action",
                 "diagnosis",
                 "suggested_solution",
                 "affected_conversations_count",
@@ -229,6 +233,13 @@ def _upsert_backlog_item(
         )
 
     return backlog_item
+
+
+def _normalize_recommended_action(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized[:128] or None
 
 
 def _classification_to_dimension_result(classification: dict[str, Any]) -> dict[str, Any]:
@@ -275,6 +286,56 @@ def _build_message_uuids_lookup(state_data: dict[str, Any]) -> dict[str, list[st
         if isinstance(message_uuids, list):
             lookup[str(conversation_uuid)] = [str(uuid) for uuid in message_uuids if uuid]
     return lookup
+
+
+def _build_recommended_action_lookup(state_data: dict[str, Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    classifications = state_data.get("classifications")
+    if not isinstance(classifications, list):
+        return lookup
+
+    for entry in classifications:
+        if not isinstance(entry, dict):
+            continue
+        conversation_uuid = entry.get("conversation_uuid")
+        classification = entry.get("classification")
+        if not conversation_uuid or not isinstance(classification, dict):
+            continue
+        recommended_action = _normalize_recommended_action(classification.get("recommended_action"))
+        if recommended_action:
+            lookup[str(conversation_uuid)] = recommended_action
+    return lookup
+
+
+def _resolve_recommended_action(
+    explicit_action: Any,
+    conversation_uuids: list[Any],
+    action_lookup: dict[str, str],
+) -> str | None:
+    normalized_action = _normalize_recommended_action(explicit_action)
+    if normalized_action:
+        return normalized_action
+
+    affected_uuids = [str(conversation_uuid) for conversation_uuid in conversation_uuids if conversation_uuid]
+    if not affected_uuids:
+        return None
+
+    actions = {action_lookup.get(conversation_uuid) for conversation_uuid in affected_uuids}
+    if None in actions or len(actions) != 1:
+        return None
+    return actions.pop()
+
+
+def _resolve_summary_item_recommended_action(
+    summary_item: dict[str, Any],
+    summary: dict[str, Any],
+    conversation_uuids: list[Any],
+    action_lookup: dict[str, str],
+) -> str | None:
+    explicit_action = _normalize_recommended_action(summary_item.get("recommended_action"))
+    if explicit_action is None:
+        explicit_action = summary.get("recommended_action")
+    return _resolve_recommended_action(explicit_action, conversation_uuids, action_lookup)
 
 
 def _affected_conversations_from_uuids(
@@ -382,6 +443,7 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
 
     confidence_lookup = _build_confidence_lookup(state_data)
     message_uuids_lookup = _build_message_uuids_lookup(state_data)
+    recommended_action_lookup = _build_recommended_action_lookup(state_data)
     ingested_items = 0
 
     for problem_type, summary in summaries_by_class.items():
@@ -403,10 +465,17 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                 if not title:
                     continue
                 conversation_uuids = subproblem.get("conversation_uuids") or class_conversation_uuids
+                normalized_conversation_uuids = conversation_uuids if isinstance(conversation_uuids, list) else []
                 if _upsert_backlog_item(
                     run,
                     {
                         "dimension_id": problem_type,
+                        "recommended_action": _resolve_summary_item_recommended_action(
+                            subproblem,
+                            summary,
+                            normalized_conversation_uuids,
+                            recommended_action_lookup,
+                        ),
                         "title": title,
                         "diagnosis": str(subproblem.get("description", general_summary)),
                         "suggested_solution": _build_suggested_solution_from_subproblem(
@@ -414,7 +483,7 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
                             general_solution=general_solution,
                         ),
                         "affected_conversations": _affected_conversations_from_uuids(
-                            conversation_uuids if isinstance(conversation_uuids, list) else [],
+                            normalized_conversation_uuids,
                             confidence_lookup,
                             message_uuids_lookup,
                             project_uuid=run.project_id,
@@ -433,6 +502,11 @@ def _ingest_summaries_by_class(run: ImprovementAnalysisRun, state_data: dict[str
             run,
             {
                 "dimension_id": problem_type,
+                "recommended_action": _resolve_recommended_action(
+                    summary.get("recommended_action"),
+                    class_conversation_uuids if isinstance(class_conversation_uuids, list) else [],
+                    recommended_action_lookup,
+                ),
                 "title": title,
                 "diagnosis": general_summary,
                 "suggested_solution": {

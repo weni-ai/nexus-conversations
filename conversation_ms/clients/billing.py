@@ -20,7 +20,7 @@ def _is_retryable(status_code: int) -> bool:
 
 class BillingClient:
     def __init__(self):
-        self.base_url = settings.BILLING_BASE_URL
+        self.base_url = (settings.BILLING_BASE_URL or "").rstrip("/")
         self.token = settings.BILLING_TOKEN
 
     def _get_headers(self) -> dict:

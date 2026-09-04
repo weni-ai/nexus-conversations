@@ -80,6 +80,7 @@ def _create_backlog_item(
     dimension_id: str = "missing_static_knowledge",
     title: str = "Missing policy info",
     affected_count: int = 2,
+    recommended_action: str | None = None,
     status: str = ImprovementItemStatus.ACTIVE,
 ) -> ImprovementBacklogItem:
     return ImprovementBacklogItem.objects.create(
@@ -87,6 +88,7 @@ def _create_backlog_item(
         run=run,
         dimension_id=dimension_id,
         item_type=ImprovementItemType.KNOWLEDGE,
+        recommended_action=recommended_action,
         title=title,
         diagnosis="The agent did not mention the return policy.",
         affected_conversations_count=affected_count,
@@ -138,7 +140,7 @@ class TestImprovementsListService:
 
     def test_returns_active_backlog_items(self, project):
         run = _create_run(project)
-        item = _create_backlog_item(run)
+        item = _create_backlog_item(run, recommended_action="add_knowledge_base_content")
 
         result = list_project_improvements(project)
 
@@ -148,6 +150,7 @@ class TestImprovementsListService:
                 "uuid": str(item.uuid),
                 "text": "Missing policy info",
                 "type": "missing_static_knowledge",
+                "recommended_action": "add_knowledge_base_content",
                 "conversations_count": 2,
             }
         ]
@@ -240,6 +243,7 @@ class TestImprovementsListService:
                 "uuid": str(custom_item.uuid),
                 "text": "Custom monitor issue",
                 "type": "custom_analysis",
+                "recommended_action": None,
                 "conversations_count": 1,
             }
         ]
@@ -272,6 +276,7 @@ class TestImprovementsListService:
                 "uuid": str(custom_item.uuid),
                 "text": "KB info issue",
                 "type": "custom_analysis",
+                "recommended_action": None,
                 "conversations_count": 2,
             }
         ]
@@ -387,6 +392,7 @@ class TestProjectImprovementsListView:
                 "uuid": str(item.uuid),
                 "text": "Skipped instruction",
                 "type": "wrong_behavior_due_to_instructions",
+                "recommended_action": None,
                 "conversations_count": 3,
             }
         ]

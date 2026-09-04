@@ -176,6 +176,9 @@ class TestImprovementsStateIngestService:
 
         assert ImprovementBacklogItem.objects.filter(run=run).count() == 2
         assert not ImprovementBacklogItem.objects.filter(run=run, dimension_id="none").exists()
+        assert set(ImprovementBacklogItem.objects.filter(run=run).values_list("recommended_action", flat=True)) == {
+            "fix_instruction"
+        }
 
         backlog_link = ImprovementBacklogItemConversation.objects.filter(
             backlog_item__run=run,
@@ -206,6 +209,7 @@ class TestImprovementsStateIngestService:
             "backlog_items": [
                 {
                     "dimension_id": "wrong_behavior_due_to_instructions",
+                    "recommended_action": "fix_instruction",
                     "title": "Skipped instruction",
                     "diagnosis": "Agent skipped a required step.",
                     "suggested_solution": {
@@ -232,7 +236,31 @@ class TestImprovementsStateIngestService:
 
         backlog_item = ImprovementBacklogItem.objects.get(run=run)
         assert backlog_item.title == "Skipped instruction"
+        assert backlog_item.recommended_action == "fix_instruction"
         assert backlog_item.affected_conversations.count() == 1
+
+        state_data["backlog_items"][0]["recommended_action"] = "add_instruction"
+        ingest_improvements_state_data(run, state_data)
+
+        backlog_item.refresh_from_db()
+        assert backlog_item.recommended_action == "add_instruction"
+
+    def test_ingest_prefers_subproblem_action_then_summary_action(self, run, conversation):
+        state_data = _contract_state_data(conversation)
+        summary = state_data["summaries_by_class"]["wrong_behavior_due_to_instructions"]
+        summary["recommended_action"] = "summary_action"
+        summary["subproblems"][0]["recommended_action"] = "subproblem_action"
+        summary["subproblems"][1]["recommended_action"] = ""
+
+        ingest_improvements_state_data(run, state_data)
+
+        actions_by_title = dict(
+            ImprovementBacklogItem.objects.filter(run=run).values_list("title", "recommended_action")
+        )
+        assert actions_by_title == {
+            "Cancellation denied for in-separation orders": "subproblem_action",
+            "Refund policy not applied": "summary_action",
+        }
 
     def test_amazing_conversation_clears_problem_exists(self, run, conversation):
         state_data = {
@@ -305,6 +333,43 @@ class TestImprovementsStateIngestService:
         backlog_item = ImprovementBacklogItem.objects.get(run=run)
         assert backlog_item.title == "Missing return policy in KB."
         assert backlog_item.dimension_id == "missing_static_knowledge"
+        assert backlog_item.recommended_action is None
+
+    def test_ingest_leaves_recommended_action_empty_when_classifications_disagree(self, run, conversation):
+        second_conversation = Conversation.objects.create(
+            project=run.project,
+            start_date=_utc(2026, 2, 5, 14),
+            end_date=_utc(2026, 2, 5, 15),
+        )
+        conversation_uuids = [str(conversation.uuid), str(second_conversation.uuid)]
+        state_data = {
+            "classifications": [
+                {
+                    "conversation_uuid": conversation_uuid,
+                    "classification": {
+                        "problem_type": "wrong_behavior_due_to_instructions",
+                        "recommended_action": recommended_action,
+                    },
+                }
+                for conversation_uuid, recommended_action in zip(
+                    conversation_uuids,
+                    ["fix_instruction", "add_instruction"],
+                    strict=True,
+                )
+            ],
+            "classification_errors": [],
+            "summaries_by_class": {
+                "wrong_behavior_due_to_instructions": {
+                    "general_summary": "Instruction issues.",
+                    "conversation_uuids": conversation_uuids,
+                },
+            },
+        }
+
+        ingest_improvements_state_data(run, state_data)
+
+        backlog_item = ImprovementBacklogItem.objects.get(run=run)
+        assert backlog_item.recommended_action is None
 
     def test_supersede_previous_active_items(self, project, run):
         previous_run = ImprovementAnalysisRun.objects.create(

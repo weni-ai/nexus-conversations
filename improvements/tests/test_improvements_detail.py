@@ -69,12 +69,14 @@ def _create_backlog_item(
     item_status: str = ImprovementItemStatus.ACTIVE,
     suggested_solution: dict | None = None,
     diagnosis: str = "Instruction gap.",
+    recommended_action: str | None = None,
 ) -> ImprovementBacklogItem:
     return ImprovementBacklogItem.objects.create(
         project=run.project,
         run=run,
         dimension_id=dimension_id,
         item_type=ImprovementItemType.BEHAVIOR,
+        recommended_action=recommended_action,
         title=title,
         diagnosis=diagnosis,
         suggested_solution=suggested_solution or {},
@@ -119,6 +121,7 @@ class TestImprovementsDetailService:
         run = _create_run(project)
         return _create_backlog_item(
             run,
+            recommended_action="fix_instruction",
             suggested_solution={
                 "target": "manager_instruction",
                 "suggested_change": "Edit instruction 15684.",
@@ -142,6 +145,7 @@ class TestImprovementsDetailService:
             "uuid": str(backlog_item.uuid),
             "text": "Cancellation denied",
             "type": "wrong_behavior_due_to_instructions",
+            "recommended_action": "fix_instruction",
             "description": "Instruction gap.",
             "suggested_change": "Edit instruction 15684.",
             "status": "pending",
@@ -596,6 +600,7 @@ class TestProjectImprovementDetailView:
             "uuid": str(item.uuid),
             "text": "Cancellation denied",
             "type": "wrong_behavior_due_to_instructions",
+            "recommended_action": None,
             "description": "Instruction gap.",
             "suggested_change": "Edit instruction 15684.",
             "status": "pending",

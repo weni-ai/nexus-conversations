@@ -47,6 +47,20 @@ class TestCreateExternalBillingTicket:
 
     @patch("conversation_ms.clients.billing.generate_project_jwt", return_value="fresh-token")
     @patch("conversation_ms.clients.billing.requests.post")
+    def test_strips_trailing_slash_from_base_url(self, mock_post, mock_jwt):
+        mock_post.return_value = _response(status_code=201, payload={"room_uuid": "abc"})
+
+        with override_settings(BILLING_BASE_URL="https://billing.example/"):
+            BillingClient().create_external_billing_ticket(
+                "project-uuid",
+                "whatsapp:5511999999999",
+                "2026-08-31T04:36:54.034Z",
+            )
+
+        assert mock_post.call_args.args[0] == "https://billing.example/api/v1/rooms/external/"
+
+    @patch("conversation_ms.clients.billing.generate_project_jwt", return_value="fresh-token")
+    @patch("conversation_ms.clients.billing.requests.post")
     def test_401_is_permanent(self, mock_post, mock_jwt):
         mock_post.return_value = _response(status_code=401, text='{"detail":"Token has expired"}')
 

@@ -11,10 +11,12 @@ from django.conf import settings
 
 from conversation_ms import cache_access
 from conversation_ms.adapters.entities import ResolutionEntities
+from conversation_ms.api.internal.jwt_service import resolve_project_uuid
 from conversation_ms.archive.dispatcher import dispatch_archive_conversations
 from conversation_ms.archive.s3_client import TransientS3Error
 from conversation_ms.archive.worker import process_archive_conversation
 from conversation_ms.clients import BillingClient, SendConversationsRequestDTO
+from conversation_ms.clients.exceptions import BillingPermanentError
 from conversation_ms.clients.project_client import ProjectClient
 from conversation_ms.close_daily.constants import (
     CLOSE_PIPELINE_DRAIN_SOFT_TIME_LIMIT_SECONDS,
@@ -600,18 +602,32 @@ def reclassify_unclassified_conversations():
     max_retries=3,
     default_retry_delay=60,
 )
-def create_external_billing_ticket_task(self, auth_token: str, urn: str, created_on: str):
+def create_external_billing_ticket_task(self, project_uuid: str, urn: str, created_on: str):
     """
     Async task to create an external billing ticket via the billing API.
-    Fire-and-forget from the calling endpoint; retries on transient failures.
+
+    ``project_uuid`` is the project. In-flight tasks queued before this change
+    may still pass the inbound JWT as the first argument; that value is
+    recovered and a fresh token is minted per attempt.
+
+    Auth failures (401/403) are not retried: a new token does not fix a
+    rejected signature, and retrying an already-expired queued token only
+    repeats the same error.
     """
 
     try:
+        resolved_project_uuid = resolve_project_uuid(project_uuid)
         client = BillingClient()
-        result = client.create_external_billing_ticket(auth_token, urn, created_on)
-        if not result:
-            raise RuntimeError(f"Billing API returned empty response for contact_urn={urn}")
-        return result
+        return client.create_external_billing_ticket(resolved_project_uuid, urn, created_on)
+    except (BillingPermanentError, ValueError) as exc:
+        logger.error(
+            "[CreateExternalBillingTicketTask] Permanent error creating billing ticket " "contact_urn=%s error=%s",
+            urn,
+            exc,
+            exc_info=True,
+        )
+        sentry_sdk.capture_exception(exc)
+        return None
     except Exception as exc:
         logger.error(
             "[CreateExternalBillingTicketTask] Error creating billing ticket " "contact_urn=%s error=%s",

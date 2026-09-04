@@ -415,3 +415,12 @@ else:
             JWT_PUBLIC_KEY = f.read()
     except FileNotFoundError:
         JWT_PUBLIC_KEY = None
+
+JWT_SECRET_KEY = env.str("JWT_SECRET_KEY", default="") or None
+if not JWT_SECRET_KEY:
+    JWT_SECRET_KEY_PATH = BASE_DIR / "jwt_keys" / "private_key.pem"
+    try:
+        with open(JWT_SECRET_KEY_PATH) as f:
+            JWT_SECRET_KEY = f.read() or None
+    except FileNotFoundError:
+        JWT_SECRET_KEY = None

@@ -344,9 +344,7 @@ class ExternalConversationWindowView(JWTModuleMixin, APIView):
 
         billing_cache_key = f"external_billing_sent:{ticket_uuid}"
         if cache.add(billing_cache_key, True, timeout=EXTERNAL_BILLING_CACHE_TIMEOUT):
-            auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-            raw_token = auth_header.split(" ", 1)[1] if " " in auth_header else ""
-            create_external_billing_ticket_task.delay(raw_token, contact_urn, created_on)
+            create_external_billing_ticket_task.delay(str(self.project_uuid), contact_urn, created_on)
         else:
             logger.info(
                 "[ExternalConversationWindowView] Billing already dispatched " "for ticket_uuid=%s, skipping",

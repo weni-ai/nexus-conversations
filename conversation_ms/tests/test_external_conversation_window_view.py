@@ -81,6 +81,9 @@ class TestExternalConversationWindowViewRetry:
             assert "ticket_uuid" in response.data
             mock_svc_cls.return_value.process_conversation_window.assert_called_once()
             mock_billing.delay.assert_called_once()
+            args, _kwargs = mock_billing.delay.call_args
+            assert args[0] == project_uuid
+            assert args[1] == valid_payload["contact_urn"]
 
     def test_success_after_transient_failure(self, api_client, project_uuid, auth_headers, valid_payload):
         with (

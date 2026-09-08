@@ -40,6 +40,7 @@ _BACKLOG_LIST_FIELDS = (
     "uuid",
     "title",
     "dimension_id",
+    "recommended_action",
     "affected_conversations_count",
     "last_updated_at",
 )
@@ -83,6 +84,7 @@ def _map_backlog_item(
         "uuid": str(item.uuid),
         "text": item.title,
         "type": _map_list_type(item.dimension_id, custom_slugs),
+        "recommended_action": item.recommended_action,
         "conversations_count": item.affected_conversations_count,
     }
 

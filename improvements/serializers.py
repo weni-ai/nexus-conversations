@@ -77,6 +77,7 @@ class ImprovementListItemSerializer(serializers.Serializer):
             "custom_analysis",
         ],
     )
+    recommended_action = serializers.CharField(allow_null=True)
     conversations_count = serializers.IntegerField(min_value=0)
 
 
@@ -135,6 +136,7 @@ class ImprovementDetailSerializer(serializers.Serializer):
             "custom_analysis",
         ],
     )
+    recommended_action = serializers.CharField(allow_null=True)
     description = serializers.CharField()
     suggested_change = serializers.CharField(allow_null=True)
     status = serializers.ChoiceField(choices=["pending", "ignored", "resolved"])

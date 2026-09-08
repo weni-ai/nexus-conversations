@@ -280,6 +280,7 @@ def get_improvement_detail(
         "uuid": str(item.uuid),
         "text": item.title,
         "type": _map_detail_type(item.dimension_id, custom_slugs),
+        "recommended_action": item.recommended_action,
         "description": item.diagnosis,
         "suggested_change": _extract_suggested_change(suggested_solution),
         "status": _map_item_status(item.status),

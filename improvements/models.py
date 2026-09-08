@@ -197,6 +197,7 @@ class ImprovementBacklogItem(models.Model):
         related_name="backlog_items",
     )
     dimension_id = models.CharField(max_length=128)
+    recommended_action = models.CharField(max_length=128, null=True, blank=True)
     item_type = models.CharField(max_length=32, choices=ImprovementItemType.choices)
     custom_monitor = models.ForeignKey(
         ImprovementCustomMonitor,

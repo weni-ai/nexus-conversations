@@ -99,6 +99,15 @@ class MessageService:
         )
         return (conversation, event)
 
+    @staticmethod
+    def _mark_conversation_starter(conversation: Any, event: MessageReceivedEvent) -> None:
+        metadata = event.message.get("metadata") or {}
+        if metadata.get("from_conversation_starter") is not True or conversation.has_conversation_starter:
+            return
+
+        conversation.has_conversation_starter = True
+        conversation.save(update_fields=["has_conversation_starter"])
+
     def process_message_received(self, event_data: dict):
         try:
             conversation, event = self._ensure_conversation_for_message(event_data, MESSAGE_RECEIVED)
@@ -112,6 +121,8 @@ class MessageService:
                     event.contact_urn,
                 )
                 return
+
+            self._mark_conversation_starter(conversation, event)
 
             message_text = event.message.get("text", "")
             if message_text:

@@ -39,6 +39,42 @@ class TestMessageService:
             # Verify message repository was called
             mock_msg_repo.return_value.save_received_message.assert_called_once()
 
+    def test_process_message_received_marks_conversation_starter(
+        self, sample_sqs_received_event, mock_dynamodb_repository, mock_sentry
+    ):
+        sample_sqs_received_event["data"]["message"]["metadata"] = {"from_conversation_starter": True}
+
+        with patch("conversation_ms.services.message_service.ConversationService") as mock_conv_service, patch(
+            "conversation_ms.services.message_service.MessageRepository"
+        ):
+            mock_conversation = Mock(spec=Conversation)
+            mock_conversation.uuid = uuid4()
+            mock_conversation.has_conversation_starter = False
+            mock_conv_service.return_value.ensure_conversation_exists.return_value = mock_conversation
+
+            MessageService().process_message_received(sample_sqs_received_event)
+
+            assert mock_conversation.has_conversation_starter is True
+            mock_conversation.save.assert_called_once_with(update_fields=["has_conversation_starter"])
+
+    def test_process_message_received_does_not_unset_conversation_starter(
+        self, sample_sqs_received_event, mock_dynamodb_repository, mock_sentry
+    ):
+        sample_sqs_received_event["data"]["message"]["metadata"] = {"from_conversation_starter": False}
+
+        with patch("conversation_ms.services.message_service.ConversationService") as mock_conv_service, patch(
+            "conversation_ms.services.message_service.MessageRepository"
+        ):
+            mock_conversation = Mock(spec=Conversation)
+            mock_conversation.uuid = uuid4()
+            mock_conversation.has_conversation_starter = True
+            mock_conv_service.return_value.ensure_conversation_exists.return_value = mock_conversation
+
+            MessageService().process_message_received(sample_sqs_received_event)
+
+            assert mock_conversation.has_conversation_starter is True
+            mock_conversation.save.assert_not_called()
+
     def test_process_message_received_dummy_message_no_created_at(self, sample_sqs_received_event, mock_sentry):
         """Test processing dummy message (empty text) with missing created_at."""
         sample_sqs_received_event["data"]["message"]["text"] = ""

@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("conversation_ms", "0007_close_pipeline_record"),
+        ("conversation_ms", "0009_close_pipeline_dead_and_reclaim"),
     ]
 
     operations = [

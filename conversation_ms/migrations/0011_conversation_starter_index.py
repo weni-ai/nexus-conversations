@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
     atomic = False
 
     dependencies = [
-        ("conversation_ms", "0008_conversation_has_conversation_starter"),
+        ("conversation_ms", "0010_conversation_has_conversation_starter"),
     ]
 
     operations = [

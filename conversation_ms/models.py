@@ -176,6 +176,7 @@ class Conversation(models.Model):
     start_date = models.DateTimeField(null=True, blank=True)
     end_date = models.DateTimeField(null=True, blank=True)
     has_chats_room = models.BooleanField(default=False)
+    has_conversation_starter = models.BooleanField(default=False)
     contact_name = models.CharField(max_length=255, null=True, blank=True)
     channel_uuid = models.UUIDField(null=True, blank=True)
     nps = models.IntegerField(null=True, blank=True)
@@ -186,6 +187,10 @@ class Conversation(models.Model):
         db_table = "intelligences_conversation"
         indexes = [
             models.Index(fields=["project", "contact_urn", "start_date", "end_date", "channel_uuid"]),
+            models.Index(
+                fields=["project", "has_conversation_starter", "-created_at", "-uuid"],
+                name="conv_proj_starter_created_idx",
+            ),
         ]
 
     def __str__(self):

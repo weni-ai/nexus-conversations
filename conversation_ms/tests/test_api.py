@@ -613,6 +613,50 @@ class TestConversationEndpoint:
         }
         assert all(item["is_amazing"] is False for item in not_amazing_response.data["results"])
 
+    def test_filter_conversations_by_has_conversation_starter(self, api_client, project, auth_headers):
+        starter = Conversation.objects.create(
+            project=project,
+            resolution="0",
+            has_conversation_starter=True,
+        )
+        regular = Conversation.objects.create(project=project, resolution="0")
+        url = reverse("project-conversations-list", kwargs={"project_uuid": project.uuid})
+
+        all_response = api_client.get(url, **auth_headers)
+        assert all_response.status_code == status.HTTP_200_OK
+        assert {item["uuid"] for item in all_response.data["results"]} == {
+            str(starter.uuid),
+            str(regular.uuid),
+        }
+
+        starter_response = api_client.get(url, {"has_conversation_starter": "true"}, **auth_headers)
+        assert starter_response.status_code == status.HTTP_200_OK
+        assert starter_response.data["total_count"] == 1
+        assert starter_response.data["results"][0]["uuid"] == str(starter.uuid)
+        assert starter_response.data["results"][0]["has_conversation_starter"] is True
+
+        regular_response = api_client.get(url, {"has_conversation_starter": "false"}, **auth_headers)
+        assert regular_response.status_code == status.HTTP_200_OK
+        assert regular_response.data["total_count"] == 1
+        assert regular_response.data["results"][0]["uuid"] == str(regular.uuid)
+        assert regular_response.data["results"][0]["has_conversation_starter"] is False
+
+    def test_retrieve_conversation_includes_has_conversation_starter(self, api_client, project, auth_headers):
+        conversation = Conversation.objects.create(
+            project=project,
+            resolution="0",
+            has_conversation_starter=True,
+        )
+        url = reverse(
+            "project-conversations-detail",
+            kwargs={"project_uuid": project.uuid, "pk": conversation.uuid},
+        )
+
+        response = api_client.get(url, **auth_headers)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["has_conversation_starter"] is True
+
     def test_list_conversations_caps_page_size(self, api_client, project, auth_headers):
         for i in range(60):
             Conversation.objects.create(project=project, contact_urn=f"whatsapp:+5500000{i:04d}")

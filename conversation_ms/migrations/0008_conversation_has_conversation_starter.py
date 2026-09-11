@@ -16,10 +16,7 @@ class Migration(migrations.Migration):
                         "ALTER TABLE intelligences_conversation "
                         "ADD COLUMN has_conversation_starter boolean DEFAULT false NOT NULL"
                     ),
-                    reverse_sql=(
-                        "ALTER TABLE intelligences_conversation "
-                        "DROP COLUMN has_conversation_starter"
-                    ),
+                    reverse_sql=("ALTER TABLE intelligences_conversation " "DROP COLUMN has_conversation_starter"),
                 ),
             ],
             state_operations=[

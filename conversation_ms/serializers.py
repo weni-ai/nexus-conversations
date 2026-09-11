@@ -184,6 +184,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "end_date",
             "channel_uuid",
             "has_chats_room",
+            "has_conversation_starter",
             "csat",
             "nps",
             "classification",
@@ -323,6 +324,7 @@ class ConversationListSerializer(ConversationSerializer):
             "end_date",
             "channel_uuid",
             "has_chats_room",
+            "has_conversation_starter",
             "csat",
             "nps",
             "topic",
@@ -371,6 +373,7 @@ class ConversationDetailSerializer(ConversationSerializer):
             "topic",
             "channel_uuid",
             "contact_urn",
+            "has_conversation_starter",
             "is_amazing",
             "messages",
         ]

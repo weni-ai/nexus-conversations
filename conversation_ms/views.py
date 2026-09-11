@@ -88,6 +88,17 @@ logger = logging.getLogger(__name__)
             ),
             required=False,
         ),
+        OpenApiParameter(
+            name="has_conversation_starter",
+            type=bool,
+            location=OpenApiParameter.QUERY,
+            description=(
+                "When true, only conversations containing a message sent from a conversation starter. "
+                "Once detected in a conversation window, the flag remains true. "
+                "When false, only conversations without one. Omit for all conversations."
+            ),
+            required=False,
+        ),
     ]
 )
 class ConversationViewSet(viewsets.ReadOnlyModelViewSet):

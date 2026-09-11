@@ -24,6 +24,7 @@ class ConversationFilter(filters.FilterSet):
     resolution = filters.BaseInFilter(field_name="resolution")
     topics = filters.CharFilter(method="filter_topics")
     has_chats_room = filters.BooleanFilter(field_name="has_chats_room")
+    has_conversation_starter = filters.BooleanFilter(field_name="has_conversation_starter")
     is_amazing = filters.BooleanFilter(field_name="is_amazing")
     nps = filters.NumberFilter(field_name="nps")
     project_uuid = filters.UUIDFilter(field_name="project__uuid")
@@ -40,6 +41,7 @@ class ConversationFilter(filters.FilterSet):
             "csat",
             "nps",
             "has_chats_room",
+            "has_conversation_starter",
             "is_amazing",
             "project_uuid",
         ]

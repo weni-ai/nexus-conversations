@@ -229,6 +229,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
 class TopicsViewSet(ModelViewSet):
     serializer_class = TopicsSerializer
     authentication_classes = [InternalTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
     lookup_field = "uuid"
 
     def get_queryset(self, *args, **kwargs):
@@ -245,10 +246,10 @@ class TopicsViewSet(ModelViewSet):
         if not project_uuid:
             return Response({"error": "project_uuid is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            project = Project.objects.get(uuid=project_uuid)
-        except Project.DoesNotExist:
-            return Response({"error": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
+        project, _ = Project.objects.get_or_create(
+            uuid=project_uuid,
+            defaults={"name": None},
+        )
 
         serializer: TopicsSerializer = self.get_serializer(data=request.data)
         if serializer.is_valid():

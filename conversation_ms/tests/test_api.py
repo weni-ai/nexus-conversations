@@ -685,3 +685,53 @@ class TestConversationEndpoint:
 
         assert first.status_code == status.HTTP_200_OK
         assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.django_db
+class TestTopicCreate:
+    @pytest.fixture
+    def api_client(self):
+        return APIClient()
+
+    @pytest.fixture
+    def auth_headers(self):
+        token = "test-secret-token"
+        settings.INTERNAL_API_TOKENS = {"TestTeam": token}
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_create_topic_materializes_missing_project(self, api_client, auth_headers):
+        project_uuid = uuid4()
+        url = reverse("topics", kwargs={"project_uuid": project_uuid})
+
+        response = api_client.post(url, {"name": "Billing", "description": "Invoices"}, format="json", **auth_headers)
+
+        assert response.status_code == status.HTTP_201_CREATED
+        project = Project.objects.get(uuid=project_uuid)
+        assert project.name is None
+        assert project.timezone is None
+        topic = Topic.objects.get(uuid=response.data["uuid"])
+        assert topic.name == "Billing"
+        assert topic.project_id == project.uuid
+
+    def test_create_topic_reuses_existing_project(self, api_client, auth_headers):
+        project = Project.objects.create(name="BILD", timezone="America/Sao_Paulo")
+        url = reverse("topics", kwargs={"project_uuid": project.uuid})
+
+        response = api_client.post(url, {"name": "Billing"}, format="json", **auth_headers)
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Project.objects.filter(uuid=project.uuid).count() == 1
+        project.refresh_from_db()
+        assert project.name == "BILD"
+        assert project.timezone == "America/Sao_Paulo"
+        assert Topic.objects.filter(project=project, name="Billing").count() == 1
+
+    def test_create_topic_unauthenticated(self, api_client):
+        project_uuid = uuid4()
+        url = reverse("topics", kwargs={"project_uuid": project_uuid})
+
+        response = api_client.post(url, {"name": "Billing"}, format="json")
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert Project.objects.filter(uuid=project_uuid).exists() is False
+        assert Topic.objects.filter(name="Billing").exists() is False

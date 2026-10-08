@@ -8,7 +8,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("conversation_ms", "0006_project_timezone"),
+        ("conversation_ms", "0009_conversation_starter_index"),
     ]
 
     operations = [

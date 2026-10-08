@@ -8,6 +8,23 @@
 
 **Input**: User description: "$ARGUMENTS"
 
+## Inheritance from Product Spec
+
+<!--
+  MANDATORY (Constitution II/III): keep this section first and in exactly this format.
+  The product spec MUST exist and be tagged before this spec is created; pin it by
+  commit or tag, never by a mutable URL or ID alone. Problem, scope, success criteria,
+  and binding decisions are inherited, not redefined here. Any contradiction with the
+  product spec MUST be an amendment in the product repository, linked in Divergences.
+-->
+
+- Product Spec: [PRODUCT SPEC TITLE] — [PRODUCT SPEC URL]
+- Pinned version: [COMMIT OR TAG]
+- Architecture doc: [none | URL + commit/tag]
+- Inherited binding decisions: [short list]
+- Scope of this spec: [slice implemented by this repo]
+- Divergences: [none | link to amendment]
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--
@@ -98,6 +115,15 @@
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
+### Peak Load *(mandatory)*
+
+<!--
+  Constitution XI: declare the peak load this feature must sustain, stated as peak and
+  not as average (e.g., seasonal sales peak).
+-->
+
+- **Expected peak**: [e.g., "N events/min per project at Black Friday peak"]
+
 ### Key Entities *(include if feature involves data)*
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]
@@ -106,8 +132,9 @@
 ## Success Criteria *(mandatory)*
 
 <!--
-  ACTION REQUIRED: Define measurable success criteria.
-  These must be technology-agnostic and measurable.
+  ACTION REQUIRED: Restate the success criteria inherited from the pinned product spec.
+  These must be technology-agnostic and measurable. Do NOT redefine them here
+  (Constitution II); a needed change is a product spec amendment (Constitution III).
 -->
 
 ### Measurable Outcomes
